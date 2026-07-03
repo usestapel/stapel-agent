@@ -10,14 +10,14 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import timedelta
 
-from django.utils import timezone
 from django.utils.module_loading import import_string
 
+from .cache import CachePolicy
 from .conf import agent_settings
 from .models import PromptLog, PromptSource, PromptStatus
 from .parsing import parse_json_response, parse_translation_response
+from .providers import registered_providers
 from .providers.base import LlmProvider, ProviderError, ProviderTimeout
 
 logger = logging.getLogger(__name__)
@@ -35,41 +35,26 @@ MODEL_SIZES = ("small", "medium", "large")
 def get_provider(name: str) -> LlmProvider:
     """Instantiate the provider registered under *name*.
 
-    Dotted paths in ``STAPEL_AGENT["PROVIDERS"]`` are resolved lazily per
-    request, so a missing optional dependency or misconfigured provider
-    only fails the calls that use it. Raises ProviderError for unknown
-    names — ``complete()`` degrades that to ``status: "failure"``.
+    Resolution: runtime ``register_provider()`` registrations →
+    ``STAPEL_AGENT["PROVIDERS"]`` (merged over the built-ins) →
+    ``BUILTIN_PROVIDERS``. Dotted paths are resolved lazily per request,
+    so a missing optional dependency or misconfigured provider only fails
+    the calls that use it. Raises ProviderError for unknown names —
+    ``complete()`` degrades that to ``status: "failure"``.
     """
-    providers = agent_settings.PROVIDERS or {}
-    dotted = providers.get(name)
-    if not dotted:
+    target = registered_providers().get(name)
+    if not target:
         raise ProviderError(
-            f"Unknown LLM provider '{name}' — configure it in "
-            "STAPEL_AGENT['PROVIDERS']"
+            f"Unknown LLM provider '{name}' — register it via "
+            "STAPEL_AGENT['PROVIDERS'] or stapel_agent.providers.register_provider"
         )
-    cls = import_string(dotted)
+    cls = import_string(target) if isinstance(target, str) else target
     return cls()
 
 
-def _find_cached(prompt: str, system_prompt: str | None, source: str) -> PromptLog | None:
-    """Latest successful row for the same prompt within CACHE_TTL."""
-    ttl = int(agent_settings.CACHE_TTL)
-    qs = PromptLog.objects.filter(
-        prompt=prompt,
-        source=source,
-        status=PromptStatus.SUCCESS,
-        response__isnull=False,
-        created_at__gte=timezone.now() - timedelta(seconds=ttl),
-    )
-    if system_prompt:
-        qs = qs.filter(system_prompt=system_prompt)
-    else:
-        qs = qs.filter(system_prompt__isnull=True)
-    return qs.order_by("-created_at").first()
-
-
-def _cache_enabled(source: str) -> bool:
-    return bool((agent_settings.CACHE_LOOKUP or {}).get(source, False))
+def _cache_policy() -> CachePolicy:
+    """Instantiate the configured cache policy (dotted-path seam)."""
+    return agent_settings.CACHE_POLICY()
 
 
 def _usage(row_or_result) -> dict:
@@ -93,19 +78,25 @@ def complete(
     """Raw completion: ``{"status": "ok", "result": <text>, "usage": ...}``
     or ``{"status": "failure", "reason": ...}``.
 
-    Flow: cache lookup (only when ``CACHE_LOOKUP[source]`` is on) →
-    resolve provider → call → write a PromptLog row (every token column)
-    → return. CLI/HTTP timeouts land as status ``timeout`` in the log.
+    Flow: cache lookup (via the configured ``CACHE_POLICY``; the default
+    honours ``CACHE_LOOKUP[source]``) → resolve provider → call → write a
+    PromptLog row (every token column) → return. CLI/HTTP timeouts land
+    as status ``timeout`` in the log.
     """
     models = agent_settings.MODELS or {}
     if model_size not in models:
         return {"status": "failure", "reason": f"Unknown model size '{model_size}'"}
 
-    if _cache_enabled(source) and not skip_cache:
-        cached = _find_cached(prompt, system_prompt, source)
+    policy = _cache_policy()
+    if not skip_cache and policy.should_cache(source):
+        cached = policy.lookup(prompt, system_prompt, source)
         if cached is not None:
             logger.info("stapel-agent: cache hit for %s prompt", source)
-            return {"status": "ok", "result": cached.response or "", "usage": _usage(cached)}
+            return {
+                "status": "ok",
+                "result": cached,
+                "usage": {"input_tokens": 0, "output_tokens": 0},
+            }
 
     provider_name = provider or agent_settings.DEFAULT_PROVIDER
     try:
@@ -154,6 +145,10 @@ def complete(
     log.cache_write_tokens = result.cache_write_tokens
     log.duration_ms = int((time.monotonic() - start) * 1000)
     log.save()
+
+    # No-op for the default policy (the ledger row above IS its storage);
+    # external-store policies (Redis, ...) hook in here.
+    policy.store(prompt, system_prompt, source, result.text)
 
     return {"status": "ok", "result": result.text, "usage": _usage(result)}
 
@@ -233,13 +228,14 @@ def translate(
     )
     prompt = json.dumps(entries, indent=2, ensure_ascii=False)
 
-    if _cache_enabled(PromptSource.TRANSLATE) and not skip_cache:
-        cached = _find_cached(prompt, system_prompt, PromptSource.TRANSLATE)
-        if cached is not None and cached.response:
+    policy = _cache_policy()
+    if not skip_cache and policy.should_cache(PromptSource.TRANSLATE):
+        cached = policy.lookup(prompt, system_prompt, PromptSource.TRANSLATE)
+        if cached:
             try:
                 return {
                     "status": "ok",
-                    "result": parse_translation_response(cached.response),
+                    "result": parse_translation_response(cached),
                 }
             except ValueError:
                 logger.warning(

@@ -10,6 +10,33 @@ legacy LLM facade), per the design fixed in the Stapel monorepo's
 `docs/agent-service-and-core-ts.md` §2.
 
 ### Added
+- **Open provider registry with merge semantics** (`providers/__init__.py`).
+  `STAPEL_AGENT["PROVIDERS"]` is an overlay merged OVER
+  `BUILTIN_PROVIDERS` (same additive style as stapel-notifications
+  routing `TYPES`, deliberately not billing's replace-style
+  `PAYMENT_PROVIDER`): adding one custom provider never requires
+  restating the built-ins, `None`/`""` removes a name. Runtime API for
+  app-layer `AppConfig.ready()`: `register_provider(name, cls_or_path)`
+  (highest precedence) and `registered_providers()` (the effective
+  mapping). `get_provider()` resolves runtime → settings merge →
+  built-ins, lazily per request.
+- **Django system checks** (`checks.py`, registered from
+  `AgentConfig.ready()`): `stapel_agent.E001` when `DEFAULT_PROVIDER` is
+  not in the effective registry; `stapel_agent.W001`/`W002` for
+  unimportable dotted paths / non-`LlmProvider` entries (warnings — a
+  broken unused entry degrades per request, it must not block deploys).
+- **Cache-policy seam** (`cache.py`): `STAPEL_AGENT["CACHE_POLICY"]`
+  (default `stapel_agent.cache.PromptLogCachePolicy`) points at a
+  `CachePolicy` ABC — `should_cache(source)`, `lookup(prompt,
+  system_prompt, source) -> str | None`, optional `store()` hook for
+  external-storage policies. The default implements the PromptLog+TTL
+  behaviour (`CACHE_LOOKUP`/`CACHE_TTL`); hosts swap in Redis/no-op
+  without forking. The PromptLog ledger row is written regardless.
+- **Serializer seams on both views** (`SerializerSeamMixin`, billing
+  pattern): request serializers on both endpoints; typed
+  `TranslateResponse` dataclass + serializer on translate.
+  `api/llm/complete` deliberately keeps a plain contract dict — its
+  `result` is arbitrary JSON (see MODULE.md).
 - **HTTP surface, 1:1 with the legacy agent service**: `POST api/llm/complete` and
   `POST api/llm/translate` (hosts mount under `agent/`), same request/
   response contracts — `stapel-translate`'s `AgentProvider` keeps working

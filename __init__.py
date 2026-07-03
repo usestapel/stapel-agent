@@ -3,18 +3,24 @@
 Public API (lazily resolved, PEP 562 — importing this package pulls in
 no Django code until an attribute is actually accessed):
 
-    agent_settings  — the ``STAPEL_AGENT`` settings namespace
-    complete        — raw LLM completion (cache + PromptLog ledger)
-    translate       — key-value translation flow
-    LlmProvider     — base class for custom LLM backends
-    ProviderResult  — completion text + token accounting dataclass
+    agent_settings        — the ``STAPEL_AGENT`` settings namespace
+    complete              — raw LLM completion (cache + PromptLog ledger)
+    translate             — key-value translation flow
+    LlmProvider           — base class for custom LLM backends
+    ProviderResult        — completion text + token accounting dataclass
+    CachePolicy           — base class for custom prompt-cache policies
+    register_provider     — runtime provider registration (apps.ready())
+    registered_providers  — the effective provider registry mapping
 """
 
 __all__ = [
+    "CachePolicy",
     "LlmProvider",
     "ProviderResult",
     "agent_settings",
     "complete",
+    "register_provider",
+    "registered_providers",
     "translate",
 ]
 
@@ -25,6 +31,9 @@ _EXPORTS = {
     "translate": (".services", "translate"),
     "LlmProvider": (".providers.base", "LlmProvider"),
     "ProviderResult": (".providers.base", "ProviderResult"),
+    "CachePolicy": (".cache", "CachePolicy"),
+    "register_provider": (".providers", "register_provider"),
+    "registered_providers": (".providers", "registered_providers"),
 }
 
 

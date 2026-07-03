@@ -14,7 +14,12 @@ from stapel_core.django.api.errors import StapelResponse
 from stapel_core.django.api.permissions import IsServiceRequest, IsStaffUser
 
 from . import services
-from .serializers import CompleteRequestSerializer, TranslateRequestSerializer
+from .dto import TranslateResponse
+from .serializers import (
+    CompleteRequestSerializer,
+    TranslateRequestSerializer,
+    TranslateResponseSerializer,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +55,10 @@ class LlmCompleteView(SerializerSeamMixin, APIView):
 
     permission_classes = [IsServiceRequest | IsStaffUser]
     request_serializer_class = CompleteRequestSerializer
+    # Deliberately no response serializer: `result` is arbitrary JSON
+    # (object or array, whatever the prompt asked for) — a typed dataclass
+    # serializer cannot express it. The plain contract dict is the seam
+    # here; see MODULE.md.
 
     @extend_schema(request=CompleteRequestSerializer, responses={200: dict})
     def post(self, request):
@@ -77,8 +86,12 @@ class LlmTranslateView(SerializerSeamMixin, APIView):
 
     permission_classes = [IsServiceRequest | IsStaffUser]
     request_serializer_class = TranslateRequestSerializer
+    response_serializer_class = TranslateResponseSerializer
 
-    @extend_schema(request=TranslateRequestSerializer, responses={200: dict})
+    @extend_schema(
+        request=TranslateRequestSerializer,
+        responses={200: TranslateResponseSerializer},
+    )
     def post(self, request):
         ser = self.get_request_serializer_class()(data=request.data)
         ser.is_valid(raise_exception=True)
@@ -89,4 +102,13 @@ class LlmTranslateView(SerializerSeamMixin, APIView):
             data.entries,
             user_id=_request_user_id(request),
         )
-        return StapelResponse(payload)
+        response_cls = self.get_response_serializer_class()
+        dto = TranslateResponse(
+            status=payload["status"],
+            result=payload.get("result"),
+            reason=payload.get("reason"),
+        )
+        # Absent keys stay absent on the wire (iron contract): drop nulls
+        # after serialization.
+        body = {k: v for k, v in dict(response_cls(dto).data).items() if v is not None}
+        return StapelResponse(body)

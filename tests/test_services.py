@@ -157,7 +157,8 @@ class TestCache:
         second = services.complete("p", "small", source=PromptSource.LLM_FACADE)
         assert first["status"] == second["status"] == "ok"
         assert second["result"] == '{"answer": 42}'
-        assert second["usage"] == {"input_tokens": 10, "output_tokens": 5}
+        # A cache hit spends no tokens (CachePolicy.lookup returns text only).
+        assert second["usage"] == {"input_tokens": 0, "output_tokens": 0}
         assert len(fake_provider.calls) == 1
 
     def test_failed_rows_are_not_cache_hits(self, fake_provider):

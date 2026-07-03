@@ -70,7 +70,7 @@ cache-write) — per-user and per-source cost accounting needs no other table.
 | Key | Default | Meaning |
 |---|---|---|
 | `MODELS` | `{"small": "claude-haiku-4-5-20251001", "medium": "claude-sonnet-5", "large": "claude-opus-4-8"}` | Size → model-name map |
-| `PROVIDERS` | anthropic / openai-compat / claude-code (dotted paths) | Provider registry, resolved lazily per request |
+| `PROVIDERS` | `{}` | Overlay **merged over** the built-in registry (anthropic / openai-compat / claude-code) — add/override entries, `None` removes one; resolved lazily per request |
 | `DEFAULT_PROVIDER` | `"anthropic"` | Provider used when a request names none |
 | `ANTHROPIC_API_KEY` | `""` | Key for the Anthropic SDK provider (read lazily) |
 | `OPENAI_COMPAT_BASE_URL` | `""` | Base URL of any OpenAI-compatible endpoint |
@@ -79,8 +79,9 @@ cache-write) — per-user and per-source cost accounting needs no other table.
 | `CLI_BINARY` | `"claude"` | Claude Code CLI binary (opt-in provider only) |
 | `CLI_TIMEOUT` | `120` | Provider timeout, seconds |
 | `MAX_TOKENS` | `4096` | Completion token cap |
-| `CACHE_LOOKUP` | `{"llm_facade": False, "translate": True}` | Per-source cache-by-prompt toggle |
-| `CACHE_TTL` | `604800` | Cache window in seconds (7 days); older rows are ignored |
+| `CACHE_LOOKUP` | `{"llm_facade": False, "translate": True}` | Per-source cache-by-prompt toggle (used by the default cache policy) |
+| `CACHE_TTL` | `604800` | Cache window in seconds (7 days); older rows are ignored (default policy) |
+| `CACHE_POLICY` | `"stapel_agent.cache.PromptLogCachePolicy"` | Dotted path to a `CachePolicy` subclass — swap the prompt cache (Redis, no-op, ...) without forking |
 
 ## Provider matrix
 
@@ -97,9 +98,37 @@ its own authentication (`provider: "claude-code"` per request, or
 reading and no background token-refresh — that plumbing was deliberately
 dropped.
 
-Custom backend? Subclass `stapel_agent.LlmProvider`, return a
-`ProviderResult`, and add your dotted path to `STAPEL_AGENT["PROVIDERS"]` —
-no fork needed. See [MODULE.md](MODULE.md) for the full extension-point map.
+### Adding, overriding and removing providers (merge semantics)
+
+`STAPEL_AGENT["PROVIDERS"]` is an **overlay merged over the built-ins**, not a
+replacement dict — adding your provider never requires restating the three
+shipped ones, and setting a name to `None` removes it:
+
+```python
+# settings.py — one line per change, built-ins stay available
+STAPEL_AGENT = {
+    "PROVIDERS": {
+        "acme": "myproject.llm.AcmeProvider",  # add a custom backend
+        "claude-code": None,                    # remove a built-in
+    },
+    "DEFAULT_PROVIDER": "acme",
+}
+```
+
+Or register at runtime from your app's `AppConfig.ready()` (highest
+precedence):
+
+```python
+from stapel_agent import register_provider
+
+register_provider("acme", AcmeProvider)  # class or dotted path
+```
+
+A custom backend is just a `stapel_agent.LlmProvider` subclass returning a
+`ProviderResult`. Django system checks (`stapel_agent.E001/W001/W002`) flag a
+`DEFAULT_PROVIDER` that is not in the effective registry, unimportable dotted
+paths and non-`LlmProvider` entries at startup. See [MODULE.md](MODULE.md)
+for the full extension-point map.
 
 ## License
 

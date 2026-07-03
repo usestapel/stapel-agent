@@ -18,11 +18,13 @@ registries). Everything below is verifiable against the code in this repo.
 | Area | Contents |
 |---|---|
 | Models (`models.py`) | `PromptLog` (immutable per-call ledger: `source`, `model`, `model_size`, `prompt`, `system_prompt`, `response`, `status` success/failure/timeout/error, `error_message`, `input_tokens`/`output_tokens`/`thinking_tokens`/`cache_read_tokens`/`cache_write_tokens`, `duration_ms`, `user_id`, JSON `metadata`, `created_at`; doubles as the cache-by-prompt store) |
-| Services (`services.py`) | `complete()` (cache lookup → provider → PromptLog row → `{status, result, usage}`), `complete_json()` (JSON-API system prompt + JSON extraction — the `llm.complete` surface), `translate()` (iron's translate flow), `get_provider()` (lazy dotted-path resolution), `JSON_API_SYSTEM_PROMPT` |
+| Services (`services.py`) | `complete()` (cache lookup → provider → PromptLog row → `{status, result, usage}`), `complete_json()` (JSON-API system prompt + JSON extraction — the `llm.complete` surface), `translate()` (iron's translate flow), `get_provider()` (lazy resolution against the merged registry), `JSON_API_SYSTEM_PROMPT` |
 | Parsing (`parsing.py`) | `parse_json_response()` (direct JSON → fenced block → object anywhere → array anywhere; surrounding prose becomes `comment`), `parse_translation_response()` — ports of the legacy agent service's extractors, Django-free |
 | HTTP API (`urls.py`, `views.py`) | `api/llm/complete`, `api/llm/translate` (both `IsServiceRequest \| IsStaffUser`; hosts mount the app under `agent/`). LLM failures are HTTP 200 with `status: "failure"` — the iron contract |
-| Providers (`providers/`) | `LlmProvider` ABC + `ProviderResult`/`ProviderError`/`ProviderTimeout` (`providers/base.py`), `AnthropicProvider` (SDK, default), `OpenAICompatProvider` (any `/chat/completions` dialect), `ClaudeCodeCLIProvider` (opt-in `claude -p` spawn, never the default) |
-| Public API (`__init__.py`, PEP 562 lazy) | `__all__ = ["LlmProvider", "ProviderResult", "agent_settings", "complete", "translate"]` — Django-free at import |
+| Providers (`providers/`) | `LlmProvider` ABC + `ProviderResult`/`ProviderError`/`ProviderTimeout` (`providers/base.py`), open registry (`providers/__init__.py`: `BUILTIN_PROVIDERS`, `register_provider()`, `registered_providers()`), `AnthropicProvider` (SDK, default), `OpenAICompatProvider` (any `/chat/completions` dialect), `ClaudeCodeCLIProvider` (opt-in `claude -p` spawn, never the default) |
+| Cache (`cache.py`) | `CachePolicy` ABC (`should_cache` / `lookup` / optional `store`) + `PromptLogCachePolicy` default (PromptLog rows + `CACHE_LOOKUP`/`CACHE_TTL`) |
+| System checks (`checks.py`) | `stapel_agent.E001` (DEFAULT_PROVIDER not in the effective registry), `W001` (unimportable provider path), `W002` (entry is not an `LlmProvider` subclass) — registered from `AgentConfig.ready()` |
+| Public API (`__init__.py`, PEP 562 lazy) | `__all__ = ["CachePolicy", "LlmProvider", "ProviderResult", "agent_settings", "complete", "register_provider", "registered_providers", "translate"]` — Django-free at import |
 
 ## Extension points (fork-free)
 
@@ -36,20 +38,31 @@ same name → environment variable → default. All keys are read **lazily at ca
 | Key | Default | What it customizes |
 |---|---|---|
 | `MODELS` | `{"small": "claude-haiku-4-5-20251001", "medium": "claude-sonnet-5", "large": "claude-opus-4-8"}` | The size → model map every request goes through. |
-| `PROVIDERS` | `{"anthropic": ..., "openai-compat": ..., "claude-code": ...}` (dotted paths) | The provider registry. Resolved lazily per request via `import_string` in `services.get_provider` (not `import_strings` — an unknown/broken entry degrades to `status: "failure"`, never an import-time crash). |
+| `PROVIDERS` | `{}` | Overlay **merged over** `providers.BUILTIN_PROVIDERS` — see "LLM providers" below. Resolved lazily per request via `import_string` in `services.get_provider` (not `import_strings` — an unknown/broken entry degrades to `status: "failure"`, never an import-time crash). |
 | `DEFAULT_PROVIDER` | `"anthropic"` | Provider used when the request names none. |
 | `ANTHROPIC_API_KEY` | `""` | Anthropic SDK key (read lazily per call). |
 | `OPENAI_COMPAT_BASE_URL` / `OPENAI_COMPAT_API_KEY` | `""` | OpenAI-compatible endpoint + bearer token (OpenAI, DeepSeek, MiMo, GLM, Kimi). |
 | `OPENAI_COMPAT_MODELS` | `{}` | Per-size model names for openai-compat; missing sizes fall back to `MODELS[size]`. |
 | `CLI_BINARY` / `CLI_TIMEOUT` | `"claude"` / `120` | Claude Code CLI binary and the provider timeout (seconds). |
 | `MAX_TOKENS` | `4096` | Completion token cap passed to providers. |
-| `CACHE_LOOKUP` | `{"llm_facade": False, "translate": True}` | Per-source cache-by-prompt toggle (latest `success` row with identical prompt+system_prompt+source). |
-| `CACHE_TTL` | `604800` | Cache window in seconds; expired rows are ignored. |
+| `CACHE_LOOKUP` | `{"llm_facade": False, "translate": True}` | Per-source cache-by-prompt toggle, honoured by the **default** cache policy (latest `success` row with identical prompt+system_prompt+source). |
+| `CACHE_TTL` | `604800` | Cache window in seconds; expired rows are ignored (default policy). |
+| `CACHE_POLICY` | `"stapel_agent.cache.PromptLogCachePolicy"` | Dotted path to a `CachePolicy` subclass — in `import_strings`, instantiated per call. See "Cache policy" below. |
 
-### LLM providers (dotted-path swap)
+### LLM providers — open registry with MERGE semantics (flagship seam)
 
-Implement the ABC `stapel_agent.providers.base.LlmProvider` and register the dotted
-path — no fork:
+Unlike billing's `PAYMENT_PROVIDER` (a single replace-style dotted path), the
+provider registry is **additive**. Three layers, later wins per name:
+
+1. `providers.BUILTIN_PROVIDERS` (anthropic / openai-compat / claude-code);
+2. `STAPEL_AGENT["PROVIDERS"]` — merged **over** the built-ins: adding one custom
+   provider never requires restating the built-ins; setting a name to `None`/`""`
+   removes it from the effective registry;
+3. runtime registrations via `stapel_agent.register_provider(name, cls_or_path)` —
+   for app-layer packages registering from their own `AppConfig.ready()`.
+
+`registered_providers()` returns the effective mapping; `services.get_provider(name)`
+resolves against it lazily per request.
 
 ```python
 # myproject/llm.py
@@ -61,12 +74,22 @@ class AcmeProvider(LlmProvider):
         ...
         return ProviderResult(text=..., input_tokens=..., output_tokens=...)
 
-# settings.py
+# settings.py — one entry, built-ins untouched; None removes a name
 STAPEL_AGENT = {
-    "PROVIDERS": {**defaults, "acme": "myproject.llm.AcmeProvider"},
+    "PROVIDERS": {"acme": "myproject.llm.AcmeProvider", "claude-code": None},
     "DEFAULT_PROVIDER": "acme",
 }
+
+# — or at runtime, from an AppConfig.ready():
+from stapel_agent import register_provider
+register_provider("acme", AcmeProvider)   # class or dotted path
 ```
+
+Misconfiguration is caught at startup by the system checks (`stapel_agent.E001`
+for a `DEFAULT_PROVIDER` missing from the effective registry; `W001`/`W002` for
+unimportable or non-`LlmProvider` entries — warnings, because unused broken
+entries must not block deploys while lazy resolution degrades them to
+`status: "failure"` per request).
 
 ABC contract:
 
@@ -79,6 +102,23 @@ Providers must read credentials lazily (at call time, via `agent_settings`), nev
 import — and never crash the process for a missing optional dependency (raise
 `ProviderError` with a clear message instead; see `AnthropicProvider`).
 
+### Cache policy (dotted-path swap)
+
+`STAPEL_AGENT["CACHE_POLICY"]` points at a `stapel_agent.cache.CachePolicy`
+subclass (instantiated per call). The default `PromptLogCachePolicy` implements the
+stock behaviour: `should_cache(source)` reads `CACHE_LOOKUP`, `lookup()` returns the
+latest successful `PromptLog` response with identical prompt+system_prompt+source
+within `CACHE_TTL`. Swap it for Redis or a no-op without forking:
+
+| Method | Signature | Contract |
+|---|---|---|
+| `should_cache` | `(source: str) -> bool` | Whether this source consults the cache at all. |
+| `lookup` | `(prompt, system_prompt, source) -> str \| None` | Cached raw response text, or None on a miss. |
+| `store` | `(prompt, system_prompt, source, response) -> None` | Optional (no-op default): persist a success for policies with external storage — the default policy needs nothing here because the PromptLog ledger row IS its storage. |
+
+The `PromptLog` ledger row is written for every provider call **regardless of the
+policy** — caching is a read seam; token accounting is not optional.
+
 ### Swappable models
 
 None. `PromptLog` has a fixed `db_table` (`agent_prompt_log`) and no user FK — it
@@ -88,14 +128,20 @@ do not fork to add columns.
 
 ### Serializer seams (`views.py`)
 
-Both views mix in `SerializerSeamMixin` (`request_serializer_class` +
-`get_request_serializer_class()`); subclass the view, swap the serializer, remount the
-URL — HTTP method bodies stay untouched.
+Both views mix in `SerializerSeamMixin` (`request_serializer_class` /
+`response_serializer_class` + overridable getters); subclass the view, swap the
+serializer, remount the URL — HTTP method bodies stay untouched.
 
-| View | Route (name) | Request serializer | Response |
+| View | Route (name) | Request serializer | Response serializer |
 |---|---|---|---|
-| `LlmCompleteView` | `api/llm/complete` (`llm-complete`) | `CompleteRequestSerializer` | plain contract dict (`status`/`result`/`comment`/`reason`/`usage`) |
-| `LlmTranslateView` | `api/llm/translate` (`llm-translate`) | `TranslateRequestSerializer` (maps wire key `"from"` → `from_lang`) | plain contract dict |
+| `LlmCompleteView` | `api/llm/complete` (`llm-complete`) | `CompleteRequestSerializer` | — (plain contract dict, see below) |
+| `LlmTranslateView` | `api/llm/translate` (`llm-translate`) | `TranslateRequestSerializer` (maps wire key `"from"` → `from_lang`) | `TranslateResponseSerializer` (`TranslateResponse` dataclass; None keys dropped after serialization — absent keys stay absent on the wire, per the iron contract) |
+
+`LlmCompleteView` deliberately has **no response serializer**: its `result` is
+arbitrary JSON — an object or an array, whatever structure the prompt asked the model
+for — which a typed dataclass serializer cannot express without lying about the
+schema. The plain `{status, result?, comment?, reason?, usage?}` dict is the contract
+there; the translate response IS typed (`{str: str}`), so it gets the full seam.
 
 ### Events & functions (comm surface)
 
@@ -126,8 +172,14 @@ microservices — same code). JSON Schemas live in `schemas/functions/`.
 - **Don't turn LLM failures into HTTP 5xx.** The iron contract is HTTP 200 +
   `{"status": "failure", "reason": ...}`; `stapel-translate`'s `AgentProvider` (and
   any other caller) branches on `status`.
-- **Don't fork to add a provider.** Subclass `LlmProvider` in the app layer and add
-  the dotted path to `STAPEL_AGENT["PROVIDERS"]`.
+- **Don't fork to add an LLM provider.** Implement the `LlmProvider` ABC in the app
+  layer and add ONE settings entry (`STAPEL_AGENT["PROVIDERS"]["acme"] = "dotted.path"`)
+  or call `register_provider()` from your `AppConfig.ready()` — the registry merges,
+  so the built-ins never need restating.
+- **Don't restate the built-in providers when overriding `PROVIDERS`.** The dict is a
+  merge overlay, not a replacement — restating them freezes this module's internal
+  paths into host settings and breaks when upstream moves a class. Add/override/remove
+  only the names you mean to change.
 - **Don't write `PromptLog` rows by hand or edit them.** The ledger is written by
   `services.complete()` only, and successful rows double as the prompt cache —
   hand-written rows poison cache lookups. The admin is read-only for the same reason.
@@ -141,18 +193,19 @@ microservices — same code). JSON Schemas live in `schemas/functions/`.
 ## App-layer override vs upstream contribution — rule of thumb
 
 **App-layer override** (client-owned, no fork) when the change fits an extension point
-above: a new/replacement LLM backend (`PROVIDERS` + `LlmProvider` subclass), different
-model names (`MODELS`, `OPENAI_COMPAT_MODELS`), credentials, cache policy
-(`CACHE_LOOKUP` / `CACHE_TTL`), request payload shape (serializer seam + URL remount),
-enabling the CLI provider in a host image.
+above: a new/replacement/removed LLM backend (`PROVIDERS` merge entry or
+`register_provider()` + `LlmProvider` subclass), different model names (`MODELS`,
+`OPENAI_COMPAT_MODELS`), credentials, cache behaviour (`CACHE_LOOKUP` / `CACHE_TTL`
+for the default policy, or a whole `CACHE_POLICY` swap), request/response payload
+shape (serializer seams + URL remount), enabling the CLI provider in a host image.
 
 **Upstream contribution** (Stapel-owned, via the contribution pipeline) when the change
 alters module-owned contracts or invariants: new columns/indexes on `PromptLog`
 (migrations live here), new `PromptSource`/`PromptStatus` values, changes to the
-`LlmProvider` ABC surface, the JSON-extraction rules in `parsing.py`, the HTTP/comm
-response contracts or schemas, new endpoints or comm functions, bug fixes anywhere in
-this repo.
+`LlmProvider` or `CachePolicy` ABC surfaces, the registry merge semantics, the
+JSON-extraction rules in `parsing.py`, the HTTP/comm response contracts or schemas,
+new system checks, new endpoints or comm functions, bug fixes anywhere in this repo.
 
-If a needed seam does not exist (e.g. pluggable cache backends or a streaming
-surface), the seam itself is an upstream contribution; the code that plugs into it
-stays app-layer.
+If a needed seam does not exist (e.g. a streaming surface or per-provider
+rate-limiting hooks), the seam itself is an upstream contribution; the code that
+plugs into it stays app-layer.

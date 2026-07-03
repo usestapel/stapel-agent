@@ -54,7 +54,13 @@ class TestConfDefaults:
         assert agent_settings.MODELS["small"] == "claude-haiku-4-5-20251001"
         assert agent_settings.MODELS["medium"] == "claude-sonnet-5"
         assert agent_settings.MODELS["large"] == "claude-opus-4-8"
-        assert set(agent_settings.PROVIDERS) == {
+        # PROVIDERS is an overlay (merged over the built-ins) — empty by
+        # default; the effective registry is the built-ins.
+        assert agent_settings.PROVIDERS == {}
+        from stapel_agent.providers import BUILTIN_PROVIDERS, registered_providers
+
+        assert registered_providers() == BUILTIN_PROVIDERS
+        assert set(BUILTIN_PROVIDERS) == {
             "anthropic",
             "openai-compat",
             "claude-code",
@@ -64,6 +70,9 @@ class TestConfDefaults:
         assert agent_settings.MAX_TOKENS == 4096
         assert agent_settings.CACHE_LOOKUP == {"llm_facade": False, "translate": True}
         assert agent_settings.CACHE_TTL == 604800
+        from stapel_agent.cache import PromptLogCachePolicy
+
+        assert agent_settings.CACHE_POLICY is PromptLogCachePolicy
 
     def test_namespace_override(self, settings):
         settings.STAPEL_AGENT = {"DEFAULT_PROVIDER": "openai-compat"}

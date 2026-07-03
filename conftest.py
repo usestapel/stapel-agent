@@ -112,13 +112,10 @@ def fake_provider(settings):
     """
     from stapel_agent.tests.fakes import FakeProvider
 
+    # Merge semantics: adding "fake" does not restate the built-ins —
+    # they stay resolvable alongside it.
     settings.STAPEL_AGENT = {
-        "PROVIDERS": {
-            "fake": "stapel_agent.tests.fakes.FakeProvider",
-            "anthropic": "stapel_agent.providers.anthropic.AnthropicProvider",
-            "openai-compat": "stapel_agent.providers.openai_compat.OpenAICompatProvider",
-            "claude-code": "stapel_agent.providers.claude_cli.ClaudeCodeCLIProvider",
-        },
+        "PROVIDERS": {"fake": "stapel_agent.tests.fakes.FakeProvider"},
         "DEFAULT_PROVIDER": "fake",
     }
     FakeProvider.reset()

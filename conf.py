@@ -12,11 +12,13 @@ of the same name, or an environment variable::
         "OPENAI_COMPAT_MODELS": {"small": "deepseek-chat"},
     }
 
-``PROVIDERS`` values are dotted paths to ``LlmProvider`` subclasses; they
-are resolved lazily per request in ``services.get_provider`` (not via
-``import_strings`` — the whole dict maps names to paths, and an unknown or
-broken provider must degrade to a ``status: failure`` response, never an
-import-time crash).
+``PROVIDERS`` entries are **merged over** the built-in registry
+(``stapel_agent.providers.BUILTIN_PROVIDERS``) — adding one custom
+provider does not require restating the built-ins, and setting a name to
+``None``/``""`` removes it. Values are dotted paths to ``LlmProvider``
+subclasses, resolved lazily per request in ``services.get_provider``
+(not via ``import_strings`` — an unknown or broken provider must degrade
+to a ``status: failure`` response, never an import-time crash).
 """
 from stapel_core.conf import AppSettings
 
@@ -31,13 +33,11 @@ agent_settings = AppSettings(
             "medium": "claude-sonnet-5",
             "large": "claude-opus-4-8",
         },
-        # Dotted-path provider registry, resolved lazily per request via
+        # Overlay merged OVER providers.BUILTIN_PROVIDERS (anthropic /
+        # openai-compat / claude-code): add or override entries here,
+        # None/"" removes a name. Resolved lazily per request via
         # import_string in services.get_provider(name).
-        "PROVIDERS": {
-            "anthropic": "stapel_agent.providers.anthropic.AnthropicProvider",
-            "openai-compat": "stapel_agent.providers.openai_compat.OpenAICompatProvider",
-            "claude-code": "stapel_agent.providers.claude_cli.ClaudeCodeCLIProvider",
-        },
+        "PROVIDERS": {},
         "DEFAULT_PROVIDER": "anthropic",
         # Anthropic SDK (read lazily at call time, never frozen at import).
         "ANTHROPIC_API_KEY": "",
@@ -59,8 +59,12 @@ agent_settings = AppSettings(
         "CACHE_LOOKUP": {"llm_facade": False, "translate": True},
         # Seconds; cached rows older than this are ignored (7 days).
         "CACHE_TTL": 604800,
+        # Dotted path to a stapel_agent.cache.CachePolicy subclass — the
+        # cache seam. The default implements the PromptLog+TTL behaviour;
+        # swap for Redis/no-op without forking.
+        "CACHE_POLICY": "stapel_agent.cache.PromptLogCachePolicy",
     },
-    import_strings=(),
+    import_strings=("CACHE_POLICY",),
 )
 
 __all__ = ["agent_settings"]

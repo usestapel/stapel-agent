@@ -38,3 +38,18 @@ class TranslateRequest:
     from_lang: str
     to: str
     entries: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class TranslateResponse:
+    """Key-value translation response (the legacy agent service contract).
+
+    Attributes:
+        status: "ok" or "failure".
+        result: Mapping of keys to translated strings (on success).
+        reason: Failure reason (on failure).
+    """
+
+    status: str
+    result: Optional[Dict[str, str]] = None
+    reason: Optional[str] = None

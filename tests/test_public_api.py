@@ -11,10 +11,13 @@ import stapel_agent
 class TestLazyExports:
     def test_all_declares_public_api(self):
         assert stapel_agent.__all__ == [
+            "CachePolicy",
             "LlmProvider",
             "ProviderResult",
             "agent_settings",
             "complete",
+            "register_provider",
+            "registered_providers",
             "translate",
         ]
 
@@ -32,10 +35,18 @@ class TestLazyExports:
         assert callable(stapel_agent.translate)
 
     def test_provider_seam_resolves(self):
+        from stapel_agent.providers import register_provider, registered_providers
         from stapel_agent.providers.base import LlmProvider, ProviderResult
 
         assert stapel_agent.LlmProvider is LlmProvider
         assert stapel_agent.ProviderResult is ProviderResult
+        assert stapel_agent.register_provider is register_provider
+        assert stapel_agent.registered_providers is registered_providers
+
+    def test_cache_seam_resolves(self):
+        from stapel_agent.cache import CachePolicy
+
+        assert stapel_agent.CachePolicy is CachePolicy
 
     def test_dir_includes_exports(self):
         listing = dir(stapel_agent)

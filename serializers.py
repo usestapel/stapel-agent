@@ -3,7 +3,7 @@
 from stapel_core.django.api.errors import StapelValidationError
 from stapel_core.django.api.serializers import StapelDataclassSerializer
 
-from .dto import CompleteRequest, TranslateRequest
+from .dto import CompleteRequest, TranslateRequest, TranslateResponse
 from .errors import ERR_400_INVALID_MODEL_SIZE
 from .services import MODEL_SIZES
 
@@ -30,3 +30,8 @@ class TranslateRequestSerializer(StapelDataclassSerializer):
             data = dict(data)
             data["from_lang"] = data.pop("from")
         return super().to_internal_value(data)
+
+
+class TranslateResponseSerializer(StapelDataclassSerializer):
+    class Meta:
+        dataclass = TranslateResponse
