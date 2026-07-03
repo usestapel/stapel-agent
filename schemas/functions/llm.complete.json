@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "llm.complete",
+  "description": "JSON LLM completion. Prepends the JSON-API system prompt unless system_prompt is given, calls the configured provider and parses JSON out of the raw text. Returns {status: 'ok'|'failure', result?: object, comment?: string, reason?: string, usage?: {input_tokens, output_tokens}}.",
+  "type": "object",
+  "properties": {
+    "prompt": {
+      "type": "string",
+      "description": "The user prompt."
+    },
+    "model": {
+      "type": "string",
+      "enum": ["small", "medium", "large"],
+      "description": "Model size, mapped via STAPEL_AGENT['MODELS']."
+    },
+    "system_prompt": {
+      "type": "string",
+      "description": "Replaces the built-in JSON-API system prompt."
+    },
+    "provider": {
+      "type": "string",
+      "description": "Provider name from STAPEL_AGENT['PROVIDERS']; defaults to DEFAULT_PROVIDER."
+    }
+  },
+  "required": ["prompt", "model"],
+  "additionalProperties": false
+}

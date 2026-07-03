@@ -1,0 +1,201 @@
+"""HTTP surface tests — paths, auth and the the legacy agent service response contract."""
+import pytest
+
+from stapel_agent.models import PromptLog, PromptStatus
+from stapel_agent.providers.base import ProviderError, ProviderResult
+from stapel_agent.services import JSON_API_SYSTEM_PROMPT
+
+COMPLETE_URL = "/agent/api/llm/complete"
+TRANSLATE_URL = "/agent/api/llm/translate"
+
+
+def _complete(client, body=None, **kwargs):
+    body = body or {"prompt": "give me json", "model": "small"}
+    return client.post(COMPLETE_URL, body, format="json", **kwargs)
+
+
+@pytest.mark.django_db
+class TestAuth:
+    def test_anonymous_complete_rejected(self, api_client):
+        assert _complete(api_client).status_code in (401, 403)
+
+    def test_anonymous_translate_rejected(self, api_client):
+        resp = api_client.post(
+            TRANSLATE_URL,
+            {"from": "auto", "to": "de", "entries": {}},
+            format="json",
+        )
+        assert resp.status_code in (401, 403)
+
+    def test_wrong_api_key_rejected(self, api_client, fake_provider):
+        resp = _complete(api_client, HTTP_X_API_KEY="wrong-key")
+        assert resp.status_code in (401, 403)
+
+    def test_service_api_key_accepted(self, api_client, fake_provider):
+        resp = _complete(api_client, HTTP_X_API_KEY="test-service-key")
+        assert resp.status_code == 200, resp.content
+
+    def test_staff_user_accepted(self, staff_client, fake_provider):
+        assert _complete(staff_client).status_code == 200
+
+    def test_plain_user_rejected(self, user, fake_provider):
+        from rest_framework.test import APIClient
+
+        client = APIClient()
+        client.force_authenticate(user=user)
+        assert _complete(client).status_code == 403
+
+
+@pytest.mark.django_db
+class TestComplete:
+    def test_direct_json_happy_path(self, api_client, fake_provider):
+        resp = _complete(api_client, HTTP_X_API_KEY="test-service-key")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert data["result"] == {"answer": 42}
+        assert "comment" not in data
+        assert data["usage"] == {"input_tokens": 10, "output_tokens": 5}
+
+    def test_json_block_with_comment(self, api_client, fake_provider):
+        fake_provider.result = ProviderResult(
+            text='Here it is:\n```json\n{"a": 1}\n```\nEnjoy.',
+            input_tokens=1,
+            output_tokens=2,
+        )
+        data = _complete(api_client, HTTP_X_API_KEY="test-service-key").json()
+        assert data["status"] == "ok"
+        assert data["result"] == {"a": 1}
+        assert data["comment"] == "Here it is:\nEnjoy."
+
+    def test_garbage_is_parse_failure(self, api_client, fake_provider):
+        fake_provider.result = ProviderResult(text="sorry, no json here")
+        resp = _complete(api_client, HTTP_X_API_KEY="test-service-key")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "failure"
+        assert data["reason"] == "Failed to parse JSON from LLM response"
+        assert data["comment"] == "sorry, no json here"
+
+    def test_provider_failure_is_http_200(self, api_client, fake_provider):
+        fake_provider.error = ProviderError("boom")
+        resp = _complete(api_client, HTTP_X_API_KEY="test-service-key")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "failure"
+        assert data["reason"] == "boom"
+
+    def test_unknown_provider_name(self, api_client, fake_provider):
+        resp = _complete(
+            api_client,
+            {"prompt": "x", "model": "small", "provider": "nope"},
+            HTTP_X_API_KEY="test-service-key",
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "failure"
+        assert "nope" in data["reason"]
+        assert fake_provider.calls == []
+        assert PromptLog.objects.count() == 0
+
+    def test_unknown_model_size_is_400(self, api_client, fake_provider):
+        resp = _complete(
+            api_client,
+            {"prompt": "x", "model": "xl"},
+            HTTP_X_API_KEY="test-service-key",
+        )
+        assert resp.status_code == 400
+        assert fake_provider.calls == []
+
+    def test_missing_prompt_is_400(self, api_client, fake_provider):
+        resp = _complete(
+            api_client, {"model": "small"}, HTTP_X_API_KEY="test-service-key"
+        )
+        assert resp.status_code == 400
+
+    def test_json_api_system_prompt_prepended(self, api_client, fake_provider):
+        _complete(api_client, HTTP_X_API_KEY="test-service-key")
+        assert fake_provider.calls[0]["system_prompt"] == JSON_API_SYSTEM_PROMPT
+
+    def test_custom_system_prompt_wins(self, api_client, fake_provider):
+        _complete(
+            api_client,
+            {"prompt": "x", "model": "small", "system_prompt": "You are a pirate."},
+            HTTP_X_API_KEY="test-service-key",
+        )
+        assert fake_provider.calls[0]["system_prompt"] == "You are a pirate."
+
+    def test_model_size_resolved_via_models_map(self, api_client, fake_provider):
+        _complete(api_client, HTTP_X_API_KEY="test-service-key")
+        assert fake_provider.calls[0]["model"] == "claude-haiku-4-5-20251001"
+
+    def test_staff_user_id_logged(self, staff_client, staff_user, fake_provider):
+        _complete(staff_client)
+        log = PromptLog.objects.get()
+        assert log.user_id == str(staff_user.pk)
+        assert log.status == PromptStatus.SUCCESS
+
+
+@pytest.mark.django_db
+class TestTranslate:
+    def _post(self, client, body):
+        return client.post(
+            TRANSLATE_URL, body, format="json", HTTP_X_API_KEY="test-service-key"
+        )
+
+    def test_happy_path_with_from_key(self, api_client, fake_provider):
+        fake_provider.result = ProviderResult(
+            text='{"greeting": "Hallo"}', input_tokens=3, output_tokens=4
+        )
+        resp = self._post(
+            api_client,
+            {"from": "auto", "to": "de", "entries": {"greeting": "Hello"}},
+        )
+        assert resp.status_code == 200, resp.content
+        assert resp.json() == {"status": "ok", "result": {"greeting": "Hallo"}}
+        # auto → the auto-detect wording of the ported system prompt
+        assert (
+            "the source language (auto-detect)"
+            in fake_provider.calls[0]["system_prompt"]
+        )
+        assert '"greeting": "Hello"' in fake_provider.calls[0]["prompt"]
+
+    def test_from_lang_key_also_accepted(self, api_client, fake_provider):
+        fake_provider.result = ProviderResult(text='{"k": "Hallo"}')
+        resp = self._post(
+            api_client,
+            {"from_lang": "en", "to": "de", "entries": {"k": "Hello"}},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+        assert "from en to de" in fake_provider.calls[0]["system_prompt"]
+
+    def test_missing_from_is_400(self, api_client, fake_provider):
+        resp = self._post(api_client, {"to": "de", "entries": {"k": "v"}})
+        assert resp.status_code == 400
+
+    def test_empty_entries_short_circuits(self, api_client, fake_provider):
+        resp = self._post(api_client, {"from": "auto", "to": "de", "entries": {}})
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok", "result": {}}
+        assert fake_provider.calls == []
+        assert PromptLog.objects.count() == 0
+
+    def test_parse_failure(self, api_client, fake_provider):
+        fake_provider.result = ProviderResult(text="I will not translate that.")
+        resp = self._post(
+            api_client, {"from": "auto", "to": "de", "entries": {"k": "Hello"}}
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "status": "failure",
+            "reason": "Failed to parse translation response",
+        }
+
+    def test_provider_failure(self, api_client, fake_provider):
+        fake_provider.error = ProviderError("no tokens left")
+        resp = self._post(
+            api_client, {"from": "auto", "to": "de", "entries": {"k": "Hello"}}
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "failure", "reason": "no tokens left"}

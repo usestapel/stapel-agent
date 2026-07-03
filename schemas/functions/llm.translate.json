@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "llm.translate",
+  "description": "Translate a {key: text} mapping between languages. Empty entries short-circuit to {status: 'ok', result: {}} without calling the provider. Returns {status: 'ok', result: {key: translated}} or {status: 'failure', reason: string}.",
+  "type": "object",
+  "properties": {
+    "from_lang": {
+      "type": "string",
+      "description": "Source language code, or 'auto' to auto-detect."
+    },
+    "to": {
+      "type": "string",
+      "description": "Target language code."
+    },
+    "entries": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Mapping of keys to source-language strings."
+    }
+  },
+  "required": ["from_lang", "to", "entries"],
+  "additionalProperties": false
+}
