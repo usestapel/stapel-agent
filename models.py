@@ -18,6 +18,7 @@ class PromptSource(models.TextChoices):
     TRANSLATE = "translate", "Translate"
     TRANSCRIBE = "transcribe", "Transcribe"
     SUMMARIZE = "summarize", "Summarize"
+    GENERATE_IMAGE = "generate_image", "Generate Image"
     OTHER = "other", "Other"
 
 

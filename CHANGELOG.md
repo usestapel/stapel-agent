@@ -6,6 +6,52 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Vision input on `llm.complete`** (HTTP + comm, backward-compatible
+  additive): optional `images` — each entry `{url}` or `{data_b64,
+  mime?}` (raw bytes never travel the wire; in-process callers pass
+  `ImageRef(data=...)`). `AnthropicProvider` maps refs to image content
+  blocks (url/base64 source), `OpenAICompatProvider` to `image_url`
+  parts (url or data URI); `claude-code` has no vision and fails fast
+  with `status: "failure"`. New `LlmProvider.supports_images` class
+  attribute — the service passes the `images` kwarg only when non-empty
+  and only to providers that opt in, so pre-vision provider subclasses
+  keep working unchanged.
+- **Cache correctness for multimodal requests**: the prompt cache is
+  text-keyed, so image requests bypass lookup and store, and the default
+  `PromptLogCachePolicy.lookup()` now excludes multimodal ledger rows —
+  identical text over different pixels never collides in either
+  direction. Vision ledger rows record `metadata.images = {count,
+  kinds}`, never bytes.
+- **Image generation surface** — `POST api/llm/generate-image` + the
+  `llm.generate_image` comm Function (`{prompt, size?, n? (1-10),
+  provider?}` → `{status, images: [{url? | data_b64?, mime}],
+  provider_used}`); failures stay HTTP 200 with `status: "failure"`.
+  Module boundary: the agent returns raw provider results and writes the
+  ledger — storing images into stapel-cdn/asset libraries is the
+  CALLER's job (system-design §8.8 gateway verb does metering/placement).
+- **Image provider registry** — third instance of the house merge
+  pattern: `images.BUILTIN_IMAGE_PROVIDERS` +
+  `STAPEL_AGENT["IMAGE_PROVIDERS"]` overlay +
+  `register_image_provider()` runtime; `DEFAULT_IMAGE_PROVIDER`
+  (default `openai-images`); system checks `stapel_agent.W005`
+  (unimportable / non-`ImageGenProvider` entry) / `W006` (unknown
+  default). `ImageGenProvider` ABC (`generate(*, prompt, size, n,
+  timeout_seconds) -> list[GeneratedImage]`, `supported_sizes` gate)
+  with the fatal/retryable taxonomy
+  (`ImageGenError`/`RetryableImageGenError`).
+- **Built-in `openai-images` adapter**: OpenAI-compatible
+  `POST {base}/images/generations` (OpenAI, Together, self-hosted
+  compatibles) — settings `IMAGES_BASE_URL`/`IMAGES_API_KEY` (both fall
+  back to the `OPENAI_COMPAT_*` pair) + optional `IMAGES_MODEL`; maps
+  `b64_json`/`url` entries to `GeneratedImage`. Other vendors
+  (Stability, ...) are an app-layer recipe in MODULE.md.
+- **Ledger coverage for image generation**: `source=generate_image` rows
+  (`model` = provider name, prompt logged, response NOT logged raw —
+  `{count, mimes, bytes_total}` in metadata, token columns NULL).
+  Migration `0003` extends the `source` choices.
+- Public API additions (PEP 562, still Django-free at import):
+  `generate_image`, `ImageRef`, `ImageGenProvider`, `GeneratedImage`,
+  `register_image_provider`, `registered_image_providers`.
 - **Transcription surface** — `POST api/llm/transcribe` + the
   `llm.transcribe` comm Function (URLs only over the wire, never raw
   audio bytes), backed by a second open registry with the same merge

@@ -80,6 +80,19 @@ agent_settings = AppSettings(
         "ASSEMBLYAI_API_KEY": "",
         "ASSEMBLYAI_BASE_URL": "https://api.assemblyai.com",
         "ASSEMBLYAI_MODEL": "universal",
+        # ── Image generation ────────────────────────────────────
+        # Overlay merged OVER images.BUILTIN_IMAGE_PROVIDERS
+        # (openai-images) — same merge semantics as PROVIDERS/STT_PROVIDERS.
+        "IMAGE_PROVIDERS": {},
+        "DEFAULT_IMAGE_PROVIDER": "openai-images",
+        # OpenAI-compatible /images/generations endpoint. Both fall back
+        # to the OPENAI_COMPAT_* pair, so a host already on an
+        # OpenAI-flavoured stack configures nothing extra.
+        "IMAGES_BASE_URL": "",
+        "IMAGES_API_KEY": "",
+        # Optional model name ("gpt-image-1", "flux-schnell", ...);
+        # empty = omitted from the request (single-model servers).
+        "IMAGES_MODEL": "",
         # Per-source cache-by-prompt toggle: a repeated identical
         # prompt+system_prompt within CACHE_TTL returns the stored response
         # without calling the provider. Sources missing from the dict

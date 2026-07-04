@@ -13,14 +13,20 @@ class TestLazyExports:
         assert stapel_agent.__all__ == [
             "AudioRef",
             "CachePolicy",
+            "GeneratedImage",
+            "ImageGenProvider",
+            "ImageRef",
             "LlmProvider",
             "NormalizedTranscript",
             "ProviderResult",
             "SttProvider",
             "agent_settings",
             "complete",
+            "generate_image",
+            "register_image_provider",
             "register_provider",
             "register_stt_provider",
+            "registered_image_providers",
             "registered_providers",
             "registered_stt_providers",
             "summarize",
@@ -68,6 +74,25 @@ class TestLazyExports:
         assert stapel_agent.transcribe is transcribe
         assert stapel_agent.summarize is summarize
 
+    def test_image_seam_resolves(self):
+        from stapel_agent.images import (
+            register_image_provider,
+            registered_image_providers,
+        )
+        from stapel_agent.images.base import (
+            GeneratedImage,
+            ImageGenProvider,
+            ImageRef,
+        )
+        from stapel_agent.services import generate_image
+
+        assert stapel_agent.ImageRef is ImageRef
+        assert stapel_agent.ImageGenProvider is ImageGenProvider
+        assert stapel_agent.GeneratedImage is GeneratedImage
+        assert stapel_agent.register_image_provider is register_image_provider
+        assert stapel_agent.registered_image_providers is registered_image_providers
+        assert stapel_agent.generate_image is generate_image
+
     def test_dir_includes_exports(self):
         listing = dir(stapel_agent)
         for name in stapel_agent.__all__:
@@ -102,12 +127,13 @@ class TestImportWithoutDjangoSettings:
         assert result.returncode == 0, result.stderr
 
     def test_provider_base_import_is_django_free(self):
-        """The provider/STT seams must be importable without Django too."""
+        """The provider/STT/image seams must be importable without Django too."""
         env = {k: v for k, v in os.environ.items() if k != "DJANGO_SETTINGS_MODULE"}
         code = (
             "import sys\n"
             "from stapel_agent import LlmProvider, ProviderResult\n"
             "from stapel_agent import SttProvider, AudioRef, NormalizedTranscript\n"
+            "from stapel_agent import ImageRef, ImageGenProvider, GeneratedImage\n"
             'polluted = [m for m in sys.modules if m == "django" or m.startswith("django.")]\n'
             'assert not polluted, f"django imported: {polluted}"\n'
         )

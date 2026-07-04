@@ -15,8 +15,10 @@ from stapel_core.django.api.permissions import IsServiceRequest, IsStaffUser
 
 from . import services
 from .dto import SummarizeResponse, TranslateResponse
+from .images.base import ImageRef
 from .serializers import (
     CompleteRequestSerializer,
+    GenerateImageRequestSerializer,
     SummarizeRequestSerializer,
     SummarizeResponseSerializer,
     TranscribeRequestSerializer,
@@ -75,6 +77,9 @@ class LlmCompleteView(SerializerSeamMixin, APIView):
             system_prompt=data.system_prompt,
             provider=data.provider,
             user_id=_request_user_id(request),
+            # Entries are pre-validated (exactly one of url/data_b64,
+            # base64 decodes) — from_payload cannot raise here.
+            images=[ImageRef.from_payload(i) for i in data.images or []] or None,
         )
         return StapelResponse(payload)
 
@@ -186,3 +191,34 @@ class LlmSummarizeView(SerializerSeamMixin, APIView):
         )
         body = {k: v for k, v in dict(response_cls(dto).data).items() if v is not None}
         return StapelResponse(body)
+
+
+@extend_schema(tags=["LLM"])
+class LlmGenerateImageView(SerializerSeamMixin, APIView):
+    """Image generation — ``POST api/llm/generate-image``.
+
+    Returns the provider's raw results (``url`` and/or ``data_b64`` per
+    image) — storage into CDN/asset libraries is the caller's job.
+    Generation failures are HTTP 200 with ``status: "failure"``.
+    """
+
+    permission_classes = [IsServiceRequest | IsStaffUser]
+    request_serializer_class = GenerateImageRequestSerializer
+    # Deliberately no response serializer: whether an image arrives as a
+    # URL or a base64 blob depends on the backend — same rationale as
+    # complete's result; see MODULE.md.
+
+    @extend_schema(request=GenerateImageRequestSerializer, responses={200: dict})
+    def post(self, request):
+        ser = self.get_request_serializer_class()(data=request.data)
+        ser.is_valid(raise_exception=True)
+        data = ser.validated_data
+        payload = services.generate_image(
+            data.prompt,
+            size=data.size,
+            n=data.n,
+            provider=data.provider,
+            timeout_seconds=data.timeout_seconds,
+            user_id=_request_user_id(request),
+        )
+        return StapelResponse(payload)

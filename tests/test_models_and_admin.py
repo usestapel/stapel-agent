@@ -93,6 +93,19 @@ class TestConfDefaults:
         assert agent_settings.STT_TIMEOUT == 1800
         assert agent_settings.WHISPER_MODEL == "whisper-1"
         assert agent_settings.ASSEMBLYAI_MODEL == "universal"
+        # Image-generation defaults
+        from stapel_agent.images import (
+            BUILTIN_IMAGE_PROVIDERS,
+            registered_image_providers,
+        )
+
+        assert agent_settings.IMAGE_PROVIDERS == {}
+        assert registered_image_providers() == BUILTIN_IMAGE_PROVIDERS
+        assert set(BUILTIN_IMAGE_PROVIDERS) == {"openai-images"}
+        assert agent_settings.DEFAULT_IMAGE_PROVIDER == "openai-images"
+        assert agent_settings.IMAGES_BASE_URL == ""
+        assert agent_settings.IMAGES_API_KEY == ""
+        assert agent_settings.IMAGES_MODEL == ""
 
     def test_namespace_override(self, settings):
         settings.STAPEL_AGENT = {"DEFAULT_PROVIDER": "openai-compat"}

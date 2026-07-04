@@ -74,6 +74,7 @@ def complete(
     user_id: str | None = None,
     metadata: dict | None = None,
     skip_cache: bool = False,
+    images: list | None = None,
 ) -> dict:
     """Raw completion: ``{"status": "ok", "result": <text>, "usage": ...}``
     or ``{"status": "failure", "reason": ...}``.
@@ -82,13 +83,20 @@ def complete(
     honours ``CACHE_LOOKUP[source]``) → resolve provider → call → write a
     PromptLog row (every token column) → return. CLI/HTTP timeouts land
     as status ``timeout`` in the log.
+
+    *images* (a list of ``ImageRef``) makes the request multimodal. The
+    prompt cache is text-keyed, so image requests bypass lookup AND
+    store — identical text over different pixels must never collide.
+    Providers without ``supports_images`` degrade to a clear
+    ``status: "failure"``; the ledger records ``{count, kinds}`` in
+    metadata, never image bytes.
     """
     models = agent_settings.MODELS or {}
     if model_size not in models:
         return {"status": "failure", "reason": f"Unknown model size '{model_size}'"}
 
     policy = _cache_policy()
-    if not skip_cache and policy.should_cache(source):
+    if not skip_cache and not images and policy.should_cache(source):
         cached = policy.lookup(prompt, system_prompt, source)
         if cached is not None:
             logger.info("stapel-agent: cache hit for %s prompt", source)
@@ -109,6 +117,20 @@ def complete(
             "reason": f"Provider '{provider_name}' could not be loaded: {exc}",
         }
 
+    if images and not backend.supports_images:
+        return {
+            "status": "failure",
+            "reason": f"Provider '{provider_name}' does not support image input",
+        }
+
+    extra_meta = {}
+    if images:
+        # Never the bytes — just enough for observability/cost queries.
+        extra_meta["images"] = {
+            "count": len(images),
+            "kinds": [img.kind for img in images],
+        }
+
     model = backend.resolve_model(model_size, models[model_size])
     log = PromptLog(
         source=source,
@@ -117,12 +139,18 @@ def complete(
         prompt=prompt,
         system_prompt=system_prompt,
         user_id=str(user_id) if user_id is not None else None,
-        metadata={**(metadata or {}), "provider": provider_name},
+        metadata={**(metadata or {}), "provider": provider_name, **extra_meta},
     )
+
+    # The kwarg travels only when non-empty, so pre-vision provider
+    # subclasses with the old three-argument signature keep working.
+    call_kwargs = {"images": list(images)} if images else {}
 
     start = time.monotonic()
     try:
-        result = backend.complete(prompt=prompt, model=model, system_prompt=system_prompt)
+        result = backend.complete(
+            prompt=prompt, model=model, system_prompt=system_prompt, **call_kwargs
+        )
     except ProviderTimeout as exc:
         log.status = PromptStatus.TIMEOUT
         log.error_message = str(exc)
@@ -147,8 +175,10 @@ def complete(
     log.save()
 
     # No-op for the default policy (the ledger row above IS its storage);
-    # external-store policies (Redis, ...) hook in here.
-    policy.store(prompt, system_prompt, source, result.text)
+    # external-store policies (Redis, ...) hook in here. Never store
+    # multimodal results — the text key can't see the pixels.
+    if not images:
+        policy.store(prompt, system_prompt, source, result.text)
 
     return {"status": "ok", "result": result.text, "usage": _usage(result)}
 
@@ -161,6 +191,7 @@ def complete_json(
     provider: str | None = None,
     user_id: str | None = None,
     metadata: dict | None = None,
+    images: list | None = None,
 ) -> dict:
     """The ``llm.complete`` surface shared by the HTTP view and the comm
     function: prepend the JSON-API system prompt (unless the caller brings
@@ -174,6 +205,7 @@ def complete_json(
         source=PromptSource.LLM_FACADE,
         user_id=user_id,
         metadata=metadata,
+        images=images,
     )
     if raw["status"] == "failure":
         return _drop_none(
@@ -483,6 +515,106 @@ def summarize(
     return {"status": "ok", "summary": merged.get("result") or "", "usage": usage}
 
 
+# ─── Image generation ─────────────────────────────────────────────────
+
+
+def get_image_provider(name: str):
+    """Instantiate the image provider registered under *name* (runtime →
+    ``IMAGE_PROVIDERS`` merge → built-ins). Raises ImageGenError for
+    unknown names — ``generate_image()`` degrades that to
+    ``status: "failure"``."""
+    from .images import registered_image_providers
+    from .images.base import ImageGenError
+
+    target = registered_image_providers().get(name)
+    if not target:
+        raise ImageGenError(
+            f"Unknown image provider '{name}' — register it via "
+            "STAPEL_AGENT['IMAGE_PROVIDERS'] or "
+            "stapel_agent.images.register_image_provider",
+            provider=name,
+        )
+    cls = import_string(target) if isinstance(target, str) else target
+    return cls()
+
+
+def generate_image(
+    prompt: str,
+    *,
+    size: str = "1024x1024",
+    n: int = 1,
+    provider: str | None = None,
+    timeout_seconds: int | None = None,
+    user_id: str | None = None,
+    metadata: dict | None = None,
+) -> dict:
+    """Generate images through the configured backend.
+
+    Returns ``{"status": "ok", "images": [{url?|data_b64?, mime}],
+    "provider_used": str}`` or ``{"status": "failure", "reason": ...}``.
+
+    The module boundary stops at raw results + the ledger: storing images
+    into CDN/asset libraries is the CALLER's job (the system-design §8.8
+    gateway verb does metering/placement). One PromptLog row per call —
+    ``source=generate_image``, ``model`` = provider name, prompt logged,
+    the response body NOT logged raw (only ``{count, mimes, bytes_total}``
+    in metadata), token columns null.
+    """
+    from .images.base import ImageGenError, b64_decoded_size
+
+    name = provider or agent_settings.DEFAULT_IMAGE_PROVIDER
+    start = time.monotonic()
+
+    def _log(status: str, *, error: str | None = None, extra: dict | None = None):
+        PromptLog.objects.create(
+            source=PromptSource.GENERATE_IMAGE,
+            model=name,
+            model_size="",
+            prompt=prompt,
+            response=None,  # never the payload — b64 blobs don't belong here
+            status=status,
+            error_message=error,
+            duration_ms=int((time.monotonic() - start) * 1000),
+            user_id=str(user_id) if user_id is not None else None,
+            metadata={**(metadata or {}), "size": size, "n": n, **(extra or {})},
+        )
+
+    try:
+        backend = get_image_provider(name)
+        if backend.supported_sizes is not None and size not in backend.supported_sizes:
+            raise ImageGenError(
+                f"size '{size}' is not supported by provider '{name}' "
+                f"(supported: {sorted(backend.supported_sizes)})",
+                provider=name,
+            )
+        results = backend.generate(
+            prompt=prompt, size=size, n=n, timeout_seconds=timeout_seconds
+        )
+    except ImageGenError as exc:
+        _log(PromptStatus.ERROR, error=str(exc))
+        return {"status": "failure", "reason": str(exc)}
+    except ImportError as exc:
+        reason = f"Image provider '{name}' could not be loaded: {exc}"
+        _log(PromptStatus.ERROR, error=reason)
+        return {"status": "failure", "reason": reason}
+
+    _log(
+        PromptStatus.SUCCESS,
+        extra={
+            "images": {
+                "count": len(results),
+                "mimes": sorted({img.mime for img in results}),
+                "bytes_total": sum(b64_decoded_size(img.data_b64) for img in results),
+            }
+        },
+    )
+    return {
+        "status": "ok",
+        "images": [img.to_dict() for img in results],
+        "provider_used": name,
+    }
+
+
 def _drop_none(payload: dict) -> dict:
     return {k: v for k, v in payload.items() if v is not None}
 
@@ -492,6 +624,8 @@ __all__ = [
     "MODEL_SIZES",
     "complete",
     "complete_json",
+    "generate_image",
+    "get_image_provider",
     "get_provider",
     "get_stt_provider",
     "summarize",

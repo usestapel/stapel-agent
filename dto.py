@@ -1,7 +1,7 @@
 """DTOs for the agent API."""
 
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 
 @dataclass
@@ -14,12 +14,16 @@ class CompleteRequest:
         provider: Provider name from STAPEL_AGENT["PROVIDERS"]; defaults
             to DEFAULT_PROVIDER.
         system_prompt: Replaces the built-in JSON-API system prompt.
+        images: Optional vision input — each entry is {"url": ...} or
+            {"data_b64": ..., "mime"?: ...}. The wire never carries raw
+            bytes.
     """
 
     prompt: str
     model: str
     provider: Optional[str] = None
     system_prompt: Optional[str] = None
+    images: Optional[List[dict]] = None
 
 
 @dataclass
@@ -91,6 +95,26 @@ class SummarizeRequest:
     language: Optional[str] = None
     model: str = "medium"
     provider: Optional[str] = None
+
+
+@dataclass
+class GenerateImageRequest:
+    """Image-generation request.
+
+    Attributes:
+        prompt: Text description of the desired image(s).
+        size: "WxH" size string. Example: 1024x1024
+        n: Number of images (1-10).
+        provider: Image provider name from STAPEL_AGENT["IMAGE_PROVIDERS"];
+            defaults to DEFAULT_IMAGE_PROVIDER.
+        timeout_seconds: Hard cap on the generation request.
+    """
+
+    prompt: str
+    size: str = "1024x1024"
+    n: int = 1
+    provider: Optional[str] = None
+    timeout_seconds: Optional[int] = None
 
 
 @dataclass

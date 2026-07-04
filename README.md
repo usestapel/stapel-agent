@@ -42,19 +42,22 @@ Two surfaces, same contracts:
 
 | Surface | HTTP | comm Function | Does |
 |---|---|---|---|
-| Complete | `POST /agent/api/llm/complete` | `llm.complete` | JSON completion: `{"prompt", "model": "small\|medium\|large", "system_prompt"?, "provider"?}` → parsed JSON in `result`, prose in `comment` |
+| Complete | `POST /agent/api/llm/complete` | `llm.complete` | JSON completion: `{"prompt", "model": "small\|medium\|large", "system_prompt"?, "provider"?, "images"?}` → parsed JSON in `result`, prose in `comment`. `images` (vision) entries are `{url}` or `{data_b64, mime?}` — OCR, screenshots, photo moderation |
 | Translate | `POST /agent/api/llm/translate` | `llm.translate` | `{"from"/"from_lang", "to", "entries": {key: text}}` → `{key: translated}` (cached by prompt) |
 | Transcribe | `POST /agent/api/llm/transcribe` | `llm.transcribe` | `{"audio_url", "language"?, "diarization"?, "provider"?, "timeout_seconds"?}` → a normalized transcript (words, utterances, speakers, timings) via the STT router |
 | Summarize | `POST /agent/api/llm/summarize` | `llm.summarize` | exactly one of `text` / `transcript` (+ `language`?, `model`?, `provider`?) → Markdown `summary` + aggregated `usage`; long inputs are map-reduced |
+| Generate image | `POST /agent/api/llm/generate-image` | `llm.generate_image` | `{"prompt", "size"?, "n"? (1-10), "provider"?}` → raw provider results `[{url? \| data_b64?, mime}]` — storing them in a CDN/asset library is the caller's job |
 
 ```bash
 # HTTP (service-to-service: X-API-KEY, or a staff session)
 POST /agent/api/llm/complete   {"prompt": "...", "model": "small|medium|large",
-                                "provider"?: "...", "system_prompt"?: "..."}
+                                "provider"?: "...", "system_prompt"?: "...",
+                                "images"?: [{"url": "https://..."} | {"data_b64": "...", "mime"?: "image/webp"}]}
 POST /agent/api/llm/translate  {"from": "auto", "to": "de", "entries": {"key": "text"}}
 POST /agent/api/llm/transcribe {"audio_url": "https://...presigned...", "language"?: "en",
                                 "diarization"?: true, "provider"?: "elevenlabs"}
 POST /agent/api/llm/summarize  {"text": "..."} | {"transcript": {...llm.transcribe output...}}
+POST /agent/api/llm/generate-image {"prompt": "a cat", "size"?: "1024x1024", "n"?: 2}
 ```
 
 ```python
@@ -62,9 +65,12 @@ POST /agent/api/llm/summarize  {"text": "..."} | {"transcript": {...llm.transcri
 from stapel_core.comm import call
 
 call("llm.complete", {"prompt": "...", "model": "small"})
+call("llm.complete", {"prompt": "what is on this?", "model": "small",
+                      "images": [{"url": "https://..."}]})  # url or data_b64 — never raw bytes
 call("llm.translate", {"from_lang": "auto", "to": "de", "entries": {...}})
 call("llm.transcribe", {"audio_url": "https://..."})  # URLs only — never raw bytes
 call("llm.summarize", {"transcript": result["transcript"]})
+call("llm.generate_image", {"prompt": "a cat", "n": 2})
 ```
 
 Responses follow the the legacy agent service contract: LLM failures are **HTTP 200** with
@@ -78,7 +84,10 @@ duration and the full token ledger (input / output / thinking / cache-read /
 cache-write) — per-user and per-source cost accounting needs no other table.
 Transcriptions land there too (`source=transcribe`, `model` = STT provider
 name, token columns NULL, the fallback walk in `metadata.attempts`); each
-summarize pass is a normal LLM row (`source=summarize`).
+summarize pass is a normal LLM row (`source=summarize`); image generations
+log as `source=generate_image` with `{count, mimes, bytes_total}` in
+metadata — image bytes never touch the ledger, and multimodal completions
+never collide with the text-keyed prompt cache.
 
 Transcription routes through an STT provider chain — explicit `provider` in
 the request beats `STT_LANGUAGE_ROUTES[lang]`, which beats
@@ -108,6 +117,10 @@ retry on another provider.
 | `WHISPER_BASE_URL` / `WHISPER_API_KEY` / `WHISPER_MODEL` | `""` / `""` / `"whisper-1"` | OpenAI-compatible Whisper endpoint — the OpenAI API or self-hosted faster-whisper (key optional) |
 | `ELEVENLABS_API_KEY` / `ELEVENLABS_STT_URL` / `ELEVENLABS_STT_MODEL` | `""` / Scribe URL / `"scribe_v2"` | ElevenLabs Scribe |
 | `ASSEMBLYAI_API_KEY` / `ASSEMBLYAI_BASE_URL` / `ASSEMBLYAI_MODEL` | `""` / `"https://api.assemblyai.com"` / `"universal"` | AssemblyAI (async submit+poll) |
+| `IMAGE_PROVIDERS` | `{}` | Overlay **merged over** the built-in image registry (openai-images) — same semantics as `PROVIDERS` |
+| `DEFAULT_IMAGE_PROVIDER` | `"openai-images"` | Image provider used when a request pins none |
+| `IMAGES_BASE_URL` / `IMAGES_API_KEY` | `""` / `""` | OpenAI-compatible `/images/generations` endpoint + key; both fall back to the `OPENAI_COMPAT_*` pair |
+| `IMAGES_MODEL` | `""` | Optional model name (`gpt-image-1`, ...); empty = omitted from the request |
 | `CACHE_LOOKUP` | `{"llm_facade": False, "translate": True, "summarize": False}` | Per-source cache-by-prompt toggle (used by the default cache policy) |
 | `CACHE_TTL` | `604800` | Cache window in seconds (7 days); older rows are ignored (default policy) |
 | `CACHE_POLICY` | `"stapel_agent.cache.PromptLogCachePolicy"` | Dotted path to a `CachePolicy` subclass — swap the prompt cache (Redis, no-op, ...) without forking |
@@ -173,6 +186,23 @@ The STT registry has the same merge semantics as the LLM one
 (`stapel_agent.W003/W004`). A custom engine is a `stapel_agent.SttProvider`
 subclass returning a `NormalizedTranscript` — MODULE.md walks through a
 self-hosted GigaAM adapter as the worked example.
+
+## Vision & image generation
+
+The two vision-capable LLM providers map `images` into their dialects
+automatically — `anthropic` to image content blocks (URL or base64 source),
+`openai-compat` to `image_url` parts (URL or data URI). `claude-code` has no
+vision: an image request through it fails fast with `status: "failure"`.
+
+Image generation ships one built-in backend, `openai-images` — anything
+speaking the OpenAI `POST {base}/images/generations` dialect (OpenAI,
+Together, self-hosted). It is the third instance of the merge-registry
+pattern (`STAPEL_AGENT["IMAGE_PROVIDERS"]` overlay, `None` removes,
+`register_image_provider()` at runtime; startup checks
+`stapel_agent.W005/W006`). Vendors with their own protocols (Stability,
+Ideogram, ...) are an app-layer `stapel_agent.ImageGenProvider` subclass —
+recipe in [MODULE.md](MODULE.md). The agent returns raw results and writes
+the ledger; storage/placement belongs to the calling tier.
 
 ## License
 

@@ -154,3 +154,29 @@ def fake_stt(settings):
     yield FakeSttProvider
     for cls in fakes:
         cls.reset()
+
+
+@pytest.fixture
+def fake_images(settings):
+    """Route image generation to the recording FakeImageProvider (default),
+    with a size-restricted sibling registered for the validation path.
+
+    Same merge semantics as the other fixtures: the IMAGE_PROVIDERS
+    overlay adds names without restating the built-in openai-images.
+    """
+    from stapel_agent.tests.fakes import FakeImageProvider, SquareOnlyImageProvider
+
+    fakes = (FakeImageProvider, SquareOnlyImageProvider)
+    settings.STAPEL_AGENT = {
+        **getattr(settings, "STAPEL_AGENT", {}),
+        "IMAGE_PROVIDERS": {
+            "fake-images": "stapel_agent.tests.fakes.FakeImageProvider",
+            "square-images": "stapel_agent.tests.fakes.SquareOnlyImageProvider",
+        },
+        "DEFAULT_IMAGE_PROVIDER": "fake-images",
+    }
+    for cls in fakes:
+        cls.reset()
+    yield FakeImageProvider
+    for cls in fakes:
+        cls.reset()

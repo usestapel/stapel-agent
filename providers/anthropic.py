@@ -13,9 +13,15 @@ from .base import LlmProvider, ProviderError, ProviderResult
 
 class AnthropicProvider(LlmProvider):
     name = "anthropic"
+    supports_images = True
 
     def complete(
-        self, *, prompt: str, model: str, system_prompt: str | None = None
+        self,
+        *,
+        prompt: str,
+        model: str,
+        system_prompt: str | None = None,
+        images: list | None = None,
     ) -> ProviderResult:
         api_key = agent_settings.ANTHROPIC_API_KEY
         if not api_key:
@@ -33,10 +39,17 @@ class AnthropicProvider(LlmProvider):
             ) from exc
 
         client = anthropic.Anthropic(api_key=api_key)
+        if images:
+            # Vision: image content blocks first, the text prompt last —
+            # the Anthropic-recommended ordering.
+            content: list | str = [_image_block(img) for img in images]
+            content.append({"type": "text", "text": prompt})
+        else:
+            content = prompt
         kwargs = {
             "model": model,
             "max_tokens": int(agent_settings.MAX_TOKENS),
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [{"role": "user", "content": content}],
         }
         if system_prompt:
             kwargs["system"] = system_prompt
@@ -58,6 +71,20 @@ class AnthropicProvider(LlmProvider):
             cache_read_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
             cache_write_tokens=getattr(usage, "cache_creation_input_tokens", 0) or 0,
         )
+
+
+def _image_block(img) -> dict:
+    """Map an ``ImageRef`` to an Anthropic image content block."""
+    if img.url:
+        return {"type": "image", "source": {"type": "url", "url": img.url}}
+    return {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": img.mime,
+            "data": img.as_base64(),
+        },
+    }
 
 
 __all__ = ["AnthropicProvider"]

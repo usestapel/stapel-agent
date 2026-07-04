@@ -140,4 +140,65 @@ def check_stt_providers(app_configs, **kwargs):
     return issues
 
 
-__all__ = ["check_providers", "check_stt_providers"]
+@checks.register("stapel_agent")
+def check_image_providers(app_configs, **kwargs):
+    """Image-generation registry checks — W-level like STT's: the image
+    surface is optional and a broken entry degrades to
+    ``status: "failure"`` per request.
+
+    - ``stapel_agent.W005`` — an ``IMAGE_PROVIDERS`` entry cannot be
+      imported or is not an ``ImageGenProvider`` subclass;
+    - ``stapel_agent.W006`` — ``DEFAULT_IMAGE_PROVIDER`` references a
+      name missing from the effective registry.
+    """
+    from .conf import agent_settings
+    from .images import registered_image_providers
+    from .images.base import ImageGenProvider
+
+    issues = []
+    effective = registered_image_providers()
+
+    for name, target in effective.items():
+        if isinstance(target, str):
+            try:
+                target = import_string(target)
+            except ImportError as exc:
+                issues.append(
+                    checks.Warning(
+                        f"Image provider {name!r} cannot be imported: {exc}",
+                        hint=(
+                            "Fix the dotted path, install the missing "
+                            "dependency, or remove the entry (set it to None)."
+                        ),
+                        id="stapel_agent.W005",
+                    )
+                )
+                continue
+        if not (inspect.isclass(target) and issubclass(target, ImageGenProvider)):
+            issues.append(
+                checks.Warning(
+                    f"Image provider {name!r} resolves to {target!r}, which is "
+                    "not a stapel_agent.images.base.ImageGenProvider subclass.",
+                    hint="Implement the ImageGenProvider ABC (see MODULE.md).",
+                    id="stapel_agent.W005",
+                )
+            )
+
+    default = agent_settings.DEFAULT_IMAGE_PROVIDER
+    if default and default not in effective:
+        issues.append(
+            checks.Warning(
+                f"STAPEL_AGENT['DEFAULT_IMAGE_PROVIDER'] is {default!r}, which "
+                "is not in the effective image-provider registry "
+                f"({sorted(effective) or 'empty'}).",
+                hint=(
+                    "Register it via STAPEL_AGENT['IMAGE_PROVIDERS'] / "
+                    "register_image_provider(), or fix the name."
+                ),
+                id="stapel_agent.W006",
+            )
+        )
+    return issues
+
+
+__all__ = ["check_image_providers", "check_providers", "check_stt_providers"]

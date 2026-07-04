@@ -1,17 +1,25 @@
 """Serializers for the agent API."""
 
+import base64
+
 from stapel_core.django.api.errors import StapelValidationError
 from stapel_core.django.api.serializers import StapelDataclassSerializer
 
 from .dto import (
     CompleteRequest,
+    GenerateImageRequest,
     SummarizeRequest,
     SummarizeResponse,
     TranscribeRequest,
     TranslateRequest,
     TranslateResponse,
 )
-from .errors import ERR_400_INVALID_MODEL_SIZE, ERR_400_SUMMARIZE_INPUT
+from .errors import (
+    ERR_400_INVALID_IMAGE,
+    ERR_400_INVALID_IMAGE_COUNT,
+    ERR_400_INVALID_MODEL_SIZE,
+    ERR_400_SUMMARIZE_INPUT,
+)
 from .services import MODEL_SIZES
 
 
@@ -22,6 +30,21 @@ class CompleteRequestSerializer(StapelDataclassSerializer):
     def validate_model(self, value):
         if value not in MODEL_SIZES:
             raise StapelValidationError(ERR_400_INVALID_MODEL_SIZE)
+        return value
+
+    def validate_images(self, value):
+        for entry in value or []:
+            if not isinstance(entry, dict):
+                raise StapelValidationError(ERR_400_INVALID_IMAGE)
+            has_url = bool(entry.get("url"))
+            has_b64 = bool(entry.get("data_b64"))
+            if has_url == has_b64:  # neither, or both
+                raise StapelValidationError(ERR_400_INVALID_IMAGE)
+            if has_b64:
+                try:
+                    base64.b64decode(entry["data_b64"], validate=True)
+                except (ValueError, TypeError):
+                    raise StapelValidationError(ERR_400_INVALID_IMAGE)
         return value
 
 
@@ -69,3 +92,13 @@ class SummarizeRequestSerializer(StapelDataclassSerializer):
 class SummarizeResponseSerializer(StapelDataclassSerializer):
     class Meta:
         dataclass = SummarizeResponse
+
+
+class GenerateImageRequestSerializer(StapelDataclassSerializer):
+    class Meta:
+        dataclass = GenerateImageRequest
+
+    def validate_n(self, value):
+        if not 1 <= int(value) <= 10:
+            raise StapelValidationError(ERR_400_INVALID_IMAGE_COUNT)
+        return value

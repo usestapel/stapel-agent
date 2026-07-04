@@ -73,6 +73,12 @@ class PromptLogCachePolicy(CachePolicy):
             status=PromptStatus.SUCCESS,
             response__isnull=False,
             created_at__gte=timezone.now() - timedelta(seconds=ttl),
+        ).exclude(
+            # The cache key is text-only, but multimodal ledger rows share
+            # the prompt text — a text lookup must never serve an answer
+            # that was about pixels. (Image requests skip lookup upstream;
+            # this guards the other direction.)
+            metadata__has_key="images"
         )
         if system_prompt:
             qs = qs.filter(system_prompt=system_prompt)

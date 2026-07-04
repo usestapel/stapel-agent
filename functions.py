@@ -16,6 +16,24 @@ from stapel_core.comm import function
 
 logger = logging.getLogger(__name__)
 
+IMAGE_ITEM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "url": {"type": "string", "description": "Fetchable image URL."},
+        "data_b64": {
+            "type": "string",
+            "description": "Base64-encoded image bytes — raw bytes never "
+            "travel over comm.",
+        },
+        "mime": {
+            "type": "string",
+            "description": "Content type for data_b64 (default image/png).",
+        },
+    },
+    "oneOf": [{"required": ["url"]}, {"required": ["data_b64"]}],
+    "additionalProperties": False,
+}
+
 COMPLETE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -32,6 +50,12 @@ COMPLETE_SCHEMA = {
         "provider": {
             "type": "string",
             "description": "Provider name from STAPEL_AGENT['PROVIDERS'].",
+        },
+        "images": {
+            "type": "array",
+            "items": IMAGE_ITEM_SCHEMA,
+            "description": "Vision input — the provider must support "
+            "image content blocks.",
         },
     },
     "required": ["prompt", "model"],
@@ -62,17 +86,26 @@ def llm_complete(payload: dict) -> dict:
     """JSON LLM completion — same result dict as ``POST api/llm/complete``.
 
     Payload: ``{"prompt": str, "model": "small"|"medium"|"large",
-    "system_prompt"?: str, "provider"?: str}``. Returns
-    ``{"status": "ok"|"failure", "result"?: object, "comment"?: str,
-    "reason"?: str, "usage"?: {...}}``.
+    "system_prompt"?: str, "provider"?: str, "images"?: [{"url"} |
+    {"data_b64", "mime"?}]}``. Returns ``{"status": "ok"|"failure",
+    "result"?: object, "comment"?: str, "reason"?: str, "usage"?: {...}}``.
     """
     from . import services
+    from .images.base import ImageRef
+
+    try:
+        images = [ImageRef.from_payload(i) for i in payload.get("images") or []]
+    except (ValueError, TypeError) as exc:
+        # Base64 validity is beyond JSON Schema — degrade to the failure
+        # envelope instead of leaking a decode traceback through comm.
+        return {"status": "failure", "reason": f"Invalid image payload: {exc}"}
 
     return services.complete_json(
         payload["prompt"],
         payload["model"],
         system_prompt=payload.get("system_prompt"),
         provider=payload.get("provider"),
+        images=images or None,
     )
 
 
@@ -184,5 +217,54 @@ def llm_summarize(payload: dict) -> dict:
         payload["text"] if "text" in payload else payload["transcript"],
         language=payload.get("language"),
         model_size=payload.get("model") or "medium",
+        provider=payload.get("provider"),
+    )
+
+
+GENERATE_IMAGE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "prompt": {
+            "type": "string",
+            "description": "Text description of the desired image(s).",
+        },
+        "size": {
+            "type": "string",
+            "description": "\"WxH\" size string (default 1024x1024).",
+        },
+        "n": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "description": "Number of images (default 1).",
+        },
+        "provider": {
+            "type": "string",
+            "description": "Image provider name from "
+            "STAPEL_AGENT['IMAGE_PROVIDERS'].",
+        },
+    },
+    "required": ["prompt"],
+    "additionalProperties": False,
+}
+
+
+@function("llm.generate_image", schema=GENERATE_IMAGE_SCHEMA)
+def llm_generate_image(payload: dict) -> dict:
+    """Image generation — same result dict as
+    ``POST api/llm/generate-image``.
+
+    Payload: ``{"prompt": str, "size"?: str, "n"?: int, "provider"?:
+    str}``. Returns ``{"status": "ok", "images": [{"url"? | "data_b64"?,
+    "mime"}], "provider_used": str}`` or ``{"status": "failure",
+    "reason": str}``. Storing results into CDN/asset libraries is the
+    caller's job — this function returns raw provider output.
+    """
+    from . import services
+
+    return services.generate_image(
+        payload["prompt"],
+        size=payload.get("size") or "1024x1024",
+        n=int(payload.get("n") or 1),
         provider=payload.get("provider"),
     )

@@ -26,7 +26,7 @@ all = ["stapel-agent[anthropic]"]
 
 [tool.setuptools]
 package-dir = {"stapel_agent" = "."}
-packages = ["stapel_agent", "stapel_agent.migrations", "stapel_agent.providers", "stapel_agent.stt", "stapel_agent.stt.providers", "stapel_agent.tests"]
+packages = ["stapel_agent", "stapel_agent.images", "stapel_agent.images.providers", "stapel_agent.migrations", "stapel_agent.providers", "stapel_agent.stt", "stapel_agent.stt.providers", "stapel_agent.tests"]
 
 [tool.setuptools.package-data]
 stapel_agent = ["py.typed", "migrations/*.py", "schemas/**/*.json", "migrations/**/*.py"]

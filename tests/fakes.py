@@ -7,7 +7,10 @@ does this automatically).
 """
 from __future__ import annotations
 
+import base64
+
 from stapel_agent.cache import CachePolicy
+from stapel_agent.images.base import GeneratedImage, ImageGenProvider
 from stapel_agent.providers.base import LlmProvider, ProviderResult
 from stapel_agent.stt.base import (
     NormalizedTranscript,
@@ -20,6 +23,7 @@ from stapel_agent.stt.base import (
 
 class FakeProvider(LlmProvider):
     name = "fake"
+    supports_images = True  # vision tests route ImageRefs through it
 
     calls: list[dict] = []
     result = ProviderResult(text='{"answer": 42}')
@@ -38,10 +42,15 @@ class FakeProvider(LlmProvider):
         )
         cls.error = None
 
-    def complete(self, *, prompt, model, system_prompt=None):
+    def complete(self, *, prompt, model, system_prompt=None, images=None):
         cls = type(self)
         cls.calls.append(
-            {"prompt": prompt, "model": model, "system_prompt": system_prompt}
+            {
+                "prompt": prompt,
+                "model": model,
+                "system_prompt": system_prompt,
+                "images": images,
+            }
         )
         if cls.error is not None:
             raise cls.error
@@ -54,8 +63,62 @@ class CustomProvider(FakeProvider):
     name = "custom"
 
 
+class NoVisionProvider(FakeProvider):
+    """Text-only backend with the pre-vision three-argument signature —
+    proves the service never forwards images to a provider that can't
+    take them (and that old signatures stay compatible)."""
+
+    name = "no-vision"
+    supports_images = False
+
+    def complete(self, *, prompt, model, system_prompt=None):
+        return super().complete(prompt=prompt, model=model, system_prompt=system_prompt)
+
+
 class NotAProvider:
     """Deliberately not an LlmProvider subclass — for the W002 check."""
+
+
+class FakeImageProvider(ImageGenProvider):
+    """Recording image-generation fake — same class-level-state pattern."""
+
+    name = "fake-images"
+    supported_sizes = None
+
+    calls: list[dict] = []
+    result: list[GeneratedImage] = []
+    error: Exception | None = None
+
+    @classmethod
+    def reset(cls):
+        cls.calls = []
+        cls.result = [
+            GeneratedImage(
+                mime="image/png",
+                data_b64=base64.b64encode(b"fake-png-bytes").decode(),
+            )
+        ]
+        cls.error = None
+
+    def generate(self, *, prompt, size="1024x1024", n=1, timeout_seconds=None):
+        cls = type(self)
+        cls.calls.append(
+            {"prompt": prompt, "size": size, "n": n, "timeout_seconds": timeout_seconds}
+        )
+        if cls.error is not None:
+            raise cls.error
+        return cls.result
+
+
+class SquareOnlyImageProvider(FakeImageProvider):
+    """Declares supported_sizes — for the size-validation path."""
+
+    name = "square-images"
+    supported_sizes = frozenset({"1024x1024"})
+
+
+class NotAnImageProvider:
+    """Deliberately not an ImageGenProvider subclass — for the W005 check."""
 
 
 class RecordingCachePolicy(CachePolicy):

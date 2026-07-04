@@ -43,6 +43,14 @@ class LlmProvider(ABC):
 
     name = "base"
 
+    # Vision-capable backends set this True AND accept the optional
+    # ``images`` kwarg in complete(). The service never forwards images
+    # to a provider that leaves it False — such a request degrades to a
+    # clear ``status: "failure"`` ("does not support image input"), and
+    # pre-vision subclasses with the old three-argument signature keep
+    # working untouched.
+    supports_images: bool = False
+
     def resolve_model(self, model_size: str, default: str) -> str:
         """Map a size ("small"/"medium"/"large") to this backend's model name.
 
@@ -53,9 +61,20 @@ class LlmProvider(ABC):
 
     @abstractmethod
     def complete(
-        self, *, prompt: str, model: str, system_prompt: str | None = None
+        self,
+        *,
+        prompt: str,
+        model: str,
+        system_prompt: str | None = None,
+        images: list | None = None,
     ) -> ProviderResult:
-        """Return the completion for *prompt*. Raise ProviderError on failure."""
+        """Return the completion for *prompt*. Raise ProviderError on failure.
+
+        *images* is a list of ``stapel_agent.images.base.ImageRef`` —
+        only ever passed when ``supports_images`` is True (and only as a
+        keyword, only when non-empty), so subclasses that predate vision
+        support need no signature change.
+        """
 
 
 __all__ = ["LlmProvider", "ProviderError", "ProviderResult", "ProviderTimeout"]

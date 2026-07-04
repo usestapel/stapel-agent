@@ -15,13 +15,19 @@ from .base import LlmProvider, ProviderError, ProviderResult, ProviderTimeout
 
 class OpenAICompatProvider(LlmProvider):
     name = "openai-compat"
+    supports_images = True
 
     def resolve_model(self, model_size: str, default: str) -> str:
         models = agent_settings.OPENAI_COMPAT_MODELS or {}
         return models.get(model_size) or default
 
     def complete(
-        self, *, prompt: str, model: str, system_prompt: str | None = None
+        self,
+        *,
+        prompt: str,
+        model: str,
+        system_prompt: str | None = None,
+        images: list | None = None,
     ) -> ProviderResult:
         base_url = (agent_settings.OPENAI_COMPAT_BASE_URL or "").rstrip("/")
         if not base_url:
@@ -32,7 +38,14 @@ class OpenAICompatProvider(LlmProvider):
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
+        if images:
+            # Vision: multimodal content array — image parts (URL or
+            # data URI) followed by the text part.
+            parts = [_image_part(img) for img in images]
+            parts.append({"type": "text", "text": prompt})
+            messages.append({"role": "user", "content": parts})
+        else:
+            messages.append({"role": "user", "content": prompt})
 
         headers = {"Content-Type": "application/json"}
         api_key = agent_settings.OPENAI_COMPAT_API_KEY
@@ -76,6 +89,13 @@ class OpenAICompatProvider(LlmProvider):
             output_tokens=usage.get("completion_tokens", 0) or 0,
             thinking_tokens=details.get("reasoning_tokens", 0) or 0,
         )
+
+
+def _image_part(img) -> dict:
+    """Map an ``ImageRef`` to an OpenAI ``image_url`` content part
+    (URL refs pass through; byte refs become data URIs)."""
+    url = img.url or f"data:{img.mime};base64,{img.as_base64()}"
+    return {"type": "image_url", "image_url": {"url": url}}
 
 
 __all__ = ["OpenAICompatProvider"]
