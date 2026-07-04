@@ -16,6 +16,8 @@ from django.db import models
 class PromptSource(models.TextChoices):
     LLM_FACADE = "llm_facade", "LLM Facade"
     TRANSLATE = "translate", "Translate"
+    TRANSCRIBE = "transcribe", "Transcribe"
+    SUMMARIZE = "summarize", "Summarize"
     OTHER = "other", "Other"
 
 

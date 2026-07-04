@@ -68,11 +68,31 @@ class TestConfDefaults:
         assert agent_settings.CLI_BINARY == "claude"
         assert agent_settings.CLI_TIMEOUT == 120
         assert agent_settings.MAX_TOKENS == 4096
-        assert agent_settings.CACHE_LOOKUP == {"llm_facade": False, "translate": True}
+        assert agent_settings.CACHE_LOOKUP == {
+            "llm_facade": False,
+            "translate": True,
+            "summarize": False,
+        }
         assert agent_settings.CACHE_TTL == 604800
         from stapel_agent.cache import PromptLogCachePolicy
 
         assert agent_settings.CACHE_POLICY is PromptLogCachePolicy
+        # STT defaults
+        from stapel_agent.stt import BUILTIN_STT_PROVIDERS, registered_stt_providers
+
+        assert agent_settings.STT_PROVIDERS == {}
+        assert registered_stt_providers() == BUILTIN_STT_PROVIDERS
+        assert set(BUILTIN_STT_PROVIDERS) == {
+            "whisper-http",
+            "elevenlabs",
+            "assemblyai",
+        }
+        assert agent_settings.DEFAULT_STT_PROVIDER == "whisper-http"
+        assert agent_settings.STT_FALLBACK_CHAIN == []
+        assert agent_settings.STT_LANGUAGE_ROUTES == {}
+        assert agent_settings.STT_TIMEOUT == 1800
+        assert agent_settings.WHISPER_MODEL == "whisper-1"
+        assert agent_settings.ASSEMBLYAI_MODEL == "universal"
 
     def test_namespace_override(self, settings):
         settings.STAPEL_AGENT = {"DEFAULT_PROVIDER": "openai-compat"}

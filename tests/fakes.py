@@ -9,6 +9,13 @@ from __future__ import annotations
 
 from stapel_agent.cache import CachePolicy
 from stapel_agent.providers.base import LlmProvider, ProviderResult
+from stapel_agent.stt.base import (
+    NormalizedTranscript,
+    NormalizedUtterance,
+    RetryableTranscriptionError,
+    SttProvider,
+    TranscriptionError,
+)
 
 
 class FakeProvider(LlmProvider):
@@ -82,3 +89,81 @@ class RecordingCachePolicy(CachePolicy):
         cls = type(self)
         cls.stores.append((prompt, system_prompt, source, response))
         cls.entries[(prompt, system_prompt, source)] = response
+
+
+class FakeSttProvider(SttProvider):
+    """Recording STT fake — same class-level-state pattern as FakeProvider
+    (``get_stt_provider`` instantiates a fresh object per request)."""
+
+    name = "fake-stt"
+    supports_diarization = True
+
+    calls: list[dict] = []
+    result: NormalizedTranscript | None = None
+    error: Exception | None = None
+
+    @classmethod
+    def reset(cls):
+        cls.calls = []
+        cls.result = NormalizedTranscript(
+            provider=cls.name,
+            language="en",
+            duration_seconds=2.0,
+            utterances=[
+                NormalizedUtterance(
+                    text="hello world", start=0.0, end=2.0, speaker="A"
+                )
+            ],
+            speakers_detected=["A"],
+        )
+        cls.error = None
+
+    def transcribe(self, *, audio, language=None, diarization=False, timeout_seconds=None):
+        cls = type(self)
+        cls.calls.append(
+            {
+                "audio": audio,
+                "language": language,
+                "diarization": diarization,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+        if cls.error is not None:
+            raise cls.error
+        return cls.result
+
+
+class SecondSttProvider(FakeSttProvider):
+    """A second STT class so fallback tests can tell providers apart."""
+
+    name = "fake-stt-2"
+
+
+class RetryableSttProvider(FakeSttProvider):
+    """Always fails transiently — the service must walk the chain."""
+
+    name = "retry-stt"
+
+    @classmethod
+    def reset(cls):
+        super().reset()
+        cls.error = RetryableTranscriptionError(
+            "stt rate limited", provider=cls.name, status_code=429
+        )
+
+
+class FatalSttProvider(FakeSttProvider):
+    """Always fails permanently — the service must NOT fall back."""
+
+    name = "fatal-stt"
+
+    @classmethod
+    def reset(cls):
+        super().reset()
+        cls.error = TranscriptionError(
+            "audio is not decodable", provider=cls.name, status_code=400
+        )
+
+
+class NotAnSttProvider:
+    """Deliberately not an SttProvider subclass — for the W003 check."""

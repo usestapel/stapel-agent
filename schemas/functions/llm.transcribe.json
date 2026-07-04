@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "llm.transcribe",
+  "description": "Speech-to-text through the STT router (explicit provider > STT_LANGUAGE_ROUTES > DEFAULT_STT_PROVIDER + STT_FALLBACK_CHAIN; fallback only on retryable failure). comm carries URLs only, never raw audio bytes. Returns {status: 'ok', transcript: NormalizedTranscript, provider_used: string, fallback_used: boolean} or {status: 'failure', reason: string}.",
+  "type": "object",
+  "properties": {
+    "audio_url": {
+      "type": "string",
+      "description": "Fetchable audio URL (presigned S3/MinIO GET)."
+    },
+    "language": {
+      "type": "string",
+      "description": "BCP-47 hint; omit for auto-detect."
+    },
+    "diarization": {
+      "type": "boolean",
+      "description": "Ask the provider for speaker labels."
+    },
+    "provider": {
+      "type": "string",
+      "description": "Pin one STT provider (no fallback)."
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "description": "Hard cap on one provider's submit+poll cycle."
+    }
+  },
+  "required": ["audio_url"],
+  "additionalProperties": false
+}

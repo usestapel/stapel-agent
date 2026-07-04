@@ -121,3 +121,36 @@ def fake_provider(settings):
     FakeProvider.reset()
     yield FakeProvider
     FakeProvider.reset()
+
+
+@pytest.fixture
+def fake_stt(settings):
+    """Route transcriptions to the recording FakeSttProvider (default),
+    with a second/retryable/fatal sibling registered for chain tests.
+
+    Same merge semantics as ``fake_provider``: the STT_PROVIDERS overlay
+    adds names without restating the built-ins.
+    """
+    from stapel_agent.tests.fakes import (
+        FakeSttProvider,
+        FatalSttProvider,
+        RetryableSttProvider,
+        SecondSttProvider,
+    )
+
+    fakes = (FakeSttProvider, SecondSttProvider, RetryableSttProvider, FatalSttProvider)
+    settings.STAPEL_AGENT = {
+        **getattr(settings, "STAPEL_AGENT", {}),
+        "STT_PROVIDERS": {
+            "fake-stt": "stapel_agent.tests.fakes.FakeSttProvider",
+            "fake-stt-2": "stapel_agent.tests.fakes.SecondSttProvider",
+            "retry-stt": "stapel_agent.tests.fakes.RetryableSttProvider",
+            "fatal-stt": "stapel_agent.tests.fakes.FatalSttProvider",
+        },
+        "DEFAULT_STT_PROVIDER": "fake-stt",
+    }
+    for cls in fakes:
+        cls.reset()
+    yield FakeSttProvider
+    for cls in fakes:
+        cls.reset()

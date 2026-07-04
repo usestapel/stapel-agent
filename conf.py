@@ -53,10 +53,38 @@ agent_settings = AppSettings(
         "CLI_BINARY": "claude",
         "CLI_TIMEOUT": 120,
         "MAX_TOKENS": 4096,
+        # ── STT (speech-to-text) ────────────────────────────────
+        # Overlay merged OVER stt.BUILTIN_STT_PROVIDERS (whisper-http /
+        # elevenlabs / assemblyai) — same merge semantics as PROVIDERS.
+        "STT_PROVIDERS": {},
+        "DEFAULT_STT_PROVIDER": "whisper-http",
+        # Providers tried in order after the default on RETRYABLE failure
+        # (fatal errors never fall back).
+        "STT_FALLBACK_CHAIN": [],
+        # Language matrix: {iso-639-1: [provider names]}. An explicit
+        # `provider` in the request wins over this; this wins over
+        # DEFAULT_STT_PROVIDER + STT_FALLBACK_CHAIN.
+        "STT_LANGUAGE_ROUTES": {},
+        # Hard cap (seconds) on one provider's submit+poll cycle.
+        "STT_TIMEOUT": 1800,
+        # OpenAI-compatible Whisper endpoint (OpenAI API or self-hosted
+        # faster-whisper). Key optional — self-hosted often has none.
+        "WHISPER_BASE_URL": "",
+        "WHISPER_API_KEY": "",
+        "WHISPER_MODEL": "whisper-1",
+        # ElevenLabs Scribe.
+        "ELEVENLABS_API_KEY": "",
+        "ELEVENLABS_STT_URL": "https://api.elevenlabs.io/v1/speech-to-text",
+        "ELEVENLABS_STT_MODEL": "scribe_v2",
+        # AssemblyAI (async submit+poll).
+        "ASSEMBLYAI_API_KEY": "",
+        "ASSEMBLYAI_BASE_URL": "https://api.assemblyai.com",
+        "ASSEMBLYAI_MODEL": "universal",
         # Per-source cache-by-prompt toggle: a repeated identical
         # prompt+system_prompt within CACHE_TTL returns the stored response
-        # without calling the provider.
-        "CACHE_LOOKUP": {"llm_facade": False, "translate": True},
+        # without calling the provider. Sources missing from the dict
+        # default to off.
+        "CACHE_LOOKUP": {"llm_facade": False, "translate": True, "summarize": False},
         # Seconds; cached rows older than this are ignored (7 days).
         "CACHE_TTL": 604800,
         # Dotted path to a stapel_agent.cache.CachePolicy subclass — the

@@ -7,6 +7,8 @@ from stapel_agent.services import JSON_API_SYSTEM_PROMPT
 
 COMPLETE_URL = "/agent/api/llm/complete"
 TRANSLATE_URL = "/agent/api/llm/translate"
+TRANSCRIBE_URL = "/agent/api/llm/transcribe"
+SUMMARIZE_URL = "/agent/api/llm/summarize"
 
 
 def _complete(client, body=None, **kwargs):
@@ -199,3 +201,161 @@ class TestTranslate:
         )
         assert resp.status_code == 200
         assert resp.json() == {"status": "failure", "reason": "no tokens left"}
+
+
+@pytest.mark.django_db
+class TestTranscribeEndpoint:
+    def _post(self, client, body=None, **kwargs):
+        body = body or {"audio_url": "https://minio.test/rec.mp3"}
+        return client.post(TRANSCRIBE_URL, body, format="json", **kwargs)
+
+    def test_anonymous_rejected(self, api_client, fake_stt):
+        assert self._post(api_client).status_code in (401, 403)
+        assert fake_stt.calls == []
+
+    def test_wrong_api_key_rejected(self, api_client, fake_stt):
+        resp = self._post(api_client, HTTP_X_API_KEY="wrong-key")
+        assert resp.status_code in (401, 403)
+
+    def test_plain_user_rejected(self, user, fake_stt):
+        from rest_framework.test import APIClient
+
+        client = APIClient()
+        client.force_authenticate(user=user)
+        assert self._post(client).status_code == 403
+
+    def test_service_key_happy_path(self, api_client, fake_stt):
+        resp = self._post(
+            api_client,
+            {
+                "audio_url": "https://minio.test/rec.mp3",
+                "language": "en",
+                "diarization": True,
+                "provider": "fake-stt",
+                "timeout_seconds": 120,
+            },
+            HTTP_X_API_KEY="test-service-key",
+        )
+        assert resp.status_code == 200, resp.content
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert data["provider_used"] == "fake-stt"
+        assert data["fallback_used"] is False
+        assert data["transcript"]["utterances"][0]["text"] == "hello world"
+        call = fake_stt.calls[0]
+        assert call["audio"].url == "https://minio.test/rec.mp3"
+        assert call["language"] == "en"
+        assert call["diarization"] is True
+        assert call["timeout_seconds"] == 120
+
+    def test_staff_user_accepted_and_logged(self, staff_client, staff_user, fake_stt):
+        resp = self._post(staff_client)
+        assert resp.status_code == 200
+        log = PromptLog.objects.get()
+        assert log.source == "transcribe"
+        assert log.user_id == str(staff_user.pk)
+
+    def test_stt_failure_is_http_200(self, api_client, fake_stt):
+        resp = self._post(
+            api_client,
+            {"audio_url": "https://x/a.mp3", "provider": "fatal-stt"},
+            HTTP_X_API_KEY="test-service-key",
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "status": "failure",
+            "reason": "audio is not decodable",
+        }
+
+    def test_missing_audio_url_is_400(self, api_client, fake_stt):
+        resp = self._post(
+            api_client, {"language": "en"}, HTTP_X_API_KEY="test-service-key"
+        )
+        assert resp.status_code == 400
+        assert fake_stt.calls == []
+
+
+@pytest.mark.django_db
+class TestSummarizeEndpoint:
+    def _post(self, client, body=None, **kwargs):
+        body = body or {"text": "meeting notes to summarize"}
+        return client.post(SUMMARIZE_URL, body, format="json", **kwargs)
+
+    def test_anonymous_rejected(self, api_client, fake_provider):
+        assert self._post(api_client).status_code in (401, 403)
+        assert fake_provider.calls == []
+
+    def test_wrong_api_key_rejected(self, api_client, fake_provider):
+        resp = self._post(api_client, HTTP_X_API_KEY="wrong-key")
+        assert resp.status_code in (401, 403)
+
+    def test_service_key_happy_path_drops_none_keys(self, api_client, fake_provider):
+        fake_provider.result = ProviderResult(
+            text="## Summary", input_tokens=7, output_tokens=3
+        )
+        resp = self._post(api_client, HTTP_X_API_KEY="test-service-key")
+        assert resp.status_code == 200, resp.content
+        # None keys (reason) are dropped after serialization — absent on
+        # the wire, per the iron contract.
+        assert resp.json() == {
+            "status": "ok",
+            "summary": "## Summary",
+            "usage": {"input_tokens": 7, "output_tokens": 3},
+        }
+
+    def test_staff_user_accepted_and_logged(
+        self, staff_client, staff_user, fake_provider
+    ):
+        resp = self._post(staff_client)
+        assert resp.status_code == 200
+        log = PromptLog.objects.get()
+        assert log.source == "summarize"
+        assert log.user_id == str(staff_user.pk)
+
+    def test_transcript_input(self, api_client, fake_provider):
+        transcript = {
+            "provider": "fake-stt",
+            "language": "en",
+            "duration_seconds": 2.0,
+            "utterances": [
+                {"text": "hello world", "start": 0.0, "end": 2.0, "speaker": "A"}
+            ],
+        }
+        resp = self._post(
+            api_client,
+            {"transcript": transcript, "model": "small", "language": "de"},
+            HTTP_X_API_KEY="test-service-key",
+        )
+        assert resp.status_code == 200, resp.content
+        assert resp.json()["status"] == "ok"
+        assert "[00:00] A: hello world" in fake_provider.calls[0]["prompt"]
+
+    def test_both_text_and_transcript_is_400(self, api_client, fake_provider):
+        resp = self._post(
+            api_client,
+            {"text": "t", "transcript": {"provider": "x"}},
+            HTTP_X_API_KEY="test-service-key",
+        )
+        assert resp.status_code == 400
+        assert fake_provider.calls == []
+
+    def test_neither_input_is_400(self, api_client, fake_provider):
+        resp = self._post(
+            api_client, {"language": "en"}, HTTP_X_API_KEY="test-service-key"
+        )
+        assert resp.status_code == 400
+
+    def test_unknown_model_size_is_400(self, api_client, fake_provider):
+        resp = self._post(
+            api_client,
+            {"text": "t", "model": "xl"},
+            HTTP_X_API_KEY="test-service-key",
+        )
+        assert resp.status_code == 400
+        assert fake_provider.calls == []
+
+    def test_llm_failure_is_http_200(self, api_client, fake_provider):
+        fake_provider.error = ProviderError("llm down")
+        resp = self._post(api_client, HTTP_X_API_KEY="test-service-key")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "failure", "reason": "llm down"}

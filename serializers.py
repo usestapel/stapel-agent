@@ -3,8 +3,15 @@
 from stapel_core.django.api.errors import StapelValidationError
 from stapel_core.django.api.serializers import StapelDataclassSerializer
 
-from .dto import CompleteRequest, TranslateRequest, TranslateResponse
-from .errors import ERR_400_INVALID_MODEL_SIZE
+from .dto import (
+    CompleteRequest,
+    SummarizeRequest,
+    SummarizeResponse,
+    TranscribeRequest,
+    TranslateRequest,
+    TranslateResponse,
+)
+from .errors import ERR_400_INVALID_MODEL_SIZE, ERR_400_SUMMARIZE_INPUT
 from .services import MODEL_SIZES
 
 
@@ -35,3 +42,30 @@ class TranslateRequestSerializer(StapelDataclassSerializer):
 class TranslateResponseSerializer(StapelDataclassSerializer):
     class Meta:
         dataclass = TranslateResponse
+
+
+class TranscribeRequestSerializer(StapelDataclassSerializer):
+    class Meta:
+        dataclass = TranscribeRequest
+
+
+class SummarizeRequestSerializer(StapelDataclassSerializer):
+    class Meta:
+        dataclass = SummarizeRequest
+
+    def validate_model(self, value):
+        if value not in MODEL_SIZES:
+            raise StapelValidationError(ERR_400_INVALID_MODEL_SIZE)
+        return value
+
+    def validate(self, data):
+        text = getattr(data, "text", None)
+        transcript = getattr(data, "transcript", None)
+        if (text is None) == (transcript is None):
+            raise StapelValidationError(ERR_400_SUMMARIZE_INPUT)
+        return data
+
+
+class SummarizeResponseSerializer(StapelDataclassSerializer):
+    class Meta:
+        dataclass = SummarizeResponse

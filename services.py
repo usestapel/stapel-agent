@@ -268,6 +268,221 @@ def translate(
         return {"status": "failure", "reason": "Failed to parse translation response"}
 
 
+# ─── Transcription ────────────────────────────────────────────────────
+
+
+def get_stt_provider(name: str):
+    """Instantiate the STT provider registered under *name* (runtime →
+    ``STT_PROVIDERS`` merge → built-ins). Raises TranscriptionError for
+    unknown names — ``transcribe()`` degrades that to ``status: failure``."""
+    from .stt import registered_stt_providers
+    from .stt.base import TranscriptionError
+
+    target = registered_stt_providers().get(name)
+    if not target:
+        raise TranscriptionError(
+            f"Unknown STT provider '{name}' — register it via "
+            "STAPEL_AGENT['STT_PROVIDERS'] or "
+            "stapel_agent.stt.register_stt_provider",
+            provider=name,
+        )
+    cls = import_string(target) if isinstance(target, str) else target
+    return cls()
+
+
+def transcribe(
+    audio,
+    *,
+    language: str | None = None,
+    diarization: bool = False,
+    provider: str | None = None,
+    timeout_seconds: int | None = None,
+    user_id: str | None = None,
+    metadata: dict | None = None,
+) -> dict:
+    """Transcribe *audio* (an ``AudioRef``) through the STT router.
+
+    Chain: explicit *provider* (single, no fallback) → language route →
+    default + fallback chain. The next provider is tried only on
+    ``RetryableTranscriptionError`` — fatal errors (bad input, auth) stop
+    the walk. Every call writes one PromptLog row (``source=transcribe``,
+    ``model`` = provider name, token columns null).
+
+    Returns ``{"status": "ok", "transcript": {...}, "provider_used": str,
+    "fallback_used": bool}`` or ``{"status": "failure", "reason": ...}``.
+    """
+    from .stt.base import (
+        AudioRef,
+        RetryableTranscriptionError,
+        TranscriptionError,
+    )
+    from .stt.router import select_chain
+
+    if not isinstance(audio, AudioRef):
+        return {"status": "failure", "reason": "audio must be an AudioRef"}
+
+    chain = select_chain(language, provider=provider)
+    if not chain:
+        return {"status": "failure", "reason": "No STT provider configured"}
+
+    start = time.monotonic()
+    attempts: list[dict] = []
+    failure_reason = "No STT provider available"
+    fallback_used = False
+
+    def _log(status: str, *, provider_used: str, response: str | None, error: str | None):
+        PromptLog.objects.create(
+            source=PromptSource.TRANSCRIBE,
+            model=provider_used,
+            model_size="",
+            prompt=audio.describe(),
+            response=response,
+            status=status,
+            error_message=error,
+            duration_ms=int((time.monotonic() - start) * 1000),
+            user_id=str(user_id) if user_id is not None else None,
+            metadata={
+                **(metadata or {}),
+                "audio": audio.describe(),
+                "language": language,
+                "diarization": diarization,
+                "fallback_used": fallback_used,
+                "attempts": attempts,
+            },
+        )
+
+    for idx, name in enumerate(chain):
+        fallback_used = idx > 0
+        try:
+            backend = get_stt_provider(name)
+            transcript = backend.transcribe(
+                audio=audio,
+                language=language,
+                diarization=diarization,
+                timeout_seconds=timeout_seconds,
+            )
+        except RetryableTranscriptionError as exc:
+            failure_reason = str(exc)
+            attempts.append({"provider": name, "error_kind": "retryable", "error": str(exc)[:500]})
+            logger.warning("stapel-agent: STT provider %s failed (retryable): %s", name, exc)
+            continue  # walk the fallback chain
+        except TranscriptionError as exc:
+            # Fatal — the input itself is bad; the next provider would
+            # fail on it too. No fallback (ported the legacy recordings service intent).
+            attempts.append({"provider": name, "error_kind": "fatal", "error": str(exc)[:500]})
+            _log(PromptStatus.ERROR, provider_used=name, response=None, error=str(exc))
+            return {"status": "failure", "reason": str(exc)}
+        except ImportError as exc:
+            failure_reason = f"STT provider '{name}' could not be loaded: {exc}"
+            attempts.append({"provider": name, "error_kind": "unloadable", "error": str(exc)[:500]})
+            logger.warning("stapel-agent: %s", failure_reason)
+            continue
+
+        attempts.append({"provider": name, "error_kind": None, "error": None})
+        _log(PromptStatus.SUCCESS, provider_used=name, response=transcript.text, error=None)
+        return {
+            "status": "ok",
+            "transcript": transcript.to_dict(),
+            "provider_used": name,
+            "fallback_used": fallback_used,
+        }
+
+    _log(PromptStatus.ERROR, provider_used=chain[-1], response=None, error=failure_reason)
+    return {"status": "failure", "reason": failure_reason}
+
+
+# ─── Summarization ────────────────────────────────────────────────────
+
+
+def summarize(
+    text_or_transcript,
+    *,
+    language: str | None = None,
+    model_size: str = "medium",
+    provider: str | None = None,
+    user_id: str | None = None,
+    chunk_tokens: int | None = None,
+) -> dict:
+    """Summarize plain text or a transcript through the LLM pipeline.
+
+    Input: a ``str``, a ``NormalizedTranscript``, or its ``to_dict()``
+    form. Single-shot when the input fits one chunk; map-reduce (chunk
+    summaries via ``complete()``, then a merge pass) otherwise. Rows land
+    in the ledger as ``source=summarize`` (cache off by default).
+
+    Returns ``{"status": "ok", "summary": str, "usage": {...}}`` or
+    ``{"status": "failure", "reason": ...}``.
+    """
+    from . import summary as prep
+    from .stt.base import NormalizedTranscript, transcript_from_dict
+
+    tokens = chunk_tokens or prep.DEFAULT_CHUNK_TOKENS
+
+    if isinstance(text_or_transcript, dict):
+        try:
+            text_or_transcript = transcript_from_dict(text_or_transcript)
+        except (TypeError, ValueError) as exc:
+            return {"status": "failure", "reason": f"Invalid transcript payload: {exc}"}
+    if isinstance(text_or_transcript, NormalizedTranscript):
+        chunks = [
+            c["text"]
+            for c in prep.build_summary_input(
+                text_or_transcript, chunk_tokens=tokens
+            )["chunks"]
+        ]
+    elif isinstance(text_or_transcript, str):
+        if not text_or_transcript.strip():
+            return {"status": "failure", "reason": "Nothing to summarize"}
+        chunks = prep.split_text_chunks(text_or_transcript, chunk_tokens=tokens)
+    else:
+        return {
+            "status": "failure",
+            "reason": "summarize() takes a str, NormalizedTranscript or transcript dict",
+        }
+
+    suffix = prep.language_directive(language)
+    usage = {"input_tokens": 0, "output_tokens": 0}
+
+    def _run(prompt: str, system_prompt: str) -> dict:
+        result = complete(
+            prompt,
+            model_size,
+            system_prompt=system_prompt + suffix,
+            provider=provider,
+            source=PromptSource.SUMMARIZE,
+            user_id=user_id,
+        )
+        for key in usage:
+            usage[key] += (result.get("usage") or {}).get(key, 0)
+        return result
+
+    if len(chunks) == 1:
+        result = _run(chunks[0], prep.SUMMARY_SYSTEM_PROMPT)
+        if result["status"] == "failure":
+            return {"status": "failure", "reason": result.get("reason")}
+        return {"status": "ok", "summary": result.get("result") or "", "usage": usage}
+
+    # Map-reduce: summarize each chunk, then merge the partials.
+    partials: list[str] = []
+    for idx, chunk in enumerate(chunks):
+        result = _run(
+            f"Part {idx + 1} of {len(chunks)}:\n\n{chunk}", prep.CHUNK_SYSTEM_PROMPT
+        )
+        if result["status"] == "failure":
+            return {"status": "failure", "reason": result.get("reason")}
+        partials.append(result.get("result") or "")
+
+    merged = _run(
+        "\n\n---\n\n".join(
+            f"Part {idx + 1} summary:\n{part}" for idx, part in enumerate(partials)
+        ),
+        prep.MERGE_SYSTEM_PROMPT,
+    )
+    if merged["status"] == "failure":
+        return {"status": "failure", "reason": merged.get("reason")}
+    return {"status": "ok", "summary": merged.get("result") or "", "usage": usage}
+
+
 def _drop_none(payload: dict) -> dict:
     return {k: v for k, v in payload.items() if v is not None}
 
@@ -278,5 +493,8 @@ __all__ = [
     "complete",
     "complete_json",
     "get_provider",
+    "get_stt_provider",
+    "summarize",
+    "transcribe",
     "translate",
 ]

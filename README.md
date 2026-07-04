@@ -3,7 +3,7 @@
 [![CI](https://github.com/usestapel/stapel-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/usestapel/stapel-agent/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/usestapel/stapel-agent/graph/badge.svg)](https://codecov.io/gh/usestapel/stapel-agent)
 
-> LLM facade — one JSON-completion/translation surface in front of swappable model providers, with a prompt cache and a token ledger
+> LLM facade — JSON completion, translation, transcription and summarization in front of swappable model/STT providers, with a prompt cache and a token ledger
 
 Part of the [Stapel framework](https://github.com/usestapel) — composable Django apps for building production-grade platforms.
 
@@ -40,11 +40,21 @@ urlpatterns = [
 
 Two surfaces, same contracts:
 
+| Surface | HTTP | comm Function | Does |
+|---|---|---|---|
+| Complete | `POST /agent/api/llm/complete` | `llm.complete` | JSON completion: `{"prompt", "model": "small\|medium\|large", "system_prompt"?, "provider"?}` → parsed JSON in `result`, prose in `comment` |
+| Translate | `POST /agent/api/llm/translate` | `llm.translate` | `{"from"/"from_lang", "to", "entries": {key: text}}` → `{key: translated}` (cached by prompt) |
+| Transcribe | `POST /agent/api/llm/transcribe` | `llm.transcribe` | `{"audio_url", "language"?, "diarization"?, "provider"?, "timeout_seconds"?}` → a normalized transcript (words, utterances, speakers, timings) via the STT router |
+| Summarize | `POST /agent/api/llm/summarize` | `llm.summarize` | exactly one of `text` / `transcript` (+ `language`?, `model`?, `provider`?) → Markdown `summary` + aggregated `usage`; long inputs are map-reduced |
+
 ```bash
 # HTTP (service-to-service: X-API-KEY, or a staff session)
 POST /agent/api/llm/complete   {"prompt": "...", "model": "small|medium|large",
                                 "provider"?: "...", "system_prompt"?: "..."}
 POST /agent/api/llm/translate  {"from": "auto", "to": "de", "entries": {"key": "text"}}
+POST /agent/api/llm/transcribe {"audio_url": "https://...presigned...", "language"?: "en",
+                                "diarization"?: true, "provider"?: "elevenlabs"}
+POST /agent/api/llm/summarize  {"text": "..."} | {"transcript": {...llm.transcribe output...}}
 ```
 
 ```python
@@ -53,6 +63,8 @@ from stapel_core.comm import call
 
 call("llm.complete", {"prompt": "...", "model": "small"})
 call("llm.translate", {"from_lang": "auto", "to": "de", "entries": {...}})
+call("llm.transcribe", {"audio_url": "https://..."})  # URLs only — never raw bytes
+call("llm.summarize", {"transcript": result["transcript"]})
 ```
 
 Responses follow the the legacy agent service contract: LLM failures are **HTTP 200** with
@@ -64,6 +76,15 @@ validation and auth. Successful completions return the parsed JSON in
 Every provider call writes a `PromptLog` row: model, size, source, status,
 duration and the full token ledger (input / output / thinking / cache-read /
 cache-write) — per-user and per-source cost accounting needs no other table.
+Transcriptions land there too (`source=transcribe`, `model` = STT provider
+name, token columns NULL, the fallback walk in `metadata.attempts`); each
+summarize pass is a normal LLM row (`source=summarize`).
+
+Transcription routes through an STT provider chain — explicit `provider` in
+the request beats `STT_LANGUAGE_ROUTES[lang]`, which beats
+`DEFAULT_STT_PROVIDER` + `STT_FALLBACK_CHAIN` — and falls back only on
+transient failures (429/5xx/timeouts); bad audio or auth errors never
+retry on another provider.
 
 ## Settings — `STAPEL_AGENT`
 
@@ -79,7 +100,15 @@ cache-write) — per-user and per-source cost accounting needs no other table.
 | `CLI_BINARY` | `"claude"` | Claude Code CLI binary (opt-in provider only) |
 | `CLI_TIMEOUT` | `120` | Provider timeout, seconds |
 | `MAX_TOKENS` | `4096` | Completion token cap |
-| `CACHE_LOOKUP` | `{"llm_facade": False, "translate": True}` | Per-source cache-by-prompt toggle (used by the default cache policy) |
+| `STT_PROVIDERS` | `{}` | Overlay **merged over** the built-in STT registry (whisper-http / elevenlabs / assemblyai) — same semantics as `PROVIDERS` |
+| `DEFAULT_STT_PROVIDER` | `"whisper-http"` | STT provider used when a request pins none and no language route matches |
+| `STT_FALLBACK_CHAIN` | `[]` | STT providers tried in order after the default — on transient failure only |
+| `STT_LANGUAGE_ROUTES` | `{}` | `{"ru": ["gigaam", "whisper-http"], ...}` language matrix (beats the default chain) |
+| `STT_TIMEOUT` | `1800` | Hard cap (seconds) on one STT provider's submit+poll cycle |
+| `WHISPER_BASE_URL` / `WHISPER_API_KEY` / `WHISPER_MODEL` | `""` / `""` / `"whisper-1"` | OpenAI-compatible Whisper endpoint — the OpenAI API or self-hosted faster-whisper (key optional) |
+| `ELEVENLABS_API_KEY` / `ELEVENLABS_STT_URL` / `ELEVENLABS_STT_MODEL` | `""` / Scribe URL / `"scribe_v2"` | ElevenLabs Scribe |
+| `ASSEMBLYAI_API_KEY` / `ASSEMBLYAI_BASE_URL` / `ASSEMBLYAI_MODEL` | `""` / `"https://api.assemblyai.com"` / `"universal"` | AssemblyAI (async submit+poll) |
+| `CACHE_LOOKUP` | `{"llm_facade": False, "translate": True, "summarize": False}` | Per-source cache-by-prompt toggle (used by the default cache policy) |
 | `CACHE_TTL` | `604800` | Cache window in seconds (7 days); older rows are ignored (default policy) |
 | `CACHE_POLICY` | `"stapel_agent.cache.PromptLogCachePolicy"` | Dotted path to a `CachePolicy` subclass — swap the prompt cache (Redis, no-op, ...) without forking |
 
@@ -129,6 +158,21 @@ A custom backend is just a `stapel_agent.LlmProvider` subclass returning a
 `DEFAULT_PROVIDER` that is not in the effective registry, unimportable dotted
 paths and non-`LlmProvider` entries at startup. See [MODULE.md](MODULE.md)
 for the full extension-point map.
+
+## STT provider matrix
+
+| Name | Class | Backend | Needs |
+|---|---|---|---|
+| `whisper-http` (default) | `stt.providers.whisper_http.WhisperHttpProvider` | OpenAI Whisper API **or** any self-hosted server speaking the same dialect (faster-whisper, whisper.cpp); accepts url/path/bytes refs | `WHISPER_BASE_URL` (+ key for OpenAI) |
+| `elevenlabs` | `stt.providers.elevenlabs.ElevenLabsProvider` | ElevenLabs Scribe (synchronous multipart), diarization | `ELEVENLABS_API_KEY`; URL refs only |
+| `assemblyai` | `stt.providers.assemblyai.AssemblyAIProvider` | AssemblyAI async submit+poll, diarization, 99-language `universal` model | `ASSEMBLYAI_API_KEY`; URL refs only |
+
+The STT registry has the same merge semantics as the LLM one
+(`STAPEL_AGENT["STT_PROVIDERS"]` overlay, `None` removes, or
+`register_stt_provider()` at runtime), and its own startup checks
+(`stapel_agent.W003/W004`). A custom engine is a `stapel_agent.SttProvider`
+subclass returning a `NormalizedTranscript` — MODULE.md walks through a
+self-hosted GigaAM adapter as the worked example.
 
 ## License
 

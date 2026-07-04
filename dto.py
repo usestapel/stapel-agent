@@ -53,3 +53,58 @@ class TranslateResponse:
     status: str
     result: Optional[Dict[str, str]] = None
     reason: Optional[str] = None
+
+
+@dataclass
+class TranscribeRequest:
+    """Speech-to-text request.
+
+    Attributes:
+        audio_url: Fetchable audio URL (presigned S3/MinIO GET).
+        language: BCP-47 hint; omit for auto-detect.
+        diarization: Ask the provider for speaker labels.
+        provider: Pin one STT provider (no fallback).
+        timeout_seconds: Hard cap on one provider's submit+poll cycle.
+    """
+
+    audio_url: str
+    language: Optional[str] = None
+    diarization: bool = False
+    provider: Optional[str] = None
+    timeout_seconds: Optional[int] = None
+
+
+@dataclass
+class SummarizeRequest:
+    """Summarization request — exactly one of text/transcript.
+
+    Attributes:
+        text: Plain text to summarize.
+        transcript: A NormalizedTranscript dict (llm.transcribe output).
+        language: Language to respond in; defaults to the input's.
+        model: Model size (small/medium/large). Example: medium
+        provider: LLM provider name.
+    """
+
+    text: Optional[str] = None
+    transcript: Optional[dict] = None
+    language: Optional[str] = None
+    model: str = "medium"
+    provider: Optional[str] = None
+
+
+@dataclass
+class SummarizeResponse:
+    """Summarization response.
+
+    Attributes:
+        status: "ok" or "failure".
+        summary: Markdown summary (on success).
+        usage: Aggregated token usage across all LLM calls.
+        reason: Failure reason (on failure).
+    """
+
+    status: str
+    summary: Optional[str] = None
+    usage: Optional[Dict[str, int]] = None
+    reason: Optional[str] = None

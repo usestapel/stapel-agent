@@ -11,9 +11,16 @@ so stapel-translate's AgentProvider keeps POSTing to
 
 from django.urls import path
 
-from .views import LlmCompleteView, LlmTranslateView
+from .views import (
+    LlmCompleteView,
+    LlmSummarizeView,
+    LlmTranscribeView,
+    LlmTranslateView,
+)
 
 urlpatterns = [
     path("api/llm/complete", LlmCompleteView.as_view(), name="llm-complete"),
     path("api/llm/translate", LlmTranslateView.as_view(), name="llm-translate"),
+    path("api/llm/transcribe", LlmTranscribeView.as_view(), name="llm-transcribe"),
+    path("api/llm/summarize", LlmSummarizeView.as_view(), name="llm-summarize"),
 ]

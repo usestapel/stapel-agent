@@ -3,6 +3,56 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- **Transcription surface** — `POST api/llm/transcribe` + the
+  `llm.transcribe` comm Function (URLs only over the wire, never raw
+  audio bytes), backed by a second open registry with the same merge
+  semantics as the LLM one: `STAPEL_AGENT["STT_PROVIDERS"]` overlay over
+  `stt.BUILTIN_STT_PROVIDERS`, `None`/`""` removes a name,
+  `register_stt_provider()` at runtime. Built-in adapters ported from
+  the legacy recordings service `recordings/stt/`: `whisper-http` (OpenAI Whisper API
+  or self-hosted faster-whisper — accepts url/path/bytes refs, the
+  generalization the source lacked), `elevenlabs` (Scribe, diarization),
+  `assemblyai` (async submit+poll, diarization). App-layer engines
+  (GigaAM, ...) subclass `SttProvider` — see the MODULE.md worked
+  example.
+- **STT routing** (`stt/router.py`): explicit `provider` in the request
+  (pinned — no fallback) > `STT_LANGUAGE_ROUTES[lang]` matrix >
+  `DEFAULT_STT_PROVIDER` + `STT_FALLBACK_CHAIN`. The chain advances on
+  `RetryableTranscriptionError` only (429/5xx/timeouts); fatal
+  `TranscriptionError` (bad audio, auth) never falls back — ported
+  intent from the the legacy recordings service error taxonomy.
+- **Normalized transcript schema** (`stt/base.py`, Django-free):
+  `NormalizedTranscript`/`NormalizedUtterance`/`NormalizedWord` with
+  word-level timings, speakers and the untouched provider payload in
+  `raw`; `AudioRef` (exactly one of url/path/data, PII-safe
+  `describe()`); `transcript_from_dict()` for wire payloads.
+- **Summarization surface** — `POST api/llm/summarize` + the
+  `llm.summarize` comm Function: exactly one of `text`/`transcript`
+  (schema-enforced), single-shot when the input fits one ~15k-token
+  chunk, map-reduce (chunk summaries + merge pass) otherwise, optional
+  target `language`. `summary.py` renders transcripts as timestamped
+  Markdown and chunks with `seg_NNNN` → start-ms anchors
+  (click-to-timestamp), ported from the legacy recordings service
+  `transcript_schema.py`.
+- **Ledger coverage for the new sources**: every transcription writes a
+  `PromptLog` row (`source=transcribe`, `model` = STT provider name,
+  token columns NULL, fallback walk in `metadata.attempts`); every
+  summarize pass logs as `source=summarize` with full token accounting.
+  Migration `0002` extends the `source` choices. Cache-by-prompt stays
+  off for `summarize` by default (`CACHE_LOOKUP`).
+- **System checks** `stapel_agent.W003` (unimportable / non-`SttProvider`
+  `STT_PROVIDERS` entry) and `W004` (`DEFAULT_STT_PROVIDER` /
+  `STT_FALLBACK_CHAIN` / `STT_LANGUAGE_ROUTES` naming an unknown
+  provider) — warnings only: STT is an optional surface and degrades to
+  `status: "failure"` per request.
+- Public API additions (PEP 562, still Django-free at import):
+  `transcribe`, `summarize`, `SttProvider`, `AudioRef`,
+  `NormalizedTranscript`, `register_stt_provider`,
+  `registered_stt_providers`.
+
 ## [0.1.0] - 2026-07-04
 
 Initial release — Python port of the `the legacy agent service` NestJS service (the

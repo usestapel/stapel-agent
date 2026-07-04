@@ -14,12 +14,16 @@ from stapel_core.django.api.errors import StapelResponse
 from stapel_core.django.api.permissions import IsServiceRequest, IsStaffUser
 
 from . import services
-from .dto import TranslateResponse
+from .dto import SummarizeResponse, TranslateResponse
 from .serializers import (
     CompleteRequestSerializer,
+    SummarizeRequestSerializer,
+    SummarizeResponseSerializer,
+    TranscribeRequestSerializer,
     TranslateRequestSerializer,
     TranslateResponseSerializer,
 )
+from .stt.base import AudioRef
 
 logger = logging.getLogger(__name__)
 
@@ -110,5 +114,75 @@ class LlmTranslateView(SerializerSeamMixin, APIView):
         )
         # Absent keys stay absent on the wire (iron contract): drop nulls
         # after serialization.
+        body = {k: v for k, v in dict(response_cls(dto).data).items() if v is not None}
+        return StapelResponse(body)
+
+
+@extend_schema(tags=["LLM"])
+class LlmTranscribeView(SerializerSeamMixin, APIView):
+    """Speech-to-text — ``POST api/llm/transcribe``.
+
+    Routes through the STT chain (explicit provider > language route >
+    default + fallback). STT failures are HTTP 200 with
+    ``status: "failure"`` — the house contract.
+    """
+
+    permission_classes = [IsServiceRequest | IsStaffUser]
+    request_serializer_class = TranscribeRequestSerializer
+    # Deliberately no response serializer: `transcript` embeds the raw
+    # provider payload (arbitrary JSON) — same rationale as complete's
+    # result; see MODULE.md.
+
+    @extend_schema(request=TranscribeRequestSerializer, responses={200: dict})
+    def post(self, request):
+        ser = self.get_request_serializer_class()(data=request.data)
+        ser.is_valid(raise_exception=True)
+        data = ser.validated_data
+        payload = services.transcribe(
+            AudioRef(url=data.audio_url),
+            language=data.language,
+            diarization=data.diarization,
+            provider=data.provider,
+            timeout_seconds=data.timeout_seconds,
+            user_id=_request_user_id(request),
+        )
+        return StapelResponse(payload)
+
+
+@extend_schema(tags=["LLM"])
+class LlmSummarizeView(SerializerSeamMixin, APIView):
+    """Summarization — ``POST api/llm/summarize``.
+
+    Exactly one of ``text`` / ``transcript`` (a NormalizedTranscript
+    dict). Single-shot when the input fits one chunk, map-reduce
+    otherwise. LLM failures are HTTP 200 with ``status: "failure"``.
+    """
+
+    permission_classes = [IsServiceRequest | IsStaffUser]
+    request_serializer_class = SummarizeRequestSerializer
+    response_serializer_class = SummarizeResponseSerializer
+
+    @extend_schema(
+        request=SummarizeRequestSerializer,
+        responses={200: SummarizeResponseSerializer},
+    )
+    def post(self, request):
+        ser = self.get_request_serializer_class()(data=request.data)
+        ser.is_valid(raise_exception=True)
+        data = ser.validated_data
+        payload = services.summarize(
+            data.text if data.text is not None else data.transcript,
+            language=data.language,
+            model_size=data.model,
+            provider=data.provider,
+            user_id=_request_user_id(request),
+        )
+        response_cls = self.get_response_serializer_class()
+        dto = SummarizeResponse(
+            status=payload["status"],
+            summary=payload.get("summary"),
+            usage=payload.get("usage"),
+            reason=payload.get("reason"),
+        )
         body = {k: v for k, v in dict(response_cls(dto).data).items() if v is not None}
         return StapelResponse(body)

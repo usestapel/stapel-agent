@@ -8,9 +8,11 @@ contract returns HTTP 200 with ``{"status": "failure", "reason": ...}``.
 from stapel_core.django.api.errors import ErrorKeysView, register_service_errors
 
 ERR_400_INVALID_MODEL_SIZE = "error.400.invalid_model_size"
+ERR_400_SUMMARIZE_INPUT = "error.400.summarize_input"
 
 AGENT_ERRORS = {
     ERR_400_INVALID_MODEL_SIZE: "Model must be one of: small, medium, large",
+    ERR_400_SUMMARIZE_INPUT: "Provide exactly one of: text, transcript",
 }
 
 register_service_errors(AGENT_ERRORS)

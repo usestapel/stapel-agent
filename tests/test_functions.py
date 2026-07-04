@@ -1,5 +1,6 @@
-"""comm Function tests — llm.complete / llm.translate called in-process
-via stapel_core.comm.call with schema validation ON."""
+"""comm Function tests — llm.complete / llm.translate / llm.transcribe /
+llm.summarize called in-process via stapel_core.comm.call with schema
+validation ON."""
 import pytest
 from stapel_core.comm import call, function_registry
 from stapel_core.comm.exceptions import SchemaValidationError
@@ -12,6 +13,8 @@ class TestRegistration:
         names = function_registry.names()
         assert "llm.complete" in names
         assert "llm.translate" in names
+        assert "llm.transcribe" in names
+        assert "llm.summarize" in names
 
 
 @pytest.mark.django_db
@@ -77,3 +80,112 @@ class TestLlmTranslate:
                 "llm.translate",
                 {"from_lang": "auto", "to": "de", "entries": {"k": 5}},
             )
+
+
+@pytest.mark.django_db
+class TestLlmTranscribe:
+    def test_happy_path(self, fake_stt):
+        result = call(
+            "llm.transcribe",
+            {
+                "audio_url": "https://minio.test/rec.mp3",
+                "language": "en",
+                "diarization": True,
+            },
+        )
+        assert result["status"] == "ok"
+        assert result["provider_used"] == "fake-stt"
+        assert result["fallback_used"] is False
+        assert result["transcript"]["utterances"][0]["text"] == "hello world"
+        # the URL payload arrives as a url-kind AudioRef
+        audio = fake_stt.calls[0]["audio"]
+        assert audio.kind == "url"
+        assert audio.url == "https://minio.test/rec.mp3"
+        assert fake_stt.calls[0]["diarization"] is True
+
+    def test_provider_pin_forwarded(self, fake_stt):
+        from stapel_agent.tests.fakes import SecondSttProvider
+
+        result = call(
+            "llm.transcribe",
+            {"audio_url": "https://x/a.mp3", "provider": "fake-stt-2"},
+        )
+        assert result["provider_used"] == "fake-stt-2"
+        assert len(SecondSttProvider.calls) == 1
+
+    def test_failure_is_a_status_dict_not_an_exception(self, fake_stt):
+        result = call(
+            "llm.transcribe",
+            {"audio_url": "https://x/a.mp3", "provider": "fatal-stt"},
+        )
+        assert result == {"status": "failure", "reason": "audio is not decodable"}
+
+    def test_schema_rejects_missing_audio_url(self, fake_stt):
+        with pytest.raises(SchemaValidationError):
+            call("llm.transcribe", {"language": "en"})
+
+    def test_schema_rejects_raw_audio_bytes(self, fake_stt):
+        # comm carries URLs only — bytes/path refs are HTTP-tier concerns;
+        # any such key is rejected by additionalProperties: false.
+        with pytest.raises(SchemaValidationError):
+            call("llm.transcribe", {"audio_url": "https://x/a", "data": "UklGRg=="})
+        with pytest.raises(SchemaValidationError):
+            call("llm.transcribe", {"audio_url": "https://x/a", "path": "/tmp/a.wav"})
+
+    def test_schema_rejects_non_integer_timeout(self, fake_stt):
+        with pytest.raises(SchemaValidationError):
+            call(
+                "llm.transcribe",
+                {"audio_url": "https://x/a", "timeout_seconds": "300"},
+            )
+
+
+@pytest.mark.django_db
+class TestLlmSummarize:
+    def test_happy_path_text(self, fake_provider):
+        fake_provider.result = ProviderResult(
+            text="## Summary", input_tokens=8, output_tokens=2
+        )
+        result = call("llm.summarize", {"text": "long meeting notes"})
+        assert result == {
+            "status": "ok",
+            "summary": "## Summary",
+            "usage": {"input_tokens": 8, "output_tokens": 2},
+        }
+
+    def test_happy_path_transcript(self, fake_provider):
+        transcript = {
+            "provider": "fake-stt",
+            "language": "en",
+            "duration_seconds": 2.0,
+            "utterances": [
+                {"text": "hello world", "start": 0.0, "end": 2.0, "speaker": "A"}
+            ],
+        }
+        result = call("llm.summarize", {"transcript": transcript, "model": "small"})
+        assert result["status"] == "ok"
+        assert "[00:00] A: hello world" in fake_provider.calls[0]["prompt"]
+
+    def test_schema_rejects_neither_input(self, fake_provider):
+        with pytest.raises(SchemaValidationError):
+            call("llm.summarize", {"language": "en"})
+
+    def test_schema_rejects_both_inputs(self, fake_provider):
+        # oneOf: text XOR transcript — sending both matches two branches.
+        with pytest.raises(SchemaValidationError):
+            call("llm.summarize", {"text": "t", "transcript": {"provider": "x"}})
+
+    def test_schema_rejects_bad_model_size(self, fake_provider):
+        with pytest.raises(SchemaValidationError):
+            call("llm.summarize", {"text": "t", "model": "xl"})
+
+    def test_schema_rejects_extra_keys(self, fake_provider):
+        with pytest.raises(SchemaValidationError):
+            call("llm.summarize", {"text": "t", "beep": 1})
+
+    def test_failure_is_a_status_dict(self, fake_provider):
+        from stapel_agent.providers.base import ProviderError
+
+        fake_provider.error = ProviderError("llm down")
+        result = call("llm.summarize", {"text": "t"})
+        assert result == {"status": "failure", "reason": "llm down"}

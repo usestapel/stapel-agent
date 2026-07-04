@@ -91,3 +91,98 @@ def llm_translate(payload: dict) -> dict:
         payload["to"],
         payload["entries"],
     )
+
+
+TRANSCRIBE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "audio_url": {
+            "type": "string",
+            "description": "Fetchable audio URL (presigned S3/MinIO GET). "
+            "comm carries URLs only, never raw bytes.",
+        },
+        "language": {
+            "type": "string",
+            "description": "BCP-47 hint; omit for auto-detect.",
+        },
+        "diarization": {
+            "type": "boolean",
+            "description": "Ask the provider for speaker labels.",
+        },
+        "provider": {
+            "type": "string",
+            "description": "Pin one STT provider (no fallback).",
+        },
+        "timeout_seconds": {
+            "type": "integer",
+            "description": "Hard cap on one provider's submit+poll cycle.",
+        },
+    },
+    "required": ["audio_url"],
+    "additionalProperties": False,
+}
+
+SUMMARIZE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "text": {"type": "string", "description": "Plain text to summarize."},
+        "transcript": {
+            "type": "object",
+            "description": "A NormalizedTranscript dict (llm.transcribe output).",
+        },
+        "language": {
+            "type": "string",
+            "description": "Language to respond in; defaults to the input's.",
+        },
+        "model": {
+            "type": "string",
+            "enum": ["small", "medium", "large"],
+            "description": "Model size (default medium).",
+        },
+        "provider": {
+            "type": "string",
+            "description": "LLM provider name from STAPEL_AGENT['PROVIDERS'].",
+        },
+    },
+    "oneOf": [{"required": ["text"]}, {"required": ["transcript"]}],
+    "additionalProperties": False,
+}
+
+
+@function("llm.transcribe", schema=TRANSCRIBE_SCHEMA)
+def llm_transcribe(payload: dict) -> dict:
+    """Speech-to-text — same result dict as ``POST api/llm/transcribe``.
+
+    Payload: ``{"audio_url": str, "language"?, "diarization"?,
+    "provider"?, "timeout_seconds"?}``. Returns ``{"status": "ok",
+    "transcript": {...}, "provider_used": str, "fallback_used": bool}``
+    or ``{"status": "failure", "reason": str}``.
+    """
+    from . import services
+    from .stt.base import AudioRef
+
+    return services.transcribe(
+        AudioRef(url=payload["audio_url"]),
+        language=payload.get("language"),
+        diarization=bool(payload.get("diarization", False)),
+        provider=payload.get("provider"),
+        timeout_seconds=payload.get("timeout_seconds"),
+    )
+
+
+@function("llm.summarize", schema=SUMMARIZE_SCHEMA)
+def llm_summarize(payload: dict) -> dict:
+    """Summarization — same result dict as ``POST api/llm/summarize``.
+
+    Payload carries exactly one of ``text`` / ``transcript`` (a
+    NormalizedTranscript dict). Returns ``{"status": "ok", "summary":
+    str, "usage": {...}}`` or ``{"status": "failure", "reason": str}``.
+    """
+    from . import services
+
+    return services.summarize(
+        payload["text"] if "text" in payload else payload["transcript"],
+        language=payload.get("language"),
+        model_size=payload.get("model") or "medium",
+        provider=payload.get("provider"),
+    )

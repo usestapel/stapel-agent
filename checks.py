@@ -74,4 +74,70 @@ def check_providers(app_configs, **kwargs):
     return issues
 
 
-__all__ = ["check_providers"]
+@checks.register("stapel_agent")
+def check_stt_providers(app_configs, **kwargs):
+    """STT registry checks — all W-level: STT is an optional surface and
+    a broken entry degrades to ``status: "failure"`` per request.
+
+    - ``stapel_agent.W003`` — an ``STT_PROVIDERS`` entry cannot be
+      imported or is not an ``SttProvider`` subclass;
+    - ``stapel_agent.W004`` — ``DEFAULT_STT_PROVIDER`` /
+      ``STT_FALLBACK_CHAIN`` / ``STT_LANGUAGE_ROUTES`` reference a name
+      missing from the effective registry.
+    """
+    from .conf import agent_settings
+    from .stt import registered_stt_providers
+    from .stt.base import SttProvider
+
+    issues = []
+    effective = registered_stt_providers()
+
+    for name, target in effective.items():
+        if isinstance(target, str):
+            try:
+                target = import_string(target)
+            except ImportError as exc:
+                issues.append(
+                    checks.Warning(
+                        f"STT provider {name!r} cannot be imported: {exc}",
+                        hint=(
+                            "Fix the dotted path, install the missing "
+                            "dependency, or remove the entry (set it to None)."
+                        ),
+                        id="stapel_agent.W003",
+                    )
+                )
+                continue
+        if not (inspect.isclass(target) and issubclass(target, SttProvider)):
+            issues.append(
+                checks.Warning(
+                    f"STT provider {name!r} resolves to {target!r}, which is "
+                    "not a stapel_agent.stt.base.SttProvider subclass.",
+                    hint="Implement the SttProvider ABC (see MODULE.md).",
+                    id="stapel_agent.W003",
+                )
+            )
+
+    def _unknown(where: str, names) -> None:
+        for ref in names:
+            if ref and ref not in effective:
+                issues.append(
+                    checks.Warning(
+                        f"{where} references unknown STT provider {ref!r} "
+                        f"(effective registry: {sorted(effective)}).",
+                        hint=(
+                            "Register it via STAPEL_AGENT['STT_PROVIDERS'] / "
+                            "register_stt_provider(), or fix the name."
+                        ),
+                        id="stapel_agent.W004",
+                    )
+                )
+
+    _unknown("STAPEL_AGENT['DEFAULT_STT_PROVIDER']", [agent_settings.DEFAULT_STT_PROVIDER])
+    _unknown("STAPEL_AGENT['STT_FALLBACK_CHAIN']", agent_settings.STT_FALLBACK_CHAIN or [])
+    for lang, route in (agent_settings.STT_LANGUAGE_ROUTES or {}).items():
+        _unknown(f"STAPEL_AGENT['STT_LANGUAGE_ROUTES'][{lang!r}]", route or [])
+    return issues
+
+
+__all__ = ["check_providers", "check_stt_providers"]
