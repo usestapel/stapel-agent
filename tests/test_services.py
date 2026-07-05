@@ -172,6 +172,71 @@ class TestCache:
 
 
 @pytest.mark.django_db
+class TestCacheKeyProviderModel:
+    """The prompt cache key includes provider + resolved model + size, so
+    a "small" answer never satisfies a "large" request, an explicit
+    provider never collides with the default, and a model-version bump in
+    MODELS invalidates old rows. A cache HIT returns early WITHOUT writing
+    a PromptLog row, so row count == number of provider calls (misses)."""
+
+    @pytest.fixture
+    def cached_facade(self, settings):
+        from stapel_agent.tests.fakes import FakeProvider
+
+        settings.STAPEL_AGENT = {
+            "PROVIDERS": {
+                "fake": "stapel_agent.tests.fakes.FakeProvider",
+                "fake2": "stapel_agent.tests.fakes.CustomProvider",
+            },
+            "DEFAULT_PROVIDER": "fake",
+            "CACHE_LOOKUP": {"llm_facade": True},
+        }
+        FakeProvider.reset()
+        yield FakeProvider
+        FakeProvider.reset()
+
+    def test_same_size_same_provider_hits(self, cached_facade):
+        services.complete("p", "small", source=PromptSource.LLM_FACADE)
+        second = services.complete("p", "small", source=PromptSource.LLM_FACADE)
+        assert second["usage"] == {"input_tokens": 0, "output_tokens": 0}
+        assert PromptLog.objects.count() == 1  # second answered from cache
+
+    def test_model_size_change_is_a_miss(self, cached_facade):
+        # The repro from review §2a: "small" then "large" must NOT reuse
+        # the small answer.
+        services.complete("p", "small", source=PromptSource.LLM_FACADE)
+        services.complete("p", "large", source=PromptSource.LLM_FACADE)
+        assert PromptLog.objects.count() == 2  # both misses
+        assert set(PromptLog.objects.values_list("model", flat=True)) == {
+            "claude-haiku-4-5-20251001",
+            "claude-opus-4-8",
+        }
+
+    def test_provider_change_is_a_miss(self, cached_facade):
+        services.complete(
+            "p", "small", provider="fake", source=PromptSource.LLM_FACADE
+        )
+        services.complete(
+            "p", "small", provider="fake2", source=PromptSource.LLM_FACADE
+        )
+        assert PromptLog.objects.count() == 2  # explicit provider not collided
+
+    def test_model_version_bump_invalidates(self, cached_facade, settings):
+        services.complete("p", "small", source=PromptSource.LLM_FACADE)
+        # Bump the "small" model — the old cached row must not be served.
+        settings.STAPEL_AGENT = {
+            **settings.STAPEL_AGENT,
+            "MODELS": {
+                "small": "claude-haiku-9-brand-new",
+                "medium": "claude-sonnet-5",
+                "large": "claude-opus-4-8",
+            },
+        }
+        services.complete("p", "small", source=PromptSource.LLM_FACADE)
+        assert PromptLog.objects.count() == 2  # version bump = miss
+
+
+@pytest.mark.django_db
 class TestTranslateService:
     def test_empty_entries_short_circuit(self, fake_provider):
         assert services.translate("auto", "de", {}) == {"status": "ok", "result": {}}

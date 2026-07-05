@@ -3,6 +3,60 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.0] - 2026-07-05
+
+### Changed (breaking — custom `CachePolicy` subclasses)
+- **The prompt cache key now includes provider + resolved model + model
+  size.** `CachePolicy.lookup()` and `.store()` gained three keyword-only
+  parameters — `provider`, `model` (the resolved `MODELS[model_size]`
+  after `resolve_model`) and `model_size`:
+
+  ```python
+  def lookup(self, prompt, system_prompt, source, *,
+             provider, model, model_size) -> str | None: ...
+  def store(self, prompt, system_prompt, source, response, *,
+            provider, model, model_size) -> None: ...
+  ```
+
+  Previously the key was prompt + system_prompt + source only, so a
+  cached "small" answer could satisfy a "large" request, an explicit
+  `provider=` collided with the default, and bumping a model version in
+  `MODELS` did not invalidate stale rows (up to `CACHE_TTL`).
+
+  **Migration:** a custom `CachePolicy` must add the three keyword-only
+  parameters to its `lookup`/`store` overrides (and fold them into its
+  key if it wants correctness across sizes/providers/model versions). A
+  policy that ignored them would keep the old collision behaviour, so
+  they are required, not defaulted — the mismatch surfaces immediately as
+  a `TypeError` at call time rather than as a silent wrong-answer cache
+  hit. The default `PromptLogCachePolicy` filters on `model` +
+  `model_size` + `metadata.provider`.
+
+### Fixed
+- **Unknown STT provider name no longer aborts the fallback chain.** An
+  unregistered name in `STT_LANGUAGE_ROUTES` / `STT_FALLBACK_CHAIN` (e.g.
+  the docstring's own `"gigaam"` example) is a config error, not bad
+  audio — `transcribe()` now skips it and walks to the next provider,
+  consistent with the registered-but-unloadable (`ImportError`) branch.
+  A fatal `TranscriptionError` raised from *within* a provider's
+  `transcribe()` (bad input, auth) still stops the walk. System check
+  `W004` still warns about unknown names at startup.
+- **`timeout_seconds=0` / negatives are now rejected at the boundary
+  instead of silently defaulting or crashing.** The four adapters
+  (whisper-http, elevenlabs, assemblyai, openai-images) replaced the
+  falsy `int(timeout_seconds or <default>)` with `<default> if
+  timeout_seconds is None else int(timeout_seconds)`, so an explicit `0`
+  is no longer coerced to the default. `timeout_seconds` now carries a
+  `minimum: 1` constraint in the request serializers and the
+  `llm.transcribe` / `llm.generate_image` comm schemas — `0` and
+  negatives are HTTP 400 / schema errors rather than a silent default or
+  an uncaught `urllib3` `ValueError` → HTTP 500.
+
+### Added
+- **`timeout_seconds` on the `llm.generate_image` comm surface** — the
+  HTTP view already accepted it; the comm schema and function now do too
+  (with `minimum: 1`), aligning the two surfaces.
+
 ## [0.1.1] - 2026-07-05
 
 ### Added

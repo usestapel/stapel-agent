@@ -95,17 +95,10 @@ def complete(
     if model_size not in models:
         return {"status": "failure", "reason": f"Unknown model size '{model_size}'"}
 
-    policy = _cache_policy()
-    if not skip_cache and not images and policy.should_cache(source):
-        cached = policy.lookup(prompt, system_prompt, source)
-        if cached is not None:
-            logger.info("stapel-agent: cache hit for %s prompt", source)
-            return {
-                "status": "ok",
-                "result": cached,
-                "usage": {"input_tokens": 0, "output_tokens": 0},
-            }
-
+    # Resolve the provider/model BEFORE the cache lookup: the cache key
+    # now includes the resolved provider + model + size, so we need them
+    # in hand before consulting the policy (instantiation is cheap and
+    # side-effect-free — no network call happens until backend.complete).
     provider_name = provider or agent_settings.DEFAULT_PROVIDER
     try:
         backend = get_provider(provider_name)
@@ -123,6 +116,26 @@ def complete(
             "reason": f"Provider '{provider_name}' does not support image input",
         }
 
+    model = backend.resolve_model(model_size, models[model_size])
+
+    policy = _cache_policy()
+    if not skip_cache and not images and policy.should_cache(source):
+        cached = policy.lookup(
+            prompt,
+            system_prompt,
+            source,
+            provider=provider_name,
+            model=model,
+            model_size=model_size,
+        )
+        if cached is not None:
+            logger.info("stapel-agent: cache hit for %s prompt", source)
+            return {
+                "status": "ok",
+                "result": cached,
+                "usage": {"input_tokens": 0, "output_tokens": 0},
+            }
+
     extra_meta = {}
     if images:
         # Never the bytes — just enough for observability/cost queries.
@@ -131,7 +144,6 @@ def complete(
             "kinds": [img.kind for img in images],
         }
 
-    model = backend.resolve_model(model_size, models[model_size])
     log = PromptLog(
         source=source,
         model=model,
@@ -178,7 +190,15 @@ def complete(
     # external-store policies (Redis, ...) hook in here. Never store
     # multimodal results — the text key can't see the pixels.
     if not images:
-        policy.store(prompt, system_prompt, source, result.text)
+        policy.store(
+            prompt,
+            system_prompt,
+            source,
+            result.text,
+            provider=provider_name,
+            model=model,
+            model_size=model_size,
+        )
 
     return {"status": "ok", "result": result.text, "usage": _usage(result)}
 
@@ -262,7 +282,29 @@ def translate(
 
     policy = _cache_policy()
     if not skip_cache and policy.should_cache(PromptSource.TRANSLATE):
-        cached = policy.lookup(prompt, system_prompt, PromptSource.TRANSLATE)
+        # Resolve the same provider/model the inner complete() will use so
+        # the pre-check key matches what complete() stored (translate calls
+        # complete with skip_cache=True to avoid a double lookup).
+        provider_name = provider or agent_settings.DEFAULT_PROVIDER
+        models = agent_settings.MODELS or {}
+        try:
+            model = get_provider(provider_name).resolve_model(
+                model_size, models.get(model_size, "")
+            )
+        except (ProviderError, ImportError):
+            model = None  # provider unresolvable — let complete() surface it
+        cached = (
+            policy.lookup(
+                prompt,
+                system_prompt,
+                PromptSource.TRANSLATE,
+                provider=provider_name,
+                model=model,
+                model_size=model_size,
+            )
+            if model is not None
+            else None
+        )
         if cached:
             try:
                 return {
@@ -387,6 +429,23 @@ def transcribe(
         fallback_used = idx > 0
         try:
             backend = get_stt_provider(name)
+        except TranscriptionError as exc:
+            # An unregistered provider name is a config error, not bad
+            # audio — the next provider in the chain may well handle it.
+            # Consistent with the ImportError (registered-but-unloadable)
+            # branch below; NOT fatal like a bad-input TranscriptionError
+            # raised from within transcribe().
+            failure_reason = str(exc)
+            attempts.append({"provider": name, "error_kind": "unknown", "error": str(exc)[:500]})
+            logger.warning("stapel-agent: STT provider %s unavailable: %s", name, exc)
+            continue
+        except ImportError as exc:
+            failure_reason = f"STT provider '{name}' could not be loaded: {exc}"
+            attempts.append({"provider": name, "error_kind": "unloadable", "error": str(exc)[:500]})
+            logger.warning("stapel-agent: %s", failure_reason)
+            continue
+
+        try:
             transcript = backend.transcribe(
                 audio=audio,
                 language=language,

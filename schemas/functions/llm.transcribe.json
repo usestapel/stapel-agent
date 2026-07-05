@@ -22,6 +22,7 @@
     },
     "timeout_seconds": {
       "type": "integer",
+      "minimum": 1,
       "description": "Hard cap on one provider's submit+poll cycle."
     }
   },

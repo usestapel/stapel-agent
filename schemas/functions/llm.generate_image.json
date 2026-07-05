@@ -21,6 +21,11 @@
     "provider": {
       "type": "string",
       "description": "Image provider name from STAPEL_AGENT['IMAGE_PROVIDERS']; defaults to DEFAULT_IMAGE_PROVIDER."
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Hard cap on the generation request."
     }
   },
   "required": ["prompt"],

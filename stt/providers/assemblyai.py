@@ -58,7 +58,11 @@ class AssemblyAIProvider(SttProvider):
                 "STAPEL_AGENT['ASSEMBLYAI_API_KEY'] is not set", provider=self.name
             )
         audio_url = audio.require_url(provider=self.name)
-        timeout = int(timeout_seconds or agent_settings.STT_TIMEOUT)
+        timeout = (
+            int(agent_settings.STT_TIMEOUT)
+            if timeout_seconds is None
+            else int(timeout_seconds)
+        )
 
         body = {
             "audio_url": audio_url,

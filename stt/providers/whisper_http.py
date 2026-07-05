@@ -50,7 +50,11 @@ class WhisperHttpProvider(SttProvider):
                 "STAPEL_AGENT['WHISPER_BASE_URL'] is not configured",
                 provider=self.name,
             )
-        timeout = int(timeout_seconds or agent_settings.STT_TIMEOUT)
+        timeout = (
+            int(agent_settings.STT_TIMEOUT)
+            if timeout_seconds is None
+            else int(timeout_seconds)
+        )
         payload = audio.read_bytes(provider=self.name, timeout=min(timeout, 600))
 
         data = {

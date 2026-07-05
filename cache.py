@@ -15,8 +15,10 @@ or anything else::
 
     class RedisCachePolicy(CachePolicy):
         def should_cache(self, source): ...
-        def lookup(self, prompt, system_prompt, source): ...
-        def store(self, prompt, system_prompt, source, response): ...
+        def lookup(self, prompt, system_prompt, source, *,
+                   provider, model, model_size): ...
+        def store(self, prompt, system_prompt, source, response, *,
+                  provider, model, model_size): ...
 
     # settings.py
     STAPEL_AGENT = {"CACHE_POLICY": "myproject.llm_cache.RedisCachePolicy"}
@@ -40,15 +42,43 @@ class CachePolicy(ABC):
         """Whether *source* ("llm_facade"/"translate"/...) uses the cache."""
 
     @abstractmethod
-    def lookup(self, prompt: str, system_prompt: str | None, source: str) -> str | None:
-        """Return the cached raw response text, or None on a miss."""
+    def lookup(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        source: str,
+        *,
+        provider: str,
+        model: str,
+        model_size: str,
+    ) -> str | None:
+        """Return the cached raw response text, or None on a miss.
 
-    def store(self, prompt: str, system_prompt: str | None, source: str, response: str) -> None:
+        *provider* (the resolved provider name), *model* (the resolved
+        model name — ``MODELS[model_size]`` after ``resolve_model``) and
+        *model_size* are part of the cache key: a "small" answer must
+        never be served to a "large" request, an explicit ``provider=``
+        must not collide with the default, and bumping a model version in
+        ``MODELS`` must invalidate its cached rows.
+        """
+
+    def store(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        source: str,
+        response: str,
+        *,
+        provider: str,
+        model: str,
+        model_size: str,
+    ) -> None:
         """Persist a successful response for future lookups.
 
         No-op by default: the default policy reads the PromptLog ledger
         row that ``services.complete`` writes anyway. Policies with
-        external storage (Redis, ...) override this.
+        external storage (Redis, ...) override this. See ``lookup`` for
+        why *provider*/*model*/*model_size* belong in the key.
         """
 
 
@@ -60,7 +90,16 @@ class PromptLogCachePolicy(CachePolicy):
 
         return bool((agent_settings.CACHE_LOOKUP or {}).get(source, False))
 
-    def lookup(self, prompt: str, system_prompt: str | None, source: str) -> str | None:
+    def lookup(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        source: str,
+        *,
+        provider: str,
+        model: str,
+        model_size: str,
+    ) -> str | None:
         from django.utils import timezone
 
         from .conf import agent_settings
@@ -72,6 +111,13 @@ class PromptLogCachePolicy(CachePolicy):
             source=source,
             status=PromptStatus.SUCCESS,
             response__isnull=False,
+            # provider + resolved model + size are part of the key: a
+            # "small" answer must never satisfy a "large" request, an
+            # explicit provider must not collide with the default, and a
+            # model-version bump in MODELS must invalidate old rows.
+            model=model,
+            model_size=model_size,
+            metadata__provider=provider,
             created_at__gte=timezone.now() - timedelta(seconds=ttl),
         ).exclude(
             # The cache key is text-only, but multimodal ledger rows share

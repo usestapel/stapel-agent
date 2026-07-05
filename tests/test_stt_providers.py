@@ -152,6 +152,23 @@ class TestWhisperHttp:
         )
         assert captured[0]["timeout"] == 42
 
+    def test_none_timeout_uses_stt_timeout_default(self, configured, monkeypatch):
+        # None (not passed) → STT_TIMEOUT; an explicit 0 must NOT be
+        # coerced to the default by a falsy `or`.
+        _, captured = self._run(
+            monkeypatch, [FakeResponse(WHISPER_BODY)], audio=AudioRef(data=b"x")
+        )
+        assert captured[0]["timeout"] == 1800  # STT_TIMEOUT default
+
+    def test_zero_timeout_is_passed_through(self, configured, monkeypatch):
+        _, captured = self._run(
+            monkeypatch,
+            [FakeResponse(WHISPER_BODY)],
+            audio=AudioRef(data=b"x"),
+            timeout_seconds=0,
+        )
+        assert captured[0]["timeout"] == 0
+
     def test_429_is_retryable(self, configured, monkeypatch):
         with pytest.raises(RetryableTranscriptionError, match="rate-limited") as e:
             self._run(

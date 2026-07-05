@@ -211,6 +211,24 @@ class TestOpenAIImagesAdapter:
         assert call_["timeout"] == 30
         assert images == [GeneratedImage(mime="image/png", data_b64=PNG_B64)]
 
+    def test_none_timeout_uses_default_not_falsy_or(self, configured, monkeypatch):
+        _, captured = self._run(
+            monkeypatch, [FakeResponse({"data": [{"b64_json": PNG_B64}]})]
+        )
+        assert captured[0]["timeout"] == 120  # DEFAULT_TIMEOUT_S
+
+    def test_zero_timeout_is_passed_through_not_defaulted(
+        self, configured, monkeypatch
+    ):
+        # Regression: `int(timeout_seconds or DEFAULT)` silently turned 0
+        # into the default. `if None` keeps an explicit 0 explicit.
+        _, captured = self._run(
+            monkeypatch,
+            [FakeResponse({"data": [{"b64_json": PNG_B64}]})],
+            timeout_seconds=0,
+        )
+        assert captured[0]["timeout"] == 0
+
     def test_url_response(self, configured, monkeypatch):
         images, _ = self._run(
             monkeypatch,
@@ -408,6 +426,16 @@ class TestGenerateImageHttp:
             assert resp.status_code == 400, bad_n
         assert fake_images.calls == []
 
+    def test_non_positive_timeout_is_400(self, api_client, fake_images):
+        for bad in (0, -1):
+            resp = self._post(
+                api_client,
+                {"prompt": "x", "timeout_seconds": bad},
+                HTTP_X_API_KEY="test-service-key",
+            )
+            assert resp.status_code == 400, bad
+        assert fake_images.calls == []
+
 
 @pytest.mark.django_db
 class TestGenerateImageComm:
@@ -424,6 +452,16 @@ class TestGenerateImageComm:
         call("llm.generate_image", {"prompt": "a cat"})
         assert fake_images.calls[0]["size"] == "1024x1024"
         assert fake_images.calls[0]["n"] == 1
+
+    def test_timeout_seconds_forwarded(self, fake_images):
+        # comm surface now accepts timeout_seconds (was HTTP-only before).
+        call("llm.generate_image", {"prompt": "a cat", "timeout_seconds": 45})
+        assert fake_images.calls[0]["timeout_seconds"] == 45
+
+    def test_schema_rejects_non_positive_timeout(self, fake_images):
+        for bad in (0, -1):
+            with pytest.raises(SchemaValidationError):
+                call("llm.generate_image", {"prompt": "x", "timeout_seconds": bad})
 
     def test_failure_is_a_status_dict(self, fake_images):
         result = call("llm.generate_image", {"prompt": "x", "provider": "ghost"})

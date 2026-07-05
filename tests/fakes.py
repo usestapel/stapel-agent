@@ -143,14 +143,16 @@ class RecordingCachePolicy(CachePolicy):
     def should_cache(self, source):
         return type(self).cache_all
 
-    def lookup(self, prompt, system_prompt, source):
+    def lookup(self, prompt, system_prompt, source, *, provider, model, model_size):
         cls = type(self)
-        cls.lookups.append((prompt, system_prompt, source))
+        cls.lookups.append((prompt, system_prompt, source, provider, model, model_size))
         return cls.entries.get((prompt, system_prompt, source))
 
-    def store(self, prompt, system_prompt, source, response):
+    def store(self, prompt, system_prompt, source, response, *, provider, model, model_size):
         cls = type(self)
-        cls.stores.append((prompt, system_prompt, source, response))
+        cls.stores.append(
+            (prompt, system_prompt, source, response, provider, model, model_size)
+        )
         cls.entries[(prompt, system_prompt, source)] = response
 
 

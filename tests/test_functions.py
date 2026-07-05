@@ -139,6 +139,15 @@ class TestLlmTranscribe:
                 {"audio_url": "https://x/a", "timeout_seconds": "300"},
             )
 
+    def test_schema_rejects_non_positive_timeout(self, fake_stt):
+        # minimum: 1 — 0 and negatives are unexpressible to `requests`.
+        for bad in (0, -1):
+            with pytest.raises(SchemaValidationError):
+                call(
+                    "llm.transcribe",
+                    {"audio_url": "https://x/a", "timeout_seconds": bad},
+                )
+
 
 @pytest.mark.django_db
 class TestLlmSummarize:

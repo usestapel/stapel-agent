@@ -18,9 +18,19 @@ from .errors import (
     ERR_400_INVALID_IMAGE,
     ERR_400_INVALID_IMAGE_COUNT,
     ERR_400_INVALID_MODEL_SIZE,
+    ERR_400_INVALID_TIMEOUT,
     ERR_400_SUMMARIZE_INPUT,
 )
 from .services import MODEL_SIZES
+
+
+def _validate_timeout_seconds(value):
+    # `requests` rejects a timeout of 0, and a negative timeout raises deep
+    # inside urllib3 (uncaught → HTTP 500) — reject non-positive at the
+    # boundary so it stays a 400, never a 500. None means "use the default".
+    if value is not None and int(value) < 1:
+        raise StapelValidationError(ERR_400_INVALID_TIMEOUT)
+    return value
 
 
 class CompleteRequestSerializer(StapelDataclassSerializer):
@@ -71,6 +81,9 @@ class TranscribeRequestSerializer(StapelDataclassSerializer):
     class Meta:
         dataclass = TranscribeRequest
 
+    def validate_timeout_seconds(self, value):
+        return _validate_timeout_seconds(value)
+
 
 class SummarizeRequestSerializer(StapelDataclassSerializer):
     class Meta:
@@ -102,3 +115,6 @@ class GenerateImageRequestSerializer(StapelDataclassSerializer):
         if not 1 <= int(value) <= 10:
             raise StapelValidationError(ERR_400_INVALID_IMAGE_COUNT)
         return value
+
+    def validate_timeout_seconds(self, value):
+        return _validate_timeout_seconds(value)

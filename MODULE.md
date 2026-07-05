@@ -62,7 +62,7 @@ same name → environment variable → default. All keys are read **lazily at ca
 | `DEFAULT_IMAGE_PROVIDER` | `"openai-images"` | Image provider used when the request pins none. |
 | `IMAGES_BASE_URL` / `IMAGES_API_KEY` | `""` / `""` | OpenAI-compatible `/images/generations` endpoint + key; **both fall back to the `OPENAI_COMPAT_*` pair**, so an OpenAI-flavoured host configures nothing extra. |
 | `IMAGES_MODEL` | `""` | Optional model name; empty = omitted from the request (single-model servers). |
-| `CACHE_LOOKUP` | `{"llm_facade": False, "translate": True, "summarize": False}` | Per-source cache-by-prompt toggle, honoured by the **default** cache policy (latest `success` row with identical prompt+system_prompt+source; multimodal rows are excluded — the text key can't see pixels). |
+| `CACHE_LOOKUP` | `{"llm_facade": False, "translate": True, "summarize": False}` | Per-source cache-by-prompt toggle, honoured by the **default** cache policy (latest `success` row with identical prompt+system_prompt+source **and matching provider + resolved model + model size**; multimodal rows are excluded — the text key can't see pixels). |
 | `CACHE_TTL` | `604800` | Cache window in seconds; expired rows are ignored (default policy). |
 | `CACHE_POLICY` | `"stapel_agent.cache.PromptLogCachePolicy"` | Dotted path to a `CachePolicy` subclass — in `import_strings`, instantiated per call. See "Cache policy" below. |
 
@@ -141,6 +141,17 @@ multimodal ledger rows — identical text over different pixels never collides
 in either direction. The ledger row records `metadata.images = {count,
 kinds}` — never bytes.
 
+**Image size limits are not enforced in this module (by design).** A
+too-large image is not rejected locally — it is sent to the vendor, which
+returns its own 4xx, mapped to a clean `status: "failure"` (no crash, no
+bytes in the ledger). The trade-off: the error is vendor-worded, not
+localized, and the upstream bandwidth is spent. For HTTP callers the
+effective ceiling is Django's `DATA_UPLOAD_MAX_MEMORY_SIZE` (2.5 MB
+default); comm and in-process `ImageRef(data=...)` callers have no cap. A
+host that wants a hard local limit should gate before calling — e.g. a
+provider subclass that checks each ref's byte size against the vendor's
+documented maximum and raises `ProviderError`.
+
 ### STT providers — a second open registry, same merge semantics
 
 `stt/__init__.py` mirrors the LLM registry exactly. Three layers, later wins
@@ -197,8 +208,12 @@ class GigaAmProvider(SttProvider):
     def transcribe(self, *, audio, language=None, diarization=False,
                    timeout_seconds=None):
         payload = audio.read_bytes(provider=self.name)   # any ref kind
+        # `timeout_seconds is None` → default; never `or <default>` — an
+        # explicit 0 must stay 0 (the request boundary rejects non-positive
+        # values with `minimum: 1`, so 0/negatives never reach here).
+        timeout = 1800 if timeout_seconds is None else timeout_seconds
         resp = requests.post("http://gigaam:8080/transcribe",
-                             files={"file": payload}, timeout=timeout_seconds or 1800)
+                             files={"file": payload}, timeout=timeout)
         if resp.status_code == 429 or resp.status_code >= 500:
             raise RetryableTranscriptionError(f"gigaam {resp.status_code}",
                                               provider=self.name)
@@ -300,14 +315,20 @@ default (`CACHE_LOOKUP`).
 `STAPEL_AGENT["CACHE_POLICY"]` points at a `stapel_agent.cache.CachePolicy`
 subclass (instantiated per call). The default `PromptLogCachePolicy` implements the
 stock behaviour: `should_cache(source)` reads `CACHE_LOOKUP`, `lookup()` returns the
-latest successful `PromptLog` response with identical prompt+system_prompt+source
-within `CACHE_TTL`. Swap it for Redis or a no-op without forking:
+latest successful `PromptLog` response with identical
+prompt+system_prompt+source **and the same provider + resolved model + model
+size** within `CACHE_TTL`. Swap it for Redis or a no-op without forking:
 
 | Method | Signature | Contract |
 |---|---|---|
 | `should_cache` | `(source: str) -> bool` | Whether this source consults the cache at all. |
-| `lookup` | `(prompt, system_prompt, source) -> str \| None` | Cached raw response text, or None on a miss. |
-| `store` | `(prompt, system_prompt, source, response) -> None` | Optional (no-op default): persist a success for policies with external storage — the default policy needs nothing here because the PromptLog ledger row IS its storage. |
+| `lookup` | `(prompt, system_prompt, source, *, provider, model, model_size) -> str \| None` | Cached raw response text, or None on a miss. `provider`/`model` (resolved `MODELS[model_size]`)/`model_size` are part of the key — a "small" answer must never satisfy a "large" request, an explicit `provider=` must not collide with the default, and a model-version bump in `MODELS` must invalidate old rows. |
+| `store` | `(prompt, system_prompt, source, response, *, provider, model, model_size) -> None` | Optional (no-op default): persist a success for policies with external storage — the default policy needs nothing here because the PromptLog ledger row IS its storage. |
+
+> **Breaking in 0.2.0:** `lookup`/`store` gained the keyword-only
+> `provider`/`model`/`model_size` params. A custom policy must add them to
+> its overrides (they are required, not defaulted — a mismatch is a loud
+> `TypeError`, never a silent cross-model cache hit). See CHANGELOG.
 
 The `PromptLog` ledger row is written for every provider call **regardless of the
 policy** — caching is a read seam; token accounting is not optional.
@@ -331,7 +352,7 @@ serializer, remount the URL — HTTP method bodies stay untouched.
 | `LlmTranslateView` | `api/llm/translate` (`llm-translate`) | `TranslateRequestSerializer` (maps wire key `"from"` → `from_lang`) | `TranslateResponseSerializer` (`TranslateResponse` dataclass; None keys dropped after serialization — absent keys stay absent on the wire, per the iron contract) |
 | `LlmTranscribeView` | `api/llm/transcribe` (`llm-transcribe`) | `TranscribeRequestSerializer` | — (plain contract dict, see below) |
 | `LlmSummarizeView` | `api/llm/summarize` (`llm-summarize`) | `SummarizeRequestSerializer` (400 on not-exactly-one of text/transcript, 400 on a bad model size) | `SummarizeResponseSerializer` (`SummarizeResponse` dataclass; None keys dropped) |
-| `LlmGenerateImageView` | `api/llm/generate-image` (`llm-generate-image`) | `GenerateImageRequestSerializer` (400 on `n` outside 1-10) | — (plain contract dict, see below) |
+| `LlmGenerateImageView` | `api/llm/generate-image` (`llm-generate-image`) | `GenerateImageRequestSerializer` (400 on `n` outside 1-10 or `timeout_seconds` < 1) | — (plain contract dict, see below) |
 
 `LlmCompleteView`, `LlmTranscribeView` and `LlmGenerateImageView` deliberately
 have **no response serializer**: complete's `result` is arbitrary JSON — an
@@ -357,9 +378,9 @@ microservices — same code). JSON Schemas live in `schemas/functions/`.
 |---|---|---|
 | `llm.complete` | `{prompt, model: "small"\|"medium"\|"large", system_prompt?, provider?, images?: [{url} \| {data_b64, mime?}]}` — image entries are url or base64 only (schema-enforced oneOf; a raw `data` key is rejected) | Same dict as the HTTP response: `{status, result?, comment?, reason?, usage?}` |
 | `llm.translate` | `{from_lang, to, entries: {key: text}}` (comm uses `from_lang`, not the HTTP wire key `from`) | `{status, result?: {key: translated}, reason?}` |
-| `llm.transcribe` | `{audio_url, language?, diarization?, provider?, timeout_seconds?}` — **URLs only, never raw audio bytes** (`additionalProperties: false` rejects `data`/`path` keys); byte/path refs exist only for in-process `services.transcribe(AudioRef(...))` callers | `{status, transcript?: NormalizedTranscript, provider_used?, fallback_used?, reason?}` |
+| `llm.transcribe` | `{audio_url, language?, diarization?, provider?, timeout_seconds? (>= 1)}` — **URLs only, never raw audio bytes** (`additionalProperties: false` rejects `data`/`path` keys); byte/path refs exist only for in-process `services.transcribe(AudioRef(...))` callers | `{status, transcript?: NormalizedTranscript, provider_used?, fallback_used?, reason?}` |
 | `llm.summarize` | `{text \| transcript: NormalizedTranscript-dict (exactly one, schema-enforced oneOf), language?, model?, provider?}` | `{status, summary?, usage?, reason?}` |
-| `llm.generate_image` | `{prompt, size?, n? (1-10), provider?}` | `{status, images?: [{url? \| data_b64?, mime}], provider_used?, reason?}` — raw results; storage is the caller's job |
+| `llm.generate_image` | `{prompt, size?, n? (1-10), provider?, timeout_seconds? (>= 1)}` | `{status, images?: [{url? \| data_b64?, mime}], provider_used?, reason?}` — raw results; storage is the caller's job |
 
 ## Anti-patterns
 

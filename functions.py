@@ -148,6 +148,7 @@ TRANSCRIBE_SCHEMA = {
         },
         "timeout_seconds": {
             "type": "integer",
+            "minimum": 1,
             "description": "Hard cap on one provider's submit+poll cycle.",
         },
     },
@@ -243,6 +244,11 @@ GENERATE_IMAGE_SCHEMA = {
             "description": "Image provider name from "
             "STAPEL_AGENT['IMAGE_PROVIDERS'].",
         },
+        "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Hard cap on the generation request.",
+        },
     },
     "required": ["prompt"],
     "additionalProperties": False,
@@ -255,10 +261,11 @@ def llm_generate_image(payload: dict) -> dict:
     ``POST api/llm/generate-image``.
 
     Payload: ``{"prompt": str, "size"?: str, "n"?: int, "provider"?:
-    str}``. Returns ``{"status": "ok", "images": [{"url"? | "data_b64"?,
-    "mime"}], "provider_used": str}`` or ``{"status": "failure",
-    "reason": str}``. Storing results into CDN/asset libraries is the
-    caller's job — this function returns raw provider output.
+    str, "timeout_seconds"?: int}``. Returns ``{"status": "ok", "images":
+    [{"url"? | "data_b64"?, "mime"}], "provider_used": str}`` or
+    ``{"status": "failure", "reason": str}``. Storing results into
+    CDN/asset libraries is the caller's job — this function returns raw
+    provider output.
     """
     from . import services
 
@@ -267,4 +274,5 @@ def llm_generate_image(payload: dict) -> dict:
         size=payload.get("size") or "1024x1024",
         n=int(payload.get("n") or 1),
         provider=payload.get("provider"),
+        timeout_seconds=payload.get("timeout_seconds"),
     )

@@ -11,6 +11,7 @@ ERR_400_INVALID_MODEL_SIZE = "error.400.invalid_model_size"
 ERR_400_SUMMARIZE_INPUT = "error.400.summarize_input"
 ERR_400_INVALID_IMAGE = "error.400.invalid_image"
 ERR_400_INVALID_IMAGE_COUNT = "error.400.invalid_image_count"
+ERR_400_INVALID_TIMEOUT = "error.400.invalid_timeout"
 
 AGENT_ERRORS = {
     ERR_400_INVALID_MODEL_SIZE: "Model must be one of: small, medium, large",
@@ -19,6 +20,7 @@ AGENT_ERRORS = {
         "Each image needs exactly one of: url, data_b64 (valid base64)"
     ),
     ERR_400_INVALID_IMAGE_COUNT: "n must be between 1 and 10",
+    ERR_400_INVALID_TIMEOUT: "timeout_seconds must be a positive integer (>= 1)",
 }
 
 register_service_errors(AGENT_ERRORS)

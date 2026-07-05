@@ -176,9 +176,22 @@ class TestCachePolicySeam:
     def test_custom_policy_is_used_for_lookup_and_store(self, custom_cache):
         services.complete("p", "small", source="llm_facade")
         # llm_facade is cached because the custom policy says so —
-        # CACHE_LOOKUP no longer applies once the policy is swapped.
-        assert custom_cache.lookups == [("p", None, "llm_facade")]
-        assert custom_cache.stores == [("p", None, "llm_facade", '{"answer": 42}')]
+        # CACHE_LOOKUP no longer applies once the policy is swapped. The
+        # key now carries provider + resolved model + size.
+        assert custom_cache.lookups == [
+            ("p", None, "llm_facade", "fake", "claude-haiku-4-5-20251001", "small")
+        ]
+        assert custom_cache.stores == [
+            (
+                "p",
+                None,
+                "llm_facade",
+                '{"answer": 42}',
+                "fake",
+                "claude-haiku-4-5-20251001",
+                "small",
+            )
+        ]
 
     def test_custom_policy_hit_skips_provider(self, custom_cache):
         custom_cache.entries[("p", None, "llm_facade")] = '{"cached": true}'

@@ -57,12 +57,15 @@ class OpenAIImagesProvider(ImageGenProvider):
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
+        timeout = (
+            DEFAULT_TIMEOUT_S if timeout_seconds is None else int(timeout_seconds)
+        )
         try:
             resp = requests.post(
                 f"{base_url}/images/generations",
                 json=body,
                 headers=headers,
-                timeout=int(timeout_seconds or DEFAULT_TIMEOUT_S),
+                timeout=timeout,
             )
         except requests.Timeout as exc:
             raise RetryableImageGenError(

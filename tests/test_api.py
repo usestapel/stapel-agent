@@ -274,6 +274,18 @@ class TestTranscribeEndpoint:
         assert resp.status_code == 400
         assert fake_stt.calls == []
 
+    def test_non_positive_timeout_is_400_not_500(self, api_client, fake_stt):
+        # 0 and negatives are unexpressible to `requests` — reject at the
+        # boundary so it stays a 400, never a 500 down in urllib3.
+        for bad in (0, -1):
+            resp = self._post(
+                api_client,
+                {"audio_url": "https://x/a.mp3", "timeout_seconds": bad},
+                HTTP_X_API_KEY="test-service-key",
+            )
+            assert resp.status_code == 400, bad
+        assert fake_stt.calls == []
+
 
 @pytest.mark.django_db
 class TestSummarizeEndpoint:

@@ -52,7 +52,11 @@ class ElevenLabsProvider(SttProvider):
                 "STAPEL_AGENT['ELEVENLABS_API_KEY'] is not set", provider=self.name
             )
         audio.require_url(provider=self.name)
-        timeout = int(timeout_seconds or agent_settings.STT_TIMEOUT)
+        timeout = (
+            int(agent_settings.STT_TIMEOUT)
+            if timeout_seconds is None
+            else int(timeout_seconds)
+        )
         payload = audio.read_bytes(provider=self.name, timeout=min(timeout, 600))
 
         data = {

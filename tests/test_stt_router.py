@@ -159,6 +159,25 @@ class TestTranscribeService:
         assert result["provider_used"] == "fake-stt"
         assert result["fallback_used"] is True
 
+    def test_unknown_name_in_chain_is_skipped_not_fatal(self, settings, fake_stt):
+        # An unregistered name (the docstring's own "gigaam" example) is a
+        # config error, not bad audio — the chain must walk past it to the
+        # next valid provider, exactly like an unloadable one.
+        settings.STAPEL_AGENT = {
+            **settings.STAPEL_AGENT,
+            "STT_LANGUAGE_ROUTES": {"ru": ["gigaam", "fake-stt-2"]},
+        }
+        result = services.transcribe(AUDIO, language="ru")
+        assert result["status"] == "ok"
+        assert result["provider_used"] == "fake-stt-2"
+        assert result["fallback_used"] is True
+        assert len(SecondSttProvider.calls) == 1
+        log = PromptLog.objects.get()
+        assert [a["error_kind"] for a in log.metadata["attempts"]] == [
+            "unknown",
+            None,
+        ]
+
     def test_language_route_drives_provider_choice(self, settings, fake_stt):
         settings.STAPEL_AGENT = {
             **settings.STAPEL_AGENT,
