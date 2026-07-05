@@ -4,21 +4,35 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-agent"
-version = "0.2.0"
+version = "0.2.1"
 description = "LLM facade Django app for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
 keywords = ["django", "stapel", "llm", "anthropic", "openai", "translation"]
 classifiers = [
+    "Development Status :: 4 - Beta",
     "Framework :: Django",
     "Framework :: Django :: 5.2",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
 ]
 dependencies = [
     "stapel-core>=0.3.0,<0.4",
 ]
+
+[project.urls]
+Homepage = "https://github.com/usestapel/stapel-agent"
+Repository = "https://github.com/usestapel/stapel-agent"
+Documentation = "https://github.com/usestapel/stapel-agent#readme"
+Changelog = "https://github.com/usestapel/stapel-agent/blob/main/CHANGELOG.md"
+Issues = "https://github.com/usestapel/stapel-agent/issues"
 
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.34"]
@@ -26,10 +40,18 @@ all = ["stapel-agent[anthropic]"]
 
 [tool.setuptools]
 package-dir = {"stapel_agent" = "."}
-packages = ["stapel_agent", "stapel_agent.images", "stapel_agent.images.providers", "stapel_agent.migrations", "stapel_agent.providers", "stapel_agent.stt", "stapel_agent.stt.providers", "stapel_agent.tests"]
+packages = ["stapel_agent", "stapel_agent.images", "stapel_agent.images.providers", "stapel_agent.migrations", "stapel_agent.providers", "stapel_agent.stt", "stapel_agent.stt.providers"]
 
 [tool.setuptools.package-data]
 stapel_agent = ["py.typed", "migrations/*.py", "schemas/**/*.json", "migrations/**/*.py"]
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+# Single source for the git hooks and CI (they pass the same flags on the CLI).
+select = ["E", "F", "W"]
+ignore = ["E501"]
 
 [tool.pytest.ini_options]
 django_find_project = false
