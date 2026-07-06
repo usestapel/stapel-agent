@@ -382,6 +382,25 @@ microservices — same code). JSON Schemas live in `schemas/functions/`.
 | `llm.summarize` | `{text \| transcript: NormalizedTranscript-dict (exactly one, schema-enforced oneOf), language?, model?, provider?}` | `{status, summary?, usage?, reason?}` |
 | `llm.generate_image` | `{prompt, size?, n? (1-10), provider?, timeout_seconds? (>= 1)}` | `{status, images?: [{url? \| data_b64?, mime}], provider_used?, reason?}` — raw results; storage is the caller's job |
 
+### Admin categories (`stapel_core.access`, admin-suite AS-5)
+
+`PromptLog` is decorated `@access.ops` and its `ModelAdmin` (`admin.py`)
+subclasses `stapel_core.django.admin.base.StapelModelAdmin`: it is the
+doc's own `NotificationLog`-shaped delivery/audit ledger, written exclusively
+by the `services.py` completion pipeline (`services.complete`/`transcribe`)
+— there is no staff add/change/delete workflow through the admin for `ops`
+to break. `StapelModelAdmin` now enforces that read-only contract (view
+requires HIGH clearance; add/change/delete forbidden for everyone including
+the superuser) instead of the three hand-rolled `has_*_permission`
+overrides the admin used before this rollout.
+
+No `@access.secret` model exists in this repo. Every LLM/STT/image-gen API
+key (`ANTHROPIC_API_KEY`, `OPENAI_COMPAT_API_KEY`, `ELEVENLABS_API_KEY`,
+`ASSEMBLYAI_API_KEY`, `WHISPER_API_KEY`, `IMAGES_API_KEY`, ...) is read
+lazily from `agent_settings`/Django settings/env at call time (see "Settings"
+above) — none is ever persisted to a model field, so there is no credential
+carrier to mask.
+
 ## Anti-patterns
 
 - **Don't put subscription/tp keys here — PAYG only.** Per the design doc

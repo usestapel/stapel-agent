@@ -1,13 +1,17 @@
 from django.contrib import admin
 
+from stapel_core.django.admin.base import StapelModelAdmin
+
 from .models import PromptLog
 
 
 @admin.register(PromptLog)
-class PromptLogAdmin(admin.ModelAdmin):
-    """Read-only: PromptLog is an immutable ledger — rows are written by
-    the service layer only (editing one would corrupt token accounting
-    and could poison the prompt cache)."""
+class PromptLogAdmin(StapelModelAdmin):
+    """Read-only: PromptLog is an ``@access.ops`` immutable ledger — rows
+    are written by the service layer only (editing one would corrupt token
+    accounting and could poison the prompt cache). ``StapelModelAdmin``
+    reads the ``ops`` declaration and forbids add/change/delete for
+    everyone, including the superuser."""
 
     list_display = [
         "created_at",
@@ -24,12 +28,3 @@ class PromptLogAdmin(admin.ModelAdmin):
     search_fields = ["prompt", "user_id", "model"]
     date_hierarchy = "created_at"
     ordering = ["-created_at"]
-
-    def has_add_permission(self, request):
-        return False
-
-    def has_change_permission(self, request, obj=None):
-        return False
-
-    def has_delete_permission(self, request, obj=None):
-        return False

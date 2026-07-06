@@ -3,6 +3,18 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+- Admin-suite AS-5: decorated `PromptLog` `@access.ops` (a delivery/audit
+  ledger written exclusively by the `services.py` completion pipeline — no
+  staff add/change/delete workflow through the admin) and swapped
+  `PromptLogAdmin`'s base class to `stapel_core.django.admin.base.StapelModelAdmin`,
+  which now enforces the read-only contract instead of the three hand-rolled
+  `has_*_permission` overrides. No model in this repo carries credential
+  material, so no `@access.secret` classification applies (every provider
+  API key is read lazily from settings, never persisted).
+
 ## [0.2.2] - 2026-07-06
 
 ### Changed

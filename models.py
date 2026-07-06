@@ -12,6 +12,8 @@ import uuid
 
 from django.db import models
 
+from stapel_core.access import access
+
 
 class PromptSource(models.TextChoices):
     LLM_FACADE = "llm_facade", "LLM Facade"
@@ -29,8 +31,15 @@ class PromptStatus(models.TextChoices):
     ERROR = "error", "Error"
 
 
+@access.ops
 class PromptLog(models.Model):
-    """Immutable log of one LLM completion attempt."""
+    """Immutable log of one LLM completion attempt.
+
+    ``@access.ops`` (admin-suite AS-5): a delivery/audit-log-shaped ledger
+    written exclusively by the ``services.py`` completion pipeline — nobody
+    is expected to add/change/delete a row through the admin (enforced
+    below by ``StapelModelAdmin`` reading this declaration).
+    """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     source = models.CharField(
