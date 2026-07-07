@@ -1,4 +1,4 @@
-"""JSON extraction from raw LLM text (port of the legacy agent service's llm.service.ts).
+"""JSON extraction from raw LLM text.
 
 LLMs asked for JSON still wrap it in prose or markdown fences; these
 helpers recover the payload and keep the surrounding text as *comment*.
@@ -30,8 +30,7 @@ def _comment(trimmed: str, match: re.Match) -> str | None:
 def parse_json_response(response: str) -> tuple[object | None, str | None]:
     """Return ``(result, comment)`` — parsed JSON and the text around it.
 
-    Strategies, in order (same as the legacy agent service's ``parseJsonResponse``):
-    direct JSON → ```json fenced block``` → an object anywhere → an array
+    Strategies, in order: direct JSON → ```json fenced block``` → an object anywhere → an array
     anywhere. ``result`` is None when nothing parses; the raw text then
     survives as ``comment``.
     """
@@ -70,8 +69,8 @@ def parse_json_response(response: str) -> tuple[object | None, str | None]:
 def parse_translation_response(response: str) -> dict:
     """Parse a ``{key: translated}`` mapping out of raw LLM text.
 
-    Port of the legacy agent service's ``parseTranslationResponse``: prefer a fenced
-    block, else the first-to-last-brace object, else the whole string.
+    Prefers a fenced block, else the first-to-last-brace object, else the
+    whole string.
     Raises ValueError when the result is not a JSON object.
     """
     text = response or ""

@@ -7,7 +7,7 @@
 
 Part of the [Stapel framework](https://github.com/usestapel) — composable Django apps for building production-grade platforms.
 
-Python port of the `the legacy agent service` NestJS service. Same HTTP paths and contracts
+Python port of a prior NestJS service. Same HTTP paths and contracts
 (`stapel-translate`'s `AgentProvider` keeps working unchanged), plus a comm
 surface so monolith deployments call it in-process without HTTP.
 
@@ -31,7 +31,7 @@ STAPEL_AGENT = {
     "ANTHROPIC_API_KEY": "sk-ant-...",
 }
 
-# urls.py — paths stay 1:1 with the legacy agent service under the agent/ mount
+# urls.py — mount the app under agent/
 urlpatterns = [
     ...
     path("agent/", include("stapel_agent.urls")),
@@ -73,7 +73,7 @@ call("llm.summarize", {"transcript": result["transcript"]})
 call("llm.generate_image", {"prompt": "a cat", "n": 2})
 ```
 
-Responses follow the the legacy agent service contract: LLM failures are **HTTP 200** with
+LLM failures are **HTTP 200** with
 `{"status": "failure", "reason": ...}` — 4xx/5xx are reserved for request
 validation and auth. Successful completions return the parsed JSON in
 `result`, prose around it in `comment`, and snake_case `usage`
@@ -136,7 +136,7 @@ retry on another provider.
 **No CLI in any default path.** `claude-code` is strictly opt-in: it exists for
 hosts that ship the Claude Code CLI in their image and want the CLI to handle
 its own authentication (`provider: "claude-code"` per request, or
-`DEFAULT_PROVIDER` override). Unlike the legacy agent service there is no OAuth credential
+`DEFAULT_PROVIDER` override). There is no OAuth credential
 reading and no background token-refresh — that plumbing was deliberately
 dropped.
 

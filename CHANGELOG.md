@@ -146,10 +146,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   audio bytes), backed by a second open registry with the same merge
   semantics as the LLM one: `STAPEL_AGENT["STT_PROVIDERS"]` overlay over
   `stt.BUILTIN_STT_PROVIDERS`, `None`/`""` removes a name,
-  `register_stt_provider()` at runtime. Built-in adapters ported from
-  the legacy recordings service `recordings/stt/`: `whisper-http` (OpenAI Whisper API
-  or self-hosted faster-whisper — accepts url/path/bytes refs, the
-  generalization the source lacked), `elevenlabs` (Scribe, diarization),
+  `register_stt_provider()` at runtime. Built-in adapters:
+  `whisper-http` (OpenAI Whisper API or self-hosted faster-whisper —
+  accepts url/path/bytes refs), `elevenlabs` (Scribe, diarization),
   `assemblyai` (async submit+poll, diarization). App-layer engines
   (GigaAM, ...) subclass `SttProvider` — see the MODULE.md worked
   example.
@@ -157,8 +156,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (pinned — no fallback) > `STT_LANGUAGE_ROUTES[lang]` matrix >
   `DEFAULT_STT_PROVIDER` + `STT_FALLBACK_CHAIN`. The chain advances on
   `RetryableTranscriptionError` only (429/5xx/timeouts); fatal
-  `TranscriptionError` (bad audio, auth) never falls back — ported
-  intent from the the legacy recordings service error taxonomy.
+  `TranscriptionError` (bad audio, auth) never falls back.
 - **Normalized transcript schema** (`stt/base.py`, Django-free):
   `NormalizedTranscript`/`NormalizedUtterance`/`NormalizedWord` with
   word-level timings, speakers and the untouched provider payload in
@@ -170,8 +168,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   chunk, map-reduce (chunk summaries + merge pass) otherwise, optional
   target `language`. `summary.py` renders transcripts as timestamped
   Markdown and chunks with `seg_NNNN` → start-ms anchors
-  (click-to-timestamp), ported from the legacy recordings service
-  `transcript_schema.py`.
+  (click-to-timestamp).
 - **Ledger coverage for the new sources**: every transcription writes a
   `PromptLog` row (`source=transcribe`, `model` = STT provider name,
   token columns NULL, fallback walk in `metadata.attempts`); every
@@ -190,8 +187,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.1.0] - 2026-07-04
 
-Initial release — Python port of the `the legacy agent service` NestJS service (the
-legacy LLM facade), per the design fixed in the Stapel monorepo's
+Initial release — Python port of a prior NestJS service (the legacy LLM
+facade), per the design fixed in the Stapel monorepo's
 `docs/agent-service-and-core-ts.md` §2.
 
 ### Added
@@ -222,7 +219,7 @@ legacy LLM facade), per the design fixed in the Stapel monorepo's
   `TranslateResponse` dataclass + serializer on translate.
   `api/llm/complete` deliberately keeps a plain contract dict — its
   `result` is arbitrary JSON (see MODULE.md).
-- **HTTP surface, 1:1 with the legacy agent service**: `POST api/llm/complete` and
+- **HTTP surface**: `POST api/llm/complete` and
   `POST api/llm/translate` (hosts mount under `agent/`), same request/
   response contracts — `stapel-translate`'s `AgentProvider` keeps working
   unchanged. LLM failures stay HTTP 200 with `status: "failure"`; the
@@ -257,7 +254,7 @@ legacy LLM facade), per the design fixed in the Stapel monorepo's
   `LlmProvider`, `ProviderResult`) — importing the package pulls in no
   Django; `py.typed` marker.
 
-### Deliberately dropped from the legacy agent service
+### Deliberately dropped from the source service
 - The `claude` module (execute/stream proto-harness) and the `terminal`
   module (node-pty shell) — out of scope for a Django library.
 - The ApiKey CRUD/entity — service auth is stapel-core's

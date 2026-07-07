@@ -18,7 +18,7 @@ class ProviderError(Exception):
     """Raised by a provider when a completion cannot be produced.
 
     The service layer converts it into a ``status: "failure"`` response
-    (HTTP 200 — the the legacy agent service contract) and an ``error`` PromptLog row.
+    (HTTP 200) and an ``error`` PromptLog row.
     """
 
 

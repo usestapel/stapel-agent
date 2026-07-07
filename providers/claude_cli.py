@@ -3,8 +3,8 @@
 Spawns ``claude -p <prompt> --model <model> --output-format json`` for
 hosts that ship the CLI in their image and want it to handle its own
 authentication. No OAuth credential reading, no token-refresh hacks —
-the CLI owns its auth (this deliberately drops the legacy agent service's
-``~/.claude/.credentials.json`` plumbing).
+the CLI owns its auth (``~/.claude/.credentials.json`` plumbing is
+deliberately not read here).
 """
 from __future__ import annotations
 
@@ -55,10 +55,9 @@ class ClaudeCodeCLIProvider(LlmProvider):
 
         stdout = (proc.stdout or "").strip()
         try:
-            # Fields per the legacy agent service's ClaudeCodeResult interface.
             result = json.loads(stdout)
         except ValueError:
-            # Non-JSON output — treat as plain text (the legacy agent service behaviour).
+            # Non-JSON output — treat as plain text.
             return ProviderResult(text=stdout)
         if not isinstance(result, dict):
             return ProviderResult(text=stdout)

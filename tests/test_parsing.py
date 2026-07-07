@@ -1,4 +1,4 @@
-"""Direct unit tests for parsing.py (port of the legacy agent service's JSON extraction)."""
+"""Direct unit tests for parsing.py's JSON extraction."""
 import pytest
 
 from stapel_agent.parsing import parse_json_response, parse_translation_response
@@ -55,7 +55,7 @@ class TestParseJsonResponse:
 
     def test_leading_brace_invalid_falls_back_to_inner_object(self):
         # Starts with "{" but is not valid JSON as a whole; the greedy
-        # object regex then fails too (same as the legacy agent service) — no result.
+        # object regex then fails too — no result.
         result, comment = parse_json_response("{broken")
         assert result is None
         assert comment == "{broken"

@@ -1,9 +1,8 @@
-"""DRF views for the agent service — path-compatible with the legacy agent service.
+"""DRF views for the agent service.
 
 Both endpoints are service-to-service surfaces (``IsServiceRequest |
-IsStaffUser``, exactly like stapel-billing's internal debit view) and
-keep the iron contract: LLM failures are HTTP 200 with
-``status: "failure"``, never 5xx.
+IsStaffUser``, exactly like stapel-billing's internal debit view). LLM
+failures are HTTP 200 with ``status: "failure"``, never 5xx.
 """
 
 import logging
@@ -117,8 +116,7 @@ class LlmTranslateView(SerializerSeamMixin, APIView):
             result=payload.get("result"),
             reason=payload.get("reason"),
         )
-        # Absent keys stay absent on the wire (iron contract): drop nulls
-        # after serialization.
+        # Absent keys stay absent on the wire: drop nulls after serialization.
         body = {k: v for k, v in dict(response_cls(dto).data).items() if v is not None}
         return StapelResponse(body)
 

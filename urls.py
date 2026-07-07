@@ -1,7 +1,7 @@
 """URL configuration for the agent app.
 
-Paths are kept 1:1 with the legacy agent service (``api/llm/complete`` /
-``api/llm/translate``); host projects mount the app under ``agent/``::
+Paths: ``api/llm/complete`` / ``api/llm/translate``; host projects mount
+the app under ``agent/``::
 
     path("agent/", include("stapel_agent.urls"))
 

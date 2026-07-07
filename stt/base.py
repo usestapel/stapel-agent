@@ -1,7 +1,7 @@
 """STT provider seam — normalized transcript schema, AudioRef, ABC, errors.
 
-Ported from the legacy recordings service ``recordings/stt/base.py`` (battle-tested in
-the convert→transcribe→diarize pipeline), generalized in two ways:
+Battle-tested in the convert→transcribe→diarize pipeline, generalized in
+two ways:
 
 - **AudioRef** replaces the bare ``audio_url``: exactly one of ``url`` /
   ``path`` / ``data`` (bytes). Cloud adapters that need a fetchable URL
@@ -117,8 +117,7 @@ def transcript_from_dict(data: dict) -> NormalizedTranscript:
 
 
 def utterances_from_words(words: list[NormalizedWord]) -> list[NormalizedUtterance]:
-    """Group consecutive same-speaker words into utterances (ported from
-    the legacy recordings service ``transcript_schema._utterances_from_words``)."""
+    """Group consecutive same-speaker words into utterances."""
     if not words:
         return []
     grouped: list[NormalizedUtterance] = []

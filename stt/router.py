@@ -1,6 +1,5 @@
-"""Language-aware STT provider routing (ported from the legacy recordings service
-``recordings/stt/router.py``, with the hardcoded language matrix replaced
-by the ``STT_LANGUAGE_ROUTES`` setting).
+"""Language-aware STT provider routing (the hardcoded language matrix is
+replaced by the ``STT_LANGUAGE_ROUTES`` setting).
 
 ``select_chain`` returns provider *names* in try-order. The service walks
 the chain on failure — fallback kicks in only on

@@ -1,8 +1,8 @@
 """Custom error keys for the agent service.
 
 Only *request validation* problems are error-key responses (HTTP 400).
-LLM/provider failures are NOT errors at the HTTP layer — the the legacy agent service
-contract returns HTTP 200 with ``{"status": "failure", "reason": ...}``.
+LLM/provider failures are NOT errors at the HTTP layer — they return HTTP 200
+with ``{"status": "failure", "reason": ...}``.
 """
 
 from stapel_core.django.api.errors import ErrorKeysView, register_service_errors

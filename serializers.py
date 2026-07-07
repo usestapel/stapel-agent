@@ -59,8 +59,8 @@ class CompleteRequestSerializer(StapelDataclassSerializer):
 
 
 class TranslateRequestSerializer(StapelDataclassSerializer):
-    """Accepts the the legacy agent service wire format where the source language key is
-    ``from`` — a Python keyword, mapped explicitly onto ``from_lang``."""
+    """Accepts the wire format where the source language key is ``from``
+    — a Python keyword, mapped explicitly onto ``from_lang``."""
 
     class Meta:
         dataclass = TranslateRequest

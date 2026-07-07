@@ -46,7 +46,7 @@ class TranslateRequest:
 
 @dataclass
 class TranslateResponse:
-    """Key-value translation response (the legacy agent service contract).
+    """Key-value translation response.
 
     Attributes:
         status: "ok" or "failure".

@@ -1,4 +1,4 @@
-"""HTTP surface tests — paths, auth and the the legacy agent service response contract."""
+"""HTTP surface tests — paths, auth and the response contract."""
 import pytest
 
 from stapel_agent.models import PromptLog, PromptStatus
@@ -308,7 +308,7 @@ class TestSummarizeEndpoint:
         resp = self._post(api_client, HTTP_X_API_KEY="test-service-key")
         assert resp.status_code == 200, resp.content
         # None keys (reason) are dropped after serialization — absent on
-        # the wire, per the iron contract.
+        # the wire.
         assert resp.json() == {
             "status": "ok",
             "summary": "## Summary",

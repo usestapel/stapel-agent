@@ -1,7 +1,6 @@
 """Summarization prep — Markdown rendering and token-budget chunking.
 
-Ported from the legacy recordings service ``recordings/transcript_schema.py``
-(``render_markdown`` / ``build_summary_input``), retargeted at the
+``render_markdown`` / ``build_summary_input`` are retargeted at the
 canonical ``NormalizedTranscript`` this package ships: utterances play
 the role of segments and get stable ``seg_NNNN`` anchor ids (→ start
 milliseconds) for click-to-timestamp in consuming UIs.

@@ -5,8 +5,7 @@ faster-whisper/whisper.cpp servers speaking the same dialect
 (``POST {base}/audio/transcriptions``, multipart, ``verbose_json``).
 
 Upload-capable: accepts any AudioRef kind (url is downloaded first,
-path is read, bytes go straight in) — this is the generalization the
-the legacy recordings service source lacked and the reason client-project's local
+path is read, bytes go straight in) — this is the reason a local
 faster-whisper works through the same seam.
 
 Settings (all read lazily): ``WHISPER_BASE_URL`` (required),

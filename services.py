@@ -1,9 +1,8 @@
 """LLM facade services — completion, translation, cache and the PromptLog.
 
-Return shape follows the the legacy agent service contract: provider failures are
-``{"status": "failure", "reason": ...}`` dicts (HTTP 200 at the view
-layer), never exceptions — callers like stapel-translate's AgentProvider
-branch on ``status``.
+Provider failures are ``{"status": "failure", "reason": ...}`` dicts
+(HTTP 200 at the view layer), never exceptions — callers like
+stapel-translate's AgentProvider branch on ``status``.
 """
 from __future__ import annotations
 
@@ -22,7 +21,6 @@ from .providers.base import LlmProvider, ProviderError, ProviderTimeout
 
 logger = logging.getLogger(__name__)
 
-# Ported verbatim from the legacy agent service's llm.controller.ts.
 JSON_API_SYSTEM_PROMPT = (
     "You are a JSON API. Output ONLY valid JSON starting with { and ending "
     "with }. Follow the instructions from prompt and return json with "
@@ -257,7 +255,7 @@ def translate(
     user_id: str | None = None,
     skip_cache: bool = False,
 ) -> dict:
-    """Translate a ``{key: text}`` mapping — the legacy agent service's translate() flow.
+    """Translate a ``{key: text}`` mapping.
 
     Empty *entries* short-circuit to ``{"status": "ok", "result": {}}``
     without touching the provider. The cache is checked here (source
@@ -270,7 +268,6 @@ def translate(
     from_label = (
         "the source language (auto-detect)" if from_lang == "auto" else from_lang
     )
-    # Ported verbatim from the legacy agent service's llm.service.ts translate().
     system_prompt = (
         f"You are a professional translator. Translate the given JSON values "
         f"from {from_label} to {to}.\n"
@@ -459,7 +456,7 @@ def transcribe(
             continue  # walk the fallback chain
         except TranscriptionError as exc:
             # Fatal — the input itself is bad; the next provider would
-            # fail on it too. No fallback (ported the legacy recordings service intent).
+            # fail on it too. No fallback.
             attempts.append({"provider": name, "error_kind": "fatal", "error": str(exc)[:500]})
             _log(PromptStatus.ERROR, provider_used=name, response=None, error=str(exc))
             return {"status": "failure", "reason": str(exc)}

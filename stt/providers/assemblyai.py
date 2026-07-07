@@ -1,4 +1,4 @@
-"""AssemblyAI adapter (ported from the legacy recordings service).
+"""AssemblyAI adapter.
 
 Unlike Scribe (synchronous), AssemblyAI is async:
 

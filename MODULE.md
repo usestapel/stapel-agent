@@ -9,23 +9,24 @@ registries). Everything below is verifiable against the code in this repo.
 
 - Package: `stapel-agent` (PyPI), Python package `stapel_agent`, Django app label `agent`.
 - Depends on `stapel-core` only (plus DRF, drf-spectacular; the `anthropic` SDK is optional at runtime).
-- Provenance: Python port of the `the legacy agent service` NestJS service (design fixed in
+- Provenance: Python port of a prior NestJS service (design fixed in
   `docs/agent-service-and-core-ts.md` §2). HTTP paths/contracts are kept 1:1 —
   `stapel-translate`'s `AgentProvider` already POSTs to them. The STT/summarize
-  surfaces port `the legacy recordings service`' `recordings/stt/` contract (normalized
-  transcript schema, provider router, error taxonomy) behind the same facade.
+  surfaces port the legacy recordings service's `recordings/stt/` contract
+  (normalized transcript schema, provider router, error taxonomy) behind the
+  same facade.
 
 ## What this module provides
 
 | Area | Contents |
 |---|---|
 | Models (`models.py`) | `PromptLog` (immutable per-call ledger: `source` llm_facade/translate/transcribe/summarize/generate_image/other, `model`, `model_size`, `prompt`, `system_prompt`, `response`, `status` success/failure/timeout/error, `error_message`, `input_tokens`/`output_tokens`/`thinking_tokens`/`cache_read_tokens`/`cache_write_tokens`, `duration_ms`, `user_id`, JSON `metadata`, `created_at`; doubles as the cache-by-prompt store) |
-| Services (`services.py`) | `complete()` (cache lookup → provider → PromptLog row → `{status, result, usage}`; optional `images` for vision), `complete_json()` (JSON-API system prompt + JSON extraction — the `llm.complete` surface), `translate()` (iron's translate flow), `transcribe()` (STT router walk — see "STT providers"), `summarize()` (single-shot / map-reduce over `complete()`), `generate_image()` (see "Image generation"), `get_provider()` / `get_stt_provider()` / `get_image_provider()` (lazy resolution against the merged registries), `JSON_API_SYSTEM_PROMPT` |
-| Parsing (`parsing.py`) | `parse_json_response()` (direct JSON → fenced block → object anywhere → array anywhere; surrounding prose becomes `comment`), `parse_translation_response()` — ports of the legacy agent service's extractors, Django-free |
+| Services (`services.py`) | `complete()` (cache lookup → provider → PromptLog row → `{status, result, usage}`; optional `images` for vision), `complete_json()` (JSON-API system prompt + JSON extraction — the `llm.complete` surface), `translate()`, `transcribe()` (STT router walk — see "STT providers"), `summarize()` (single-shot / map-reduce over `complete()`), `generate_image()` (see "Image generation"), `get_provider()` / `get_stt_provider()` / `get_image_provider()` (lazy resolution against the merged registries), `JSON_API_SYSTEM_PROMPT` |
+| Parsing (`parsing.py`) | `parse_json_response()` (direct JSON → fenced block → object anywhere → array anywhere; surrounding prose becomes `comment`), `parse_translation_response()`, Django-free |
 | STT seam (`stt/`) | `SttProvider` ABC, `AudioRef` (exactly one of url/path/data), `NormalizedTranscript`/`NormalizedUtterance`/`NormalizedWord` + `transcript_from_dict()`/`utterances_from_words()`, `TranscriptionError` (fatal) / `RetryableTranscriptionError` (transient) error taxonomy (`stt/base.py`, Django-free); open registry (`stt/__init__.py`); language router (`stt/router.py`); adapters `whisper-http` / `elevenlabs` / `assemblyai` (`stt/providers/`) |
 | Summarization prep (`summary.py`) | `render_markdown()` (timestamped `[MM:SS] speaker: text` lines), `build_summary_input()` (token-budget chunking with `seg_NNNN` → start-ms anchors), `split_text_chunks()`, the three system prompts (single-shot / chunk / merge) — Django-free |
 | Image seam (`images/`) | `ImageRef` (vision input: exactly one of url/data; wire form url \| base64 `data_b64`), `ImageGenProvider` ABC + `GeneratedImage`, `ImageGenError` (fatal) / `RetryableImageGenError` (transient) taxonomy (`images/base.py`, Django-free); open registry (`images/__init__.py`); built-in `openai-images` adapter (`images/providers/openai_images.py`) |
-| HTTP API (`urls.py`, `views.py`) | `api/llm/complete` (accepts optional `images`), `api/llm/translate`, `api/llm/transcribe`, `api/llm/summarize`, `api/llm/generate-image` (all `IsServiceRequest \| IsStaffUser`; hosts mount the app under `agent/`). LLM/STT/image failures are HTTP 200 with `status: "failure"` — the iron contract |
+| HTTP API (`urls.py`, `views.py`) | `api/llm/complete` (accepts optional `images`), `api/llm/translate`, `api/llm/transcribe`, `api/llm/summarize`, `api/llm/generate-image` (all `IsServiceRequest \| IsStaffUser`; hosts mount the app under `agent/`). LLM/STT/image failures are HTTP 200 with `status: "failure"` |
 | Providers (`providers/`) | `LlmProvider` ABC + `ProviderResult`/`ProviderError`/`ProviderTimeout` (`providers/base.py`), open registry (`providers/__init__.py`: `BUILTIN_PROVIDERS`, `register_provider()`, `registered_providers()`), `AnthropicProvider` (SDK, default), `OpenAICompatProvider` (any `/chat/completions` dialect), `ClaudeCodeCLIProvider` (opt-in `claude -p` spawn, never the default) |
 | Cache (`cache.py`) | `CachePolicy` ABC (`should_cache` / `lookup` / optional `store`) + `PromptLogCachePolicy` default (PromptLog rows + `CACHE_LOOKUP`/`CACHE_TTL`) |
 | System checks (`checks.py`) | `stapel_agent.E001` (DEFAULT_PROVIDER not in the effective registry), `W001` (unimportable provider path), `W002` (entry is not an `LlmProvider` subclass), `W003`/`W004` (the STT equivalents), `W005`/`W006` (the image-registry equivalents) — registered from `AgentConfig.ready()` |
@@ -189,8 +190,8 @@ Cloud adapters that need a fetchable URL call `audio.require_url(provider=...)`
 which accepts any ref kind. `audio.describe()` is the PII-safe form logged to
 the ledger (URL host only — no signed query strings, no raw bytes).
 
-Worked example — a self-hosted **GigaAM** endpoint (the ru-quality engine from
-the legacy recordings service) stays app-layer; no fork:
+Worked example — a self-hosted **GigaAM** endpoint (a ru-quality STT engine)
+stays app-layer; no fork:
 
 ```python
 # myproject/stt.py
@@ -349,7 +350,7 @@ serializer, remount the URL — HTTP method bodies stay untouched.
 | View | Route (name) | Request serializer | Response serializer |
 |---|---|---|---|
 | `LlmCompleteView` | `api/llm/complete` (`llm-complete`) | `CompleteRequestSerializer` (validates `images` entries: exactly one of url/data_b64, base64 must decode) | — (plain contract dict, see below) |
-| `LlmTranslateView` | `api/llm/translate` (`llm-translate`) | `TranslateRequestSerializer` (maps wire key `"from"` → `from_lang`) | `TranslateResponseSerializer` (`TranslateResponse` dataclass; None keys dropped after serialization — absent keys stay absent on the wire, per the iron contract) |
+| `LlmTranslateView` | `api/llm/translate` (`llm-translate`) | `TranslateRequestSerializer` (maps wire key `"from"` → `from_lang`) | `TranslateResponseSerializer` (`TranslateResponse` dataclass; None keys dropped after serialization — absent keys stay absent on the wire) |
 | `LlmTranscribeView` | `api/llm/transcribe` (`llm-transcribe`) | `TranscribeRequestSerializer` | — (plain contract dict, see below) |
 | `LlmSummarizeView` | `api/llm/summarize` (`llm-summarize`) | `SummarizeRequestSerializer` (400 on not-exactly-one of text/transcript, 400 on a bad model size) | `SummarizeResponseSerializer` (`SummarizeResponse` dataclass; None keys dropped) |
 | `LlmGenerateImageView` | `api/llm/generate-image` (`llm-generate-image`) | `GenerateImageRequestSerializer` (400 on `n` outside 1-10 or `timeout_seconds` < 1) | — (plain contract dict, see below) |
@@ -407,11 +408,10 @@ carrier to mask.
   (`docs/agent-service-and-core-ts.md`): this service authenticates to model vendors
   with pay-as-you-go API keys. Subscription OAuth tokens (Claude Pro/Max) belong to
   the CLI's own auth in hosts that opt into `claude-code` — never read
-  `~/.claude/.credentials.json`, never background-refresh tokens (that the legacy agent service
-  hack was deliberately dropped).
+  `~/.claude/.credentials.json`, never background-refresh tokens.
 - **Don't make `claude-code` the default provider in library code.** It is a host
   opt-in for images that ship the CLI; the shipped default stays `anthropic`.
-- **Don't turn LLM failures into HTTP 5xx.** The iron contract is HTTP 200 +
+- **Don't turn LLM failures into HTTP 5xx.** The contract is HTTP 200 +
   `{"status": "failure", "reason": ...}`; `stapel-translate`'s `AgentProvider` (and
   any other caller) branches on `status`.
 - **Don't fork to add an LLM provider.** Implement the `LlmProvider` ABC in the app

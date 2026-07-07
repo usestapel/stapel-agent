@@ -1,4 +1,4 @@
-"""ElevenLabs Scribe adapter (ported from the legacy recordings service).
+"""ElevenLabs Scribe adapter.
 
 Scribe is a synchronous batch endpoint (``POST /v1/speech-to-text``) —
 the adapter downloads the audio from the presigned URL and streams it
