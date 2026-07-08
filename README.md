@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/usestapel/stapel-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/usestapel/stapel-agent/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/usestapel/stapel-agent/graph/badge.svg)](https://codecov.io/gh/usestapel/stapel-agent)
+[![PyPI](https://img.shields.io/pypi/v/stapel-agent.svg)](https://pypi.org/project/stapel-agent/)
 
 > LLM facade — JSON completion, translation, transcription and summarization in front of swappable model/STT providers, with a prompt cache and a token ledger
 
