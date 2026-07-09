@@ -5,6 +5,49 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-07-09
+
+### Added
+- Per-registration STT model pin: `SttProvider.speech_model` class-attr
+  (the STT mirror of fixing a model on an LLM registration). Setting it on
+  a subclass forces one engine/model for that registered name, overriding
+  the provider's configured default (`WHISPER_MODEL` /
+  `ELEVENLABS_STT_MODEL` / `ASSEMBLYAI_MODEL`); `None` (the default) keeps
+  the settings-driven behaviour, so existing registrations are unchanged.
+  New `effective_model()` (pin-or-default) and `default_speech_model()`
+  (the configured default; providers override it to read their setting)
+  helpers on the ABC; the three built-in adapters now send
+  `effective_model()`. Two registrations of one adapter class can carry
+  different models without a settings change or a fork.
+- New comm function `llm.stt_catalog` (committed schema in
+  `schemas/functions/llm.stt_catalog.json`, handler in `functions.py`,
+  `services.stt_catalog()`): takes no arguments and returns the addressable
+  STT surface — `{status, providers: [{name, available, model,
+  pinned_model, supports_diarization, supported_languages, cost_per_hour}],
+  default_provider, fallback_chain, language_routes}`. Each `model` is the
+  registration's effective model (the `speech_model` pin, else the
+  configured default); an unresolvable entry is listed `available: false`
+  with an `error` rather than silently dropped. Read-only — writes no
+  PromptLog row.
+
+### Notes
+- **Semver:** strictly this is a MINOR release (a new comm verb + a new
+  ABC surface `speech_model`/`effective_model`), but it is held to a PATCH
+  (`0.2.6`) by studio's `stapel-agent < 0.3` floor. That is safe here
+  because every change is purely additive and backward-compatible: the new
+  `speech_model` defaults to `None` (unchanged behaviour), the built-in
+  adapters emit the same model as before when unpinned, and `llm.stt_catalog`
+  is a brand-new verb touching no existing surface. A dedicated `0.3.0`
+  (with a coordinated bump of studio's floor) is deferred until a change
+  that actually warrants breaking the floor lands.
+
+- Design note only (no implementation): `docs/streaming-seam.md` sketches
+  where a future streaming seam would sit (provider ABC `stream_complete` +
+  `supports_streaming`, a `complete_stream()` service generator, an additive
+  `emits`-style wire surface) and the invariants it must preserve
+  (chunk order, backpressure, wire compatibility, failure parity,
+  one-row-per-call ledger). Input for a future design, not a commitment.
+
 ## [0.2.5] - 2026-07-09
 
 ### Added
