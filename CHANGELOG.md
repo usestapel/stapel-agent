@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-07-09
+
 ### Added
 - Per-call output-token cap: `llm.complete` payload (comm) and
   `services.complete`/`complete_json` accept an optional `max_tokens`
