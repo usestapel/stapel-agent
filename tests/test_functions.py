@@ -50,6 +50,25 @@ class TestLlmComplete:
         with pytest.raises(SchemaValidationError):
             call("llm.complete", {"prompt": "p", "model": "small", "beep": 1})
 
+    def test_role_tag_admitted_and_ignored(self, fake_provider):
+        # Multi-role pipelines tag every call with the calling role (their
+        # scripted/override providers are content-addressed by it); the
+        # schema admits the tag, the default pipeline ignores it. Regression:
+        # additionalProperties:false used to refuse every such call the
+        # moment schema validation was on.
+        result = call(
+            "llm.complete",
+            {"prompt": "give json", "model": "small", "role": "architect"},
+        )
+        assert result["status"] == "ok"
+        assert result["result"] == {"answer": 42}
+        # the tag never leaks into the provider call
+        assert "role" not in fake_provider.calls[0]
+
+    def test_role_tag_must_be_a_string(self, fake_provider):
+        with pytest.raises(SchemaValidationError):
+            call("llm.complete", {"prompt": "p", "model": "small", "role": 7})
+
 
 @pytest.mark.django_db
 class TestLlmTranslate:

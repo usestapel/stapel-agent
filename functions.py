@@ -57,6 +57,13 @@ COMPLETE_SCHEMA = {
             "description": "Vision input — the provider must support "
             "image content blocks.",
         },
+        "role": {
+            "type": "string",
+            "description": "Opaque caller tag — e.g. the calling role in "
+            "a multi-role pipeline. Carried for provider routing, override "
+            "providers and observability; the default completion pipeline "
+            "ignores it.",
+        },
     },
     "required": ["prompt", "model"],
     "additionalProperties": False,
@@ -87,7 +94,9 @@ def llm_complete(payload: dict) -> dict:
 
     Payload: ``{"prompt": str, "model": "small"|"medium"|"large",
     "system_prompt"?: str, "provider"?: str, "images"?: [{"url"} |
-    {"data_b64", "mime"?}]}``. Returns ``{"status": "ok"|"failure",
+    {"data_b64", "mime"?}], "role"?: str}``. ``role`` is an opaque caller
+    tag (multi-role pipelines address providers/observability by it) and is
+    ignored here. Returns ``{"status": "ok"|"failure",
     "result"?: object, "comment"?: str, "reason"?: str, "usage"?: {...}}``.
     """
     from . import services

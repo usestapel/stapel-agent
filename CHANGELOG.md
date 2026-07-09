@@ -3,6 +3,17 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- `llm.complete` payload schema admits an optional `role` string — an opaque
+  caller tag (e.g. the calling role in a multi-role pipeline) for provider
+  routing, override providers and observability. The default completion
+  pipeline ignores it. Previously `additionalProperties: false` refused any
+  tagged call as soon as schema validation was on (in-process comm callers
+  hit `SchemaValidationError`), while stacks that override the provider
+  *and* drop the schema masked the mismatch.
+
 ## [0.2.3] - 2026-07-08
 
 ### Changed

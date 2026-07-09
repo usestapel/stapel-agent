@@ -46,6 +46,10 @@
         ],
         "additionalProperties": false
       }
+    },
+    "role": {
+      "type": "string",
+      "description": "Opaque caller tag — e.g. the calling role in a multi-role pipeline. Carried for provider routing, override providers and observability; the default completion pipeline ignores it."
     }
   },
   "required": ["prompt", "model"],
