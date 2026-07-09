@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-07-09
+
 ### Added
 - `llm.complete` payload schema admits an optional `role` string — an opaque
   caller tag (e.g. the calling role in a multi-role pipeline) for provider
