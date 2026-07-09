@@ -35,6 +35,9 @@ class WhisperHttpProvider(SttProvider):
     name = "whisper-http"
     supports_diarization = False
 
+    def default_speech_model(self) -> Optional[str]:
+        return agent_settings.WHISPER_MODEL
+
     def transcribe(
         self,
         *,
@@ -57,7 +60,7 @@ class WhisperHttpProvider(SttProvider):
         payload = audio.read_bytes(provider=self.name, timeout=min(timeout, 600))
 
         data = {
-            "model": agent_settings.WHISPER_MODEL,
+            "model": self.effective_model(),
             "response_format": "verbose_json",
             "timestamp_granularities[]": "word",
         }

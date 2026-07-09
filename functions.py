@@ -224,6 +224,32 @@ def llm_transcribe(payload: dict) -> dict:
     )
 
 
+STT_CATALOG_SCHEMA = {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": False,
+}
+
+
+@function("llm.stt_catalog", schema=STT_CATALOG_SCHEMA)
+def llm_stt_catalog(payload: dict) -> dict:
+    """STT catalogue — the addressable speech-to-text surface.
+
+    Takes no arguments (``{}``). Returns ``{"status": "ok", "providers":
+    [{"name", "available", "model", "pinned_model", "supports_diarization",
+    "supported_languages", "cost_per_hour"}...], "default_provider": str,
+    "fallback_chain": [str], "language_routes": {lang: [str]}}``. ``model``
+    is each registration's effective model — the per-registration
+    ``speech_model`` pin when set, else the provider's configured default;
+    ``pinned_model`` flags which is which. Callers use this to discover
+    which ``provider`` names ``llm.transcribe`` will accept and what each
+    would run, without a transcription round-trip.
+    """
+    from . import services
+
+    return services.stt_catalog()
+
+
 @function("llm.summarize", schema=SUMMARIZE_SCHEMA)
 def llm_summarize(payload: dict) -> dict:
     """Summarization — same result dict as ``POST api/llm/summarize``.

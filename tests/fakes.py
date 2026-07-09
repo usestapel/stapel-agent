@@ -209,6 +209,20 @@ class SecondSttProvider(FakeSttProvider):
     name = "fake-stt-2"
 
 
+class PinnedSttProvider(FakeSttProvider):
+    """A registration with a pinned ``speech_model`` and a settings-backed
+    default — exercises the per-registration model pin (G6) and its
+    surfacing through ``llm.stt_catalog`` (G7)."""
+
+    name = "pinned-stt"
+    supported_languages = frozenset({"en", "ru"})
+    cost_per_hour = 0.10
+    speech_model = "pinned-model-x"
+
+    def default_speech_model(self):
+        return "configured-default"
+
+
 class RetryableSttProvider(FakeSttProvider):
     """Always fails transiently — the service must walk the chain."""
 

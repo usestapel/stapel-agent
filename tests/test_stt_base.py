@@ -165,6 +165,45 @@ class TestSttProviderAbc:
             SttProvider.transcribe(FakeSttProvider(), audio=AudioRef(data=b"x"))
 
 
+class TestSpeechModelPin:
+    """G6 — per-registration ``speech_model`` pin on the SttProvider ABC."""
+
+    def test_base_defaults_are_unpinned(self):
+        from stapel_agent.tests.fakes import FakeSttProvider
+
+        p = FakeSttProvider()
+        # no pin, no settings-backed default → effective model is None
+        assert p.speech_model is None
+        assert p.default_speech_model() is None
+        assert p.effective_model() is None
+
+    def test_pin_overrides_configured_default(self):
+        from stapel_agent.tests.fakes import PinnedSttProvider
+
+        p = PinnedSttProvider()
+        assert p.default_speech_model() == "configured-default"
+        # the class-attr pin wins over the configured default
+        assert p.effective_model() == "pinned-model-x"
+
+    def test_clearing_the_pin_falls_back_to_default(self):
+        from stapel_agent.tests.fakes import PinnedSttProvider
+
+        class Unpinned(PinnedSttProvider):
+            speech_model = None
+
+        assert Unpinned().effective_model() == "configured-default"
+
+    def test_pin_is_per_registration_not_global(self):
+        from stapel_agent.tests.fakes import PinnedSttProvider
+
+        class OtherPin(PinnedSttProvider):
+            speech_model = "other-model-y"
+
+        # two registrations of the same adapter carry different models
+        assert PinnedSttProvider().effective_model() == "pinned-model-x"
+        assert OtherPin().effective_model() == "other-model-y"
+
+
 class TestNormalizeLanguage:
     @pytest.mark.parametrize(
         ("raw", "expected"),

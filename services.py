@@ -382,6 +382,66 @@ def get_stt_provider(name: str):
     return cls()
 
 
+def stt_catalog() -> dict:
+    """Enumerate the addressable STT surface — the mirror-image of asking
+    an LLM registry "what can I request".
+
+    Returns ``{"status": "ok", "providers": [entry, ...],
+    "default_provider": str, "fallback_chain": [str],
+    "language_routes": {lang: [str]}}``. Each ``entry`` describes one
+    registered provider name::
+
+        {"name": str, "available": bool, "model": str | None,
+         "pinned_model": bool, "supports_diarization": bool,
+         "supported_languages": [str] | None, "cost_per_hour": float | None}
+
+    Names walk the effective registry (built-ins ← ``STT_PROVIDERS`` merge
+    ← runtime). Each provider is instantiated to read its capability flags
+    and effective model (the ``speech_model`` pin, else the configured
+    default) — instantiation is side-effect-free (no network until
+    ``transcribe``). An entry that cannot be resolved/instantiated (bad
+    dotted path, missing optional dep) is still listed with
+    ``available: False`` and an ``error`` string, so callers see the config
+    gap rather than a silent omission. Read-only: writes no PromptLog row.
+    """
+    from .stt import registered_stt_providers
+
+    providers: list[dict] = []
+    for name, target in sorted(registered_stt_providers().items()):
+        try:
+            cls = import_string(target) if isinstance(target, str) else target
+            backend = cls()
+            model = backend.effective_model()
+        except Exception as exc:  # noqa: BLE001 — a catalog must not blow up
+            providers.append(
+                {"name": name, "available": False, "error": str(exc)[:300]}
+            )
+            continue
+        langs = backend.supported_languages
+        providers.append(
+            {
+                "name": name,
+                "available": True,
+                "model": model,
+                "pinned_model": backend.speech_model is not None,
+                "supports_diarization": bool(backend.supports_diarization),
+                "supported_languages": sorted(langs) if langs is not None else None,
+                "cost_per_hour": backend.cost_per_hour,
+            }
+        )
+
+    return {
+        "status": "ok",
+        "providers": providers,
+        "default_provider": agent_settings.DEFAULT_STT_PROVIDER,
+        "fallback_chain": list(agent_settings.STT_FALLBACK_CHAIN or []),
+        "language_routes": {
+            lang: list(route or [])
+            for lang, route in (agent_settings.STT_LANGUAGE_ROUTES or {}).items()
+        },
+    }
+
+
 def transcribe(
     audio,
     *,
@@ -705,6 +765,7 @@ __all__ = [
     "get_image_provider",
     "get_provider",
     "get_stt_provider",
+    "stt_catalog",
     "summarize",
     "transcribe",
     "translate",

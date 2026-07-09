@@ -44,6 +44,9 @@ class AssemblyAIProvider(SttProvider):
     supports_diarization = True
     cost_per_hour = 0.37  # 'best' tier list price; 'universal' is cheaper
 
+    def default_speech_model(self) -> Optional[str]:
+        return agent_settings.ASSEMBLYAI_MODEL
+
     def transcribe(
         self,
         *,
@@ -66,7 +69,7 @@ class AssemblyAIProvider(SttProvider):
 
         body = {
             "audio_url": audio_url,
-            "speech_model": agent_settings.ASSEMBLYAI_MODEL,
+            "speech_model": self.effective_model(),
             "speaker_labels": bool(diarization),
             "punctuate": True,
             "format_text": True,

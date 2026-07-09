@@ -279,12 +279,42 @@ class SttProvider(ABC):
     router; ``supported_languages`` is a set of ISO-639-1 codes or None
     for "any"; ``cost_per_hour`` (USD, optional) lets hosts compute
     billing debits without a separate catalog.
+
+    ``speech_model`` is the **per-registration model pin** — the STT
+    mirror of how an LLM registration fixes a model. A host that registers
+    a provider under a name and wants one specific engine/model for that
+    name sets this class-attr on the subclass; it overrides the provider's
+    configured default (``WHISPER_MODEL`` / ``ELEVENLABS_STT_MODEL`` /
+    ``ASSEMBLYAI_MODEL``). ``None`` = fall back to that configured default,
+    so unpinned registrations keep the settings-driven behaviour::
+
+        class ScribeV2(ElevenLabsProvider):
+            speech_model = "scribe_v2_experimental"   # pinned for this name
+
+        register_stt_provider("scribe-v2", ScribeV2)
+
+    Two registrations of the same adapter class can thus carry different
+    pinned models without a settings change or a fork.
     """
 
     name: str = ""
     supports_diarization: bool = False
     supported_languages: Optional[frozenset[str]] = None
     cost_per_hour: Optional[float] = None
+    speech_model: Optional[str] = None
+
+    def default_speech_model(self) -> Optional[str]:
+        """The provider's configured model (from settings) *before* the
+        pin. Providers with a settings-backed model override this to return
+        it; the base (and settings-free fakes) return None."""
+        return None
+
+    def effective_model(self) -> Optional[str]:
+        """The model this registration would send right now: the pinned
+        ``speech_model`` class-attr when set, else ``default_speech_model()``
+        (the configured default). Used by ``transcribe`` implementations and
+        the ``llm.stt_catalog`` surface."""
+        return self.speech_model or self.default_speech_model()
 
     @abstractmethod
     def transcribe(

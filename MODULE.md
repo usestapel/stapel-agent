@@ -183,6 +183,7 @@ ABC contract (`stt/base.py`, Django-free):
 |---|---|---|
 | `transcribe` | `(*, audio: AudioRef, language: str \| None = None, diarization: bool = False, timeout_seconds: int \| None = None) -> NormalizedTranscript` | Synchronous (polling-based) batch transcription. Raise `RetryableTranscriptionError` on transient failure, `TranscriptionError` on permanent failure. |
 | `name` / `supports_diarization` / `supported_languages` / `cost_per_hour` | class attributes | Stable id (stored on the PromptLog row), capability flags, optional USD/hour for billing hosts. |
+| `speech_model` | class attribute (`str \| None`, default None) | **Per-registration model pin** — the STT mirror of fixing a model on an LLM registration. Set it on a subclass to force one engine/model for that registered name, overriding the provider's configured default (`WHISPER_MODEL` / `ELEVENLABS_STT_MODEL` / `ASSEMBLYAI_MODEL`); None falls back to that default. `effective_model()` returns the pin-or-default and `default_speech_model()` the configured default (providers override it to read their setting). Two registrations of one adapter class can thus carry different models without a settings change or a fork. |
 
 `AudioRef` carries exactly one of `url` / `path` / `data` (+ optional `mime`).
 Cloud adapters that need a fetchable URL call `audio.require_url(provider=...)`
@@ -382,6 +383,7 @@ microservices — same code). JSON Schemas live in `schemas/functions/`.
 | `llm.transcribe` | `{audio_url, language?, diarization?, provider?, timeout_seconds? (>= 1)}` — **URLs only, never raw audio bytes** (`additionalProperties: false` rejects `data`/`path` keys); byte/path refs exist only for in-process `services.transcribe(AudioRef(...))` callers | `{status, transcript?: NormalizedTranscript, provider_used?, fallback_used?, reason?}` |
 | `llm.summarize` | `{text \| transcript: NormalizedTranscript-dict (exactly one, schema-enforced oneOf), language?, model?, provider?}` | `{status, summary?, usage?, reason?}` |
 | `llm.generate_image` | `{prompt, size?, n? (1-10), provider?, timeout_seconds? (>= 1)}` | `{status, images?: [{url? \| data_b64?, mime}], provider_used?, reason?}` — raw results; storage is the caller's job |
+| `llm.stt_catalog` | `{}` (no arguments) | `{status, providers: [{name, available, model, pinned_model, supports_diarization, supported_languages, cost_per_hour}], default_provider, fallback_chain, language_routes}` — the addressable STT surface; each `model` is the registration's effective model (the `speech_model` pin, else the configured default). Read-only, writes no PromptLog row |
 
 ### Admin categories (`stapel_core.access`, admin-suite AS-5)
 

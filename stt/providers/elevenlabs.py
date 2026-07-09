@@ -38,6 +38,9 @@ class ElevenLabsProvider(SttProvider):
     supports_diarization = True
     cost_per_hour = 0.40  # public list price — verify before billing off it
 
+    def default_speech_model(self) -> Optional[str]:
+        return agent_settings.ELEVENLABS_STT_MODEL
+
     def transcribe(
         self,
         *,
@@ -60,7 +63,7 @@ class ElevenLabsProvider(SttProvider):
         payload = audio.read_bytes(provider=self.name, timeout=min(timeout, 600))
 
         data = {
-            "model_id": agent_settings.ELEVENLABS_STT_MODEL,
+            "model_id": self.effective_model(),
             "timestamps_granularity": "word",
             "diarize": "true" if diarization else "false",
         }

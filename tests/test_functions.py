@@ -15,6 +15,7 @@ class TestRegistration:
         assert "llm.translate" in names
         assert "llm.transcribe" in names
         assert "llm.summarize" in names
+        assert "llm.stt_catalog" in names
 
 
 @pytest.mark.django_db

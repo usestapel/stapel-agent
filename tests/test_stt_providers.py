@@ -108,6 +108,16 @@ class TestWhisperHttp:
         assert transcript.duration_seconds == 2.5
         assert transcript.raw == WHISPER_BODY
 
+    def test_speech_model_pin_overrides_setting(self, configured, monkeypatch):
+        # G6 — a pinned registration sends its own model, ignoring WHISPER_MODEL.
+        class Pinned(WhisperHttpProvider):
+            speech_model = "whisper-large-v3-turbo"
+
+        captured = []
+        mock_post(monkeypatch, "whisper_http", [FakeResponse(WHISPER_BODY)], captured)
+        Pinned().transcribe(audio=AudioRef(data=b"x"))
+        assert captured[0]["data"]["model"] == "whisper-large-v3-turbo"
+
     def test_multipart_from_path(self, configured, monkeypatch, tmp_path):
         f = tmp_path / "rec.wav"
         f.write_bytes(b"RIFFbytes")
@@ -305,6 +315,16 @@ class TestElevenLabs:
         assert transcript.duration_seconds == 1.6
         assert transcript.language == "en"
 
+    def test_speech_model_pin_overrides_setting(self, configured, monkeypatch):
+        # G6 — pin wins over ELEVENLABS_STT_MODEL for this registration.
+        class Pinned(ElevenLabsProvider):
+            speech_model = "scribe_v2_experimental"
+
+        captured = []
+        mock_post(monkeypatch, "elevenlabs", [FakeResponse(ELEVENLABS_BODY)], captured)
+        Pinned().transcribe(audio=AudioRef(url="https://cdn.test/a.mp3"))
+        assert captured[0]["data"]["model_id"] == "scribe_v2_experimental"
+
     def test_diarization_off_by_default(self, configured, monkeypatch):
         _, captured = self._run(monkeypatch, [FakeResponse(ELEVENLABS_BODY)])
         assert captured[0]["data"]["diarize"] == "false"
@@ -404,6 +424,20 @@ class TestAssemblyAI:
     def test_bytes_ref_is_rejected(self, configured):
         with pytest.raises(TranscriptionError, match="requires an audio URL"):
             AssemblyAIProvider().transcribe(audio=AudioRef(data=b"x"))
+
+    def test_speech_model_pin_overrides_setting(self, configured, monkeypatch):
+        # G6 — pin wins over ASSEMBLYAI_MODEL for this registration.
+        class Pinned(AssemblyAIProvider):
+            speech_model = "best"
+
+        posted, polled = [], []
+        mock_post(
+            monkeypatch, "assemblyai",
+            [FakeResponse({"id": "tr_1", "status": "queued"})], posted,
+        )
+        self._mock_get(monkeypatch, [FakeResponse(ASSEMBLY_DONE)], polled)
+        Pinned().transcribe(audio=AudioRef(url="https://cdn.test/a.mp3"))
+        assert posted[0]["json"]["speech_model"] == "best"
 
     def test_submit_poll_happy_path(self, configured, monkeypatch):
         transcript, posted, polled = self._run(
