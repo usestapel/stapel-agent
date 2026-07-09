@@ -73,6 +73,7 @@ def complete(
     metadata: dict | None = None,
     skip_cache: bool = False,
     images: list | None = None,
+    max_tokens: int | None = None,
 ) -> dict:
     """Raw completion: ``{"status": "ok", "result": <text>, "usage": ...}``
     or ``{"status": "failure", "reason": ...}``.
@@ -88,6 +89,14 @@ def complete(
     Providers without ``supports_images`` degrade to a clear
     ``status: "failure"``; the ledger records ``{count, kinds}`` in
     metadata, never image bytes.
+
+    *max_tokens* is a per-call output-token cap overriding the configured
+    ``MAX_TOKENS`` (long structured outputs raise it; short ones bound
+    cost). Forwarded only to providers with ``supports_max_tokens``;
+    otherwise ignored with a logged warning (the provider keeps its
+    configured default). The prompt cache is text-keyed and does not see
+    the cap — hosts that enable ``CACHE_LOOKUP`` for a source should keep
+    that source's budget stable (the default policy caches translate only).
     """
     models = agent_settings.MODELS or {}
     if model_size not in models:
@@ -152,9 +161,19 @@ def complete(
         metadata={**(metadata or {}), "provider": provider_name, **extra_meta},
     )
 
-    # The kwarg travels only when non-empty, so pre-vision provider
-    # subclasses with the old three-argument signature keep working.
+    # The kwargs travel only when non-empty/requested, so pre-existing
+    # provider subclasses with older signatures keep working.
     call_kwargs = {"images": list(images)} if images else {}
+    if max_tokens:
+        if backend.supports_max_tokens:
+            call_kwargs["max_tokens"] = int(max_tokens)
+        else:
+            logger.warning(
+                "stapel-agent: provider '%s' does not support a per-call "
+                "max_tokens cap — requested %s ignored, configured "
+                "MAX_TOKENS stays in effect",
+                provider_name, max_tokens,
+            )
 
     start = time.monotonic()
     try:
@@ -210,6 +229,7 @@ def complete_json(
     user_id: str | None = None,
     metadata: dict | None = None,
     images: list | None = None,
+    max_tokens: int | None = None,
 ) -> dict:
     """The ``llm.complete`` surface shared by the HTTP view and the comm
     function: prepend the JSON-API system prompt (unless the caller brings
@@ -224,6 +244,7 @@ def complete_json(
         user_id=user_id,
         metadata=metadata,
         images=images,
+        max_tokens=max_tokens,
     )
     if raw["status"] == "failure":
         return _drop_none(

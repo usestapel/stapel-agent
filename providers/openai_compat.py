@@ -16,6 +16,7 @@ from .base import LlmProvider, ProviderError, ProviderResult, ProviderTimeout
 class OpenAICompatProvider(LlmProvider):
     name = "openai-compat"
     supports_images = True
+    supports_max_tokens = True
 
     def resolve_model(self, model_size: str, default: str) -> str:
         models = agent_settings.OPENAI_COMPAT_MODELS or {}
@@ -28,6 +29,7 @@ class OpenAICompatProvider(LlmProvider):
         model: str,
         system_prompt: str | None = None,
         images: list | None = None,
+        max_tokens: int | None = None,
     ) -> ProviderResult:
         base_url = (agent_settings.OPENAI_COMPAT_BASE_URL or "").rstrip("/")
         if not base_url:
@@ -58,7 +60,7 @@ class OpenAICompatProvider(LlmProvider):
                 json={
                     "model": model,
                     "messages": messages,
-                    "max_tokens": int(agent_settings.MAX_TOKENS),
+                    "max_tokens": int(max_tokens or agent_settings.MAX_TOKENS),
                 },
                 headers=headers,
                 timeout=int(agent_settings.CLI_TIMEOUT),

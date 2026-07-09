@@ -64,6 +64,14 @@ COMPLETE_SCHEMA = {
             "providers and observability; the default completion pipeline "
             "ignores it.",
         },
+        "max_tokens": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Per-call output-token cap overriding the "
+            "configured STAPEL_AGENT['MAX_TOKENS'] — long structured "
+            "outputs raise it, short ones bound cost. Ignored (with a "
+            "logged warning) by providers without supports_max_tokens.",
+        },
     },
     "required": ["prompt", "model"],
     "additionalProperties": False,
@@ -94,9 +102,11 @@ def llm_complete(payload: dict) -> dict:
 
     Payload: ``{"prompt": str, "model": "small"|"medium"|"large",
     "system_prompt"?: str, "provider"?: str, "images"?: [{"url"} |
-    {"data_b64", "mime"?}], "role"?: str}``. ``role`` is an opaque caller
-    tag (multi-role pipelines address providers/observability by it) and is
-    ignored here. Returns ``{"status": "ok"|"failure",
+    {"data_b64", "mime"?}], "role"?: str, "max_tokens"?: int}``. ``role``
+    is an opaque caller tag (multi-role pipelines address
+    providers/observability by it) and is ignored here; ``max_tokens`` is
+    a per-call output-token cap overriding the configured ``MAX_TOKENS``.
+    Returns ``{"status": "ok"|"failure",
     "result"?: object, "comment"?: str, "reason"?: str, "usage"?: {...}}``.
     """
     from . import services
@@ -115,6 +125,7 @@ def llm_complete(payload: dict) -> dict:
         system_prompt=payload.get("system_prompt"),
         provider=payload.get("provider"),
         images=images or None,
+        max_tokens=payload.get("max_tokens"),
     )
 
 

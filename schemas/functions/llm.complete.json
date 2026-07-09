@@ -50,6 +50,11 @@
     "role": {
       "type": "string",
       "description": "Opaque caller tag — e.g. the calling role in a multi-role pipeline. Carried for provider routing, override providers and observability; the default completion pipeline ignores it."
+    },
+    "max_tokens": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Per-call output-token cap overriding the configured STAPEL_AGENT['MAX_TOKENS'] — long structured outputs raise it, short ones bound cost. Ignored (with a logged warning) by providers without supports_max_tokens."
     }
   },
   "required": ["prompt", "model"],

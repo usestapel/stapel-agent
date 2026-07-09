@@ -5,6 +5,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Per-call output-token cap: `llm.complete` payload (comm) and
+  `services.complete`/`complete_json` accept an optional `max_tokens`
+  integer overriding the configured `STAPEL_AGENT["MAX_TOKENS"]` for that
+  call — long structured outputs (file manifests, findings with inline
+  tests) raise the ceiling per call instead of a global bump; short calls
+  can bound cost. New `LlmProvider.supports_max_tokens` capability flag
+  (same discipline as `supports_images`): the kwarg travels only to
+  providers that declare it — `anthropic` and `openai-compat` do; a
+  requested cap on a non-supporting provider (e.g. `claude-code`) is
+  ignored with a logged warning and the configured default stays in
+  effect. Pre-existing provider subclasses with older `complete()`
+  signatures keep working untouched. The text-keyed prompt cache does not
+  see the cap — hosts enabling `CACHE_LOOKUP` for a source should keep
+  that source's budget stable (the default policy caches translate only).
+
 ## [0.2.4] - 2026-07-09
 
 ### Added

@@ -51,6 +51,14 @@ class LlmProvider(ABC):
     # working untouched.
     supports_images: bool = False
 
+    # Backends that honour a per-call output-token cap set this True AND
+    # accept the optional ``max_tokens`` kwarg in complete(). The service
+    # never forwards the kwarg to a provider that leaves it False — a
+    # requested cap is then ignored with a logged warning (the provider
+    # keeps its configured default), and pre-existing subclasses with the
+    # old signature keep working untouched.
+    supports_max_tokens: bool = False
+
     def resolve_model(self, model_size: str, default: str) -> str:
         """Map a size ("small"/"medium"/"large") to this backend's model name.
 
@@ -74,6 +82,11 @@ class LlmProvider(ABC):
         only ever passed when ``supports_images`` is True (and only as a
         keyword, only when non-empty), so subclasses that predate vision
         support need no signature change.
+
+        ``max_tokens`` (an int, the per-call output-token cap overriding
+        the configured ``MAX_TOKENS``) follows the same discipline: only
+        ever passed when ``supports_max_tokens`` is True, only as a
+        keyword, only when the caller requested a cap.
         """
 
 

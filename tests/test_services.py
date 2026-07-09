@@ -84,6 +84,44 @@ class TestPromptLog:
 
 
 @pytest.mark.django_db
+class TestMaxTokensCap:
+    def test_cap_forwarded_to_supporting_provider(self, fake_provider):
+        result = services.complete(
+            "hi", "small", max_tokens=8000, source=PromptSource.OTHER
+        )
+        assert result["status"] == "ok"
+        assert fake_provider.calls[0]["max_tokens"] == 8000
+
+    def test_no_cap_means_no_kwarg_default_stays(self, fake_provider):
+        result = services.complete("hi", "small", source=PromptSource.OTHER)
+        assert result["status"] == "ok"
+        assert fake_provider.calls[0]["max_tokens"] is None
+
+    def test_cap_ignored_with_warning_on_unsupporting_provider(
+            self, fake_provider, caplog):
+        # NoVisionProvider has the old signature and no supports_max_tokens:
+        # the kwarg must NOT travel (no TypeError), the call succeeds on the
+        # provider's configured default, and the ignored cap is logged.
+        import logging
+
+        from stapel_agent.providers import _reset_runtime_providers, register_provider
+        from stapel_agent.tests.fakes import NoVisionProvider
+
+        register_provider("no-vision", NoVisionProvider)
+        try:
+            with caplog.at_level(logging.WARNING, logger="stapel_agent.services"):
+                result = services.complete(
+                    "hi", "small", provider="no-vision",
+                    max_tokens=8000, source=PromptSource.OTHER,
+                )
+            assert result["status"] == "ok"
+            assert fake_provider.calls[0]["max_tokens"] is None
+            assert "does not support a per-call max_tokens cap" in caplog.text
+        finally:
+            _reset_runtime_providers()
+
+
+@pytest.mark.django_db
 class TestCache:
     def _translate(self, fake_provider):
         fake_provider.result = ProviderResult(text='{"k": "Hallo"}')

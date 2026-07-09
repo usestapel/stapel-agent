@@ -14,6 +14,7 @@ from .base import LlmProvider, ProviderError, ProviderResult
 class AnthropicProvider(LlmProvider):
     name = "anthropic"
     supports_images = True
+    supports_max_tokens = True
 
     def complete(
         self,
@@ -22,6 +23,7 @@ class AnthropicProvider(LlmProvider):
         model: str,
         system_prompt: str | None = None,
         images: list | None = None,
+        max_tokens: int | None = None,
     ) -> ProviderResult:
         api_key = agent_settings.ANTHROPIC_API_KEY
         if not api_key:
@@ -48,7 +50,7 @@ class AnthropicProvider(LlmProvider):
             content = prompt
         kwargs = {
             "model": model,
-            "max_tokens": int(agent_settings.MAX_TOKENS),
+            "max_tokens": int(max_tokens or agent_settings.MAX_TOKENS),
             "messages": [{"role": "user", "content": content}],
         }
         if system_prompt:

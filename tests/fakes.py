@@ -24,6 +24,7 @@ from stapel_agent.stt.base import (
 class FakeProvider(LlmProvider):
     name = "fake"
     supports_images = True  # vision tests route ImageRefs through it
+    supports_max_tokens = True  # per-call cap tests route max_tokens through it
 
     calls: list[dict] = []
     result = ProviderResult(text='{"answer": 42}')
@@ -42,7 +43,8 @@ class FakeProvider(LlmProvider):
         )
         cls.error = None
 
-    def complete(self, *, prompt, model, system_prompt=None, images=None):
+    def complete(self, *, prompt, model, system_prompt=None, images=None,
+                 max_tokens=None):
         cls = type(self)
         cls.calls.append(
             {
@@ -50,6 +52,7 @@ class FakeProvider(LlmProvider):
                 "model": model,
                 "system_prompt": system_prompt,
                 "images": images,
+                "max_tokens": max_tokens,
             }
         )
         if cls.error is not None:
@@ -65,11 +68,13 @@ class CustomProvider(FakeProvider):
 
 class NoVisionProvider(FakeProvider):
     """Text-only backend with the pre-vision three-argument signature —
-    proves the service never forwards images to a provider that can't
-    take them (and that old signatures stay compatible)."""
+    proves the service never forwards images (or a max_tokens cap) to a
+    provider that can't take them (and that old signatures stay
+    compatible)."""
 
     name = "no-vision"
     supports_images = False
+    supports_max_tokens = False
 
     def complete(self, *, prompt, model, system_prompt=None):
         return super().complete(prompt=prompt, model=model, system_prompt=system_prompt)

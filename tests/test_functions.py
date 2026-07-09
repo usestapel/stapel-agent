@@ -69,6 +69,30 @@ class TestLlmComplete:
         with pytest.raises(SchemaValidationError):
             call("llm.complete", {"prompt": "p", "model": "small", "role": 7})
 
+    def test_max_tokens_admitted_and_forwarded(self, fake_provider):
+        # Per-role output budgets: a long structured output (e.g. a file
+        # manifest) raises the cap per call instead of a global MAX_TOKENS
+        # bump. Regression: the 4096 default truncated a manifest mid-file
+        # (stop_reason=max_tokens) and the parse failed downstream.
+        result = call(
+            "llm.complete",
+            {"prompt": "give json", "model": "small", "max_tokens": 16000},
+        )
+        assert result["status"] == "ok"
+        assert fake_provider.calls[0]["max_tokens"] == 16000
+
+    def test_max_tokens_omitted_means_provider_default(self, fake_provider):
+        call("llm.complete", {"prompt": "p", "model": "small"})
+        assert fake_provider.calls[0]["max_tokens"] is None
+
+    def test_schema_rejects_bad_max_tokens(self, fake_provider):
+        for bad in (0, -1, "16000", 2.5):
+            with pytest.raises(SchemaValidationError):
+                call(
+                    "llm.complete",
+                    {"prompt": "p", "model": "small", "max_tokens": bad},
+                )
+
 
 @pytest.mark.django_db
 class TestLlmTranslate:
