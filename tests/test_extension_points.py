@@ -66,7 +66,7 @@ class TestSettingsMerge:
     ):
         settings.STAPEL_AGENT = {"PROVIDERS": {"claude-code": None}}
         resp = api_client.post(
-            "/agent/api/llm/complete",
+            "/agent/api/v1/llm/complete",
             {"prompt": "x", "model": "small", "provider": "claude-code"},
             format="json",
             HTTP_X_API_KEY="test-service-key",

@@ -370,7 +370,7 @@ class TestGenerateImageService:
 
 @pytest.mark.django_db
 class TestGenerateImageHttp:
-    URL = "/agent/api/llm/generate-image"
+    URL = "/agent/api/v1/llm/generate-image"
 
     def _post(self, client, body=None, **kwargs):
         return client.post(

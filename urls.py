@@ -1,32 +1,13 @@
-"""URL configuration for the agent app.
+"""Root URLconf for stapel-agent — v1 canon mount (api-versioning.md §2, §6).
 
-Paths: ``api/llm/complete`` / ``api/llm/translate``; host projects mount
-the app under ``agent/``::
-
-    path("agent/", include("stapel_agent.urls"))
-
-so stapel-translate's AgentProvider keeps POSTing to
-``{AGENT_URL}/api/llm/complete`` unchanged.
+Canon: ``/<mod>/api/v1/...`` — the version segment sits right after ``api/``.
+The host mounts ``include('stapel_agent.urls')`` under ``agent/``; this
+module contributes the ``api/v1/`` prefix (the ``api/`` segment historically
+lives inside this package, not in the host mount). The actual URL set lives
+in ``urls_v1.py``.
 """
-
-from django.urls import path
-
-from .views import (
-    LlmCompleteView,
-    LlmGenerateImageView,
-    LlmSummarizeView,
-    LlmTranscribeView,
-    LlmTranslateView,
-)
+from django.urls import include, path
 
 urlpatterns = [
-    path("api/llm/complete", LlmCompleteView.as_view(), name="llm-complete"),
-    path("api/llm/translate", LlmTranslateView.as_view(), name="llm-translate"),
-    path("api/llm/transcribe", LlmTranscribeView.as_view(), name="llm-transcribe"),
-    path("api/llm/summarize", LlmSummarizeView.as_view(), name="llm-summarize"),
-    path(
-        "api/llm/generate-image",
-        LlmGenerateImageView.as_view(),
-        name="llm-generate-image",
-    ),
+    path('api/v1/', include('stapel_agent.urls_v1')),
 ]

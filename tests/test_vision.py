@@ -213,7 +213,7 @@ class TestVisionService:
 
 @pytest.mark.django_db
 class TestVisionHttp:
-    URL = "/agent/api/llm/complete"
+    URL = "/agent/api/v1/llm/complete"
 
     def _post(self, client, body):
         return client.post(

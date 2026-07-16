@@ -5,6 +5,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.8] — 2026-07-16
+
+### Changed
+- **v1 canon sweep §60** (api-versioning.md §2, §6): URL set moved to
+  `urls_v1.py` (paths now relative: `llm/...`); the new root `urls.py`
+  mounts it under `api/v1/`. Host mount `agent/` unchanged: endpoints now
+  serve at `/agent/api/v1/llm/...`; bare `/agent/api/llm/...` no longer
+  exists (sweep lands before the §3 API00x gates are enabled). Callers
+  (stapel-translate AgentProvider) move to `{AGENT_URL}/api/v1/llm/complete`
+  in stapel-translate 0.4.8. No contract artifacts in this repo yet.
+- Lint hygiene to a clean `stapel-verify`: explicit `# noqa` on pre-existing
+  findings.
+
 ## [0.2.6] - 2026-07-09
 
 ### Added

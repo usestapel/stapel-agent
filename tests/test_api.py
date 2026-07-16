@@ -5,10 +5,10 @@ from stapel_agent.models import PromptLog, PromptStatus
 from stapel_agent.providers.base import ProviderError, ProviderResult
 from stapel_agent.services import JSON_API_SYSTEM_PROMPT
 
-COMPLETE_URL = "/agent/api/llm/complete"
-TRANSLATE_URL = "/agent/api/llm/translate"
-TRANSCRIBE_URL = "/agent/api/llm/transcribe"
-SUMMARIZE_URL = "/agent/api/llm/summarize"
+COMPLETE_URL = "/agent/api/v1/llm/complete"
+TRANSLATE_URL = "/agent/api/v1/llm/translate"
+TRANSCRIBE_URL = "/agent/api/v1/llm/transcribe"
+SUMMARIZE_URL = "/agent/api/v1/llm/summarize"
 
 
 def _complete(client, body=None, **kwargs):

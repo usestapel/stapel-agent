@@ -66,7 +66,7 @@ class LlmCompleteView(SerializerSeamMixin, APIView):
     # here; see MODULE.md.
 
     @extend_schema(request=CompleteRequestSerializer, responses={200: dict})
-    def post(self, request):
+    def post(self, request):  # noqa: R007
         ser = self.get_request_serializer_class()(data=request.data)
         ser.is_valid(raise_exception=True)
         data = ser.validated_data
@@ -100,7 +100,7 @@ class LlmTranslateView(SerializerSeamMixin, APIView):
         request=TranslateRequestSerializer,
         responses={200: TranslateResponseSerializer},
     )
-    def post(self, request):
+    def post(self, request):  # noqa: R007
         ser = self.get_request_serializer_class()(data=request.data)
         ser.is_valid(raise_exception=True)
         data = ser.validated_data
@@ -137,7 +137,7 @@ class LlmTranscribeView(SerializerSeamMixin, APIView):
     # result; see MODULE.md.
 
     @extend_schema(request=TranscribeRequestSerializer, responses={200: dict})
-    def post(self, request):
+    def post(self, request):  # noqa: R007
         ser = self.get_request_serializer_class()(data=request.data)
         ser.is_valid(raise_exception=True)
         data = ser.validated_data
@@ -169,7 +169,7 @@ class LlmSummarizeView(SerializerSeamMixin, APIView):
         request=SummarizeRequestSerializer,
         responses={200: SummarizeResponseSerializer},
     )
-    def post(self, request):
+    def post(self, request):  # noqa: R007
         ser = self.get_request_serializer_class()(data=request.data)
         ser.is_valid(raise_exception=True)
         data = ser.validated_data
@@ -207,7 +207,7 @@ class LlmGenerateImageView(SerializerSeamMixin, APIView):
     # complete's result; see MODULE.md.
 
     @extend_schema(request=GenerateImageRequestSerializer, responses={200: dict})
-    def post(self, request):
+    def post(self, request):  # noqa: R007
         ser = self.get_request_serializer_class()(data=request.data)
         ser.is_valid(raise_exception=True)
         data = ser.validated_data

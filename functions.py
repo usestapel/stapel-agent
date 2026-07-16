@@ -98,7 +98,7 @@ TRANSLATE_SCHEMA = {
 
 @function("llm.complete", schema=COMPLETE_SCHEMA)
 def llm_complete(payload: dict) -> dict:
-    """JSON LLM completion — same result dict as ``POST api/llm/complete``.
+    """JSON LLM completion — same result dict as ``POST api/v1/llm/complete``.
 
     Payload: ``{"prompt": str, "model": "small"|"medium"|"large",
     "system_prompt"?: str, "provider"?: str, "images"?: [{"url"} |
@@ -131,7 +131,7 @@ def llm_complete(payload: dict) -> dict:
 
 @function("llm.translate", schema=TRANSLATE_SCHEMA)
 def llm_translate(payload: dict) -> dict:
-    """Key-value translation — same result dict as ``POST api/llm/translate``.
+    """Key-value translation — same result dict as ``POST api/v1/llm/translate``.
 
     Payload: ``{"from_lang": str, "to": str, "entries": {key: text}}``.
     Returns ``{"status": "ok", "result": {key: translated}}`` or
@@ -205,7 +205,7 @@ SUMMARIZE_SCHEMA = {
 
 @function("llm.transcribe", schema=TRANSCRIBE_SCHEMA)
 def llm_transcribe(payload: dict) -> dict:
-    """Speech-to-text — same result dict as ``POST api/llm/transcribe``.
+    """Speech-to-text — same result dict as ``POST api/v1/llm/transcribe``.
 
     Payload: ``{"audio_url": str, "language"?, "diarization"?,
     "provider"?, "timeout_seconds"?}``. Returns ``{"status": "ok",
@@ -252,7 +252,7 @@ def llm_stt_catalog(payload: dict) -> dict:
 
 @function("llm.summarize", schema=SUMMARIZE_SCHEMA)
 def llm_summarize(payload: dict) -> dict:
-    """Summarization — same result dict as ``POST api/llm/summarize``.
+    """Summarization — same result dict as ``POST api/v1/llm/summarize``.
 
     Payload carries exactly one of ``text`` / ``transcript`` (a
     NormalizedTranscript dict). Returns ``{"status": "ok", "summary":
@@ -304,7 +304,7 @@ GENERATE_IMAGE_SCHEMA = {
 @function("llm.generate_image", schema=GENERATE_IMAGE_SCHEMA)
 def llm_generate_image(payload: dict) -> dict:
     """Image generation — same result dict as
-    ``POST api/llm/generate-image``.
+    ``POST api/v1/llm/generate-image``.
 
     Payload: ``{"prompt": str, "size"?: str, "n"?: int, "provider"?:
     str, "timeout_seconds"?: int}``. Returns ``{"status": "ok", "images":
