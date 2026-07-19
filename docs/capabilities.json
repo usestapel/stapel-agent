@@ -1,0 +1,93 @@
+{
+  "module": "stapel-agent",
+  "version": "0.2.10",
+  "provides": "LLM facade: JSON completion, translation, transcription and summarization in front of swappable model / speech-to-text / image-generation providers (Anthropic, OpenAI-compatible, Claude Code CLI, whisper-http, ElevenLabs, AssemblyAI, openai-images), with a prompt cache and a per-call token ledger. Python port of a prior NestJS service — same HTTP paths/contracts, plus an in-process comm surface for monolith deployments.",
+  "axes": [
+    {
+      "key": "DEFAULT_PROVIDER",
+      "kind": "enum",
+      "default": "anthropic",
+      "group": "agent.llm",
+      "gates": {
+        "operations": [],
+        "co_gates": []
+      },
+      "curated": {
+        "summary": "LLM provider used when a completion request names none, resolved against the merged PROVIDERS registry (conf.py, MODULE.md 'LLM providers').",
+        "business_label": "Default LLM provider"
+      }
+    },
+    {
+      "key": "DEFAULT_STT_PROVIDER",
+      "kind": "enum",
+      "default": "whisper-http",
+      "group": "agent.stt",
+      "gates": {
+        "operations": [],
+        "co_gates": []
+      },
+      "curated": {
+        "summary": "Speech-to-text provider used when a transcription request pins none and no language route matches (conf.py, MODULE.md).",
+        "business_label": "Default transcription provider"
+      }
+    },
+    {
+      "key": "DEFAULT_IMAGE_PROVIDER",
+      "kind": "enum",
+      "default": "openai-images",
+      "group": "agent.images",
+      "gates": {
+        "operations": [],
+        "co_gates": []
+      },
+      "curated": {
+        "summary": "Image-generation provider used when a request pins none, resolved against the merged IMAGE_PROVIDERS registry (conf.py, MODULE.md).",
+        "business_label": "Default image-generation provider"
+      }
+    },
+    {
+      "key": "CACHE_POLICY",
+      "kind": "enum",
+      "default": "stapel_agent.cache.PromptLogCachePolicy",
+      "group": "agent.cache",
+      "gates": {
+        "operations": [],
+        "co_gates": []
+      },
+      "curated": {
+        "summary": "Per-source cache-by-prompt policy; the default answers from the latest matching success row within CACHE_TTL (conf.py, MODULE.md Settings table).",
+        "business_label": "Prompt cache policy"
+      }
+    }
+  ],
+  "extension_points": [
+    {
+      "name": "PROVIDERS",
+      "kind": "merge_registry",
+      "summary": "Flagship seam: MERGE over providers.BUILTIN_PROVIDERS (anthropic/openai-compat/claude-code); None/'' removes a name; also extendable at runtime via register_provider(name, cls_or_path). ABC contract: complete()/resolve_model()/supports_images (MODULE.md 'LLM providers — open registry')."
+    },
+    {
+      "name": "STT_PROVIDERS",
+      "kind": "merge_registry",
+      "summary": "MERGE over stt.BUILTIN_STT_PROVIDERS (whisper-http/elevenlabs/assemblyai); same merge semantics as PROVIDERS (conf.py, MODULE.md Settings table)."
+    },
+    {
+      "name": "IMAGE_PROVIDERS",
+      "kind": "merge_registry",
+      "summary": "MERGE over images.BUILTIN_IMAGE_PROVIDERS (openai-images); same merge semantics as PROVIDERS (conf.py, MODULE.md Settings table)."
+    },
+    {
+      "name": "CACHE_POLICY",
+      "kind": "dotted_path",
+      "summary": "Dotted path to a CachePolicy subclass, in import_strings, instantiated per call (conf.py, MODULE.md 'Cache policy')."
+    }
+  ],
+  "operations_total": 5,
+  "requires": [
+    {
+      "module": "stapel-core",
+      "optional": false,
+      "reason": "the only stapel-* dependency: AppSettings, comm bus for in-process calls (pyproject.toml dependency)"
+    }
+  ]
+}
