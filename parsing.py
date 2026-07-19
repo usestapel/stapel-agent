@@ -10,8 +10,17 @@ import json
 import re
 
 _CODE_BLOCK_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)```")
+# Greedy twin: a fenced manifest whose STRING CONTENT itself contains ``` (a
+# markdown doc inside a JSON string) terminates the non-greedy match early —
+# the last fence is then the real closer.
+_CODE_BLOCK_GREEDY_RE = re.compile(r"```(?:json)?\s*([\s\S]*)```")
 _OBJECT_RE = re.compile(r"(\{[\s\S]*\})")
 _ARRAY_RE = re.compile(r"(\[[\s\S]*\])")
+# A lone backslash directly before whitespace is never valid JSON (in a valid
+# string a backslash escapes the NEXT char, and `\<space>`/`\<newline>` are not
+# escapes) — LLMs emit it as a shell-style line continuation. `(?<!\\)` keeps
+# legitimate `\\` pairs (escaped backslash) intact.
+_INVALID_BS_RE = re.compile(r"(?<!\\)\\(?=\s)")
 
 
 def _try_json(text: str):
@@ -62,6 +71,25 @@ def parse_json_response(response: str) -> tuple[object | None, str | None]:
         parsed, ok = _try_json(arr.group(1))
         if ok:
             return parsed, _comment(trimmed, arr)
+
+    # 5. Greedy fence (``` inside a JSON string truncated strategy 2), then
+    #    the same candidates repaired (invalid backslash-before-whitespace).
+    greedy = _CODE_BLOCK_GREEDY_RE.search(trimmed)
+    candidates = []
+    if greedy:
+        candidates.append(greedy.group(1).strip())
+    if obj:
+        candidates.append(obj.group(1))
+    candidates.append(trimmed)
+    for cand in candidates:
+        parsed, ok = _try_json(cand)
+        if ok:
+            return parsed, None
+        repaired = _INVALID_BS_RE.sub("", cand)
+        if repaired != cand:
+            parsed, ok = _try_json(repaired)
+            if ok:
+                return parsed, "repaired: invalid backslash-before-whitespace"
 
     return None, trimmed or None
 
