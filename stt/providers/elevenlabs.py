@@ -8,6 +8,16 @@ raw bytes should upload them and pass a presigned URL).
 Settings: ``ELEVENLABS_API_KEY`` (required), ``ELEVENLABS_STT_URL``,
 ``ELEVENLABS_STT_MODEL`` (default ``scribe_v2``).
 
+Vocabulary biasing (``keyterms``): Scribe takes a ``keyterms`` list in
+the multipart body (sent here as repeated form fields — the standard
+multipart list encoding). Documented limits (official docs survey,
+2026-07-18): <=1000 terms per request, each term <50 chars and <=5
+words, prohibited characters ``< > { } [ ] \\``. Terms outside the
+limits are TRUNCATED (counted in ``NormalizedTranscript.biasing``),
+never errors. BILLING: keyterms carry a +20% surcharge on the
+transcription and >100 terms adds a 20s minimum billable duration —
+sending terms is a cost decision the caller owns.
+
 Response shape relied upon::
 
     {"language_code": "en", "text": "...",
@@ -29,14 +39,43 @@ from ..base import (
     RetryableTranscriptionError,
     SttProvider,
     TranscriptionError,
+    biasing_metadata,
     normalize_language,
 )
+
+# Documented Scribe keyterm limits (docs survey 2026-07-18): out-of-limit
+# terms are truncated with counts in `biasing`, never raised.
+MAX_KEYTERMS = 1000
+MAX_KEYTERM_CHARS = 50  # "must be less than 50 characters" → len < 50
+MAX_KEYTERM_WORDS = 5
+PROHIBITED_KEYTERM_CHARS = set("<>{}[]\\")
+
+
+def _filter_keyterms(keyterms: list[str]) -> tuple[list[str], int]:
+    """(accepted, truncated_count) under the documented Scribe limits."""
+    accepted: list[str] = []
+    truncated = 0
+    for term in keyterms:
+        stripped = term.strip()
+        if (
+            not stripped
+            or len(stripped) >= MAX_KEYTERM_CHARS
+            or len(stripped.split()) > MAX_KEYTERM_WORDS
+            or any(ch in PROHIBITED_KEYTERM_CHARS for ch in stripped)
+            or len(accepted) >= MAX_KEYTERMS
+        ):
+            truncated += 1
+            continue
+        accepted.append(stripped)
+    return accepted, truncated
 
 
 class ElevenLabsProvider(SttProvider):
     name = "elevenlabs"
     supports_diarization = True
+    supports_keyterms = True
     cost_per_hour = 0.40  # public list price — verify before billing off it
+    # NB: sending keyterms adds a +20% surcharge (see module docstring).
 
     def default_speech_model(self) -> Optional[str]:
         return agent_settings.ELEVENLABS_STT_MODEL
@@ -48,6 +87,8 @@ class ElevenLabsProvider(SttProvider):
         language: Optional[str] = None,
         diarization: bool = False,
         timeout_seconds: Optional[int] = None,
+        keyterms: Optional[list[str]] = None,
+        provider_options: Optional[dict] = None,
     ) -> NormalizedTranscript:
         api_key = agent_settings.ELEVENLABS_API_KEY
         if not api_key:
@@ -69,6 +110,23 @@ class ElevenLabsProvider(SttProvider):
         }
         if language:
             data["language_code"] = normalize_language(language)
+
+        biasing = None
+        if keyterms:
+            accepted, truncated = _filter_keyterms(keyterms)
+            if accepted:
+                # A list value becomes repeated multipart fields
+                # (keyterms=A, keyterms=B) under `requests`.
+                data["keyterms"] = accepted
+            biasing = biasing_metadata(
+                applied=bool(accepted),
+                terms_sent=len(accepted),
+                terms_truncated=truncated,
+            )
+        if provider_options:
+            # The passthrough seam: applied AFTER the adapter's own params
+            # so a caller can pin provider specifics without a core release.
+            data.update(provider_options)
 
         try:
             resp = requests.post(
@@ -111,7 +169,9 @@ class ElevenLabsProvider(SttProvider):
                 f"ElevenLabs returned non-JSON: {resp.text[:300]}",
                 provider=self.name,
             ) from exc
-        return _normalize(body, provider=self.name)
+        transcript = _normalize(body, provider=self.name)
+        transcript.biasing = biasing
+        return transcript
 
 
 def _normalize(payload: dict, *, provider: str) -> NormalizedTranscript:

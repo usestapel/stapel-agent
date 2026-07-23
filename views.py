@@ -147,6 +147,8 @@ class LlmTranscribeView(SerializerSeamMixin, APIView):
             diarization=data.diarization,
             provider=data.provider,
             timeout_seconds=data.timeout_seconds,
+            keyterms=data.keyterms,
+            provider_options=data.provider_options,
             user_id=_request_user_id(request),
         )
         return StapelResponse(payload)

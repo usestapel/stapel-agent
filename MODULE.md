@@ -23,7 +23,7 @@ registries). Everything below is verifiable against the code in this repo.
 | Models (`models.py`) | `PromptLog` (immutable per-call ledger: `source` llm_facade/translate/transcribe/summarize/generate_image/other, `model`, `model_size`, `prompt`, `system_prompt`, `response`, `status` success/failure/timeout/error, `error_message`, `input_tokens`/`output_tokens`/`thinking_tokens`/`cache_read_tokens`/`cache_write_tokens`, `duration_ms`, `user_id`, JSON `metadata`, `created_at`; doubles as the cache-by-prompt store) |
 | Services (`services.py`) | `complete()` (cache lookup → provider → PromptLog row → `{status, result, usage}`; optional `images` for vision), `complete_json()` (JSON-API system prompt + JSON extraction — the `llm.complete` surface), `translate()`, `transcribe()` (STT router walk — see "STT providers"), `summarize()` (single-shot / map-reduce over `complete()`), `generate_image()` (see "Image generation"), `get_provider()` / `get_stt_provider()` / `get_image_provider()` (lazy resolution against the merged registries), `JSON_API_SYSTEM_PROMPT` |
 | Parsing (`parsing.py`) | `parse_json_response()` (direct JSON → fenced block → object anywhere → array anywhere; surrounding prose becomes `comment`), `parse_translation_response()`, Django-free |
-| STT seam (`stt/`) | `SttProvider` ABC, `AudioRef` (exactly one of url/path/data), `NormalizedTranscript`/`NormalizedUtterance`/`NormalizedWord` + `transcript_from_dict()`/`utterances_from_words()`, `TranscriptionError` (fatal) / `RetryableTranscriptionError` (transient) error taxonomy (`stt/base.py`, Django-free); open registry (`stt/__init__.py`); language router (`stt/router.py`); adapters `whisper-http` / `elevenlabs` / `assemblyai` (`stt/providers/`) |
+| STT seam (`stt/`) | `SttProvider` ABC (incl. the `keyterms`/`provider_options` biasing seam), `AudioRef` (exactly one of url/path/data), `NormalizedTranscript` (incl. the counts-only `biasing` block)/`NormalizedUtterance`/`NormalizedWord` + `transcript_from_dict()`/`utterances_from_words()`, `TranscriptionError` (fatal) / `RetryableTranscriptionError` (transient) error taxonomy (`stt/base.py`, Django-free); open registry (`stt/__init__.py`); language router (`stt/router.py`); adapters `whisper-http` / `elevenlabs` / `assemblyai` / `deepgram` / `gladia` / `soniox` / `speechmatics` / `xai-stt` (`stt/providers/`) |
 | Summarization prep (`summary.py`) | `render_markdown()` (timestamped `[MM:SS] speaker: text` lines), `build_summary_input()` (token-budget chunking with `seg_NNNN` → start-ms anchors), `split_text_chunks()`, the three system prompts (single-shot / chunk / merge) — Django-free |
 | Image seam (`images/`) | `ImageRef` (vision input: exactly one of url/data; wire form url \| base64 `data_b64`), `ImageGenProvider` ABC + `GeneratedImage`, `ImageGenError` (fatal) / `RetryableImageGenError` (transient) taxonomy (`images/base.py`, Django-free); open registry (`images/__init__.py`); built-in `openai-images` adapter (`images/providers/openai_images.py`) |
 | HTTP API (`urls.py`, `views.py`) | `api/llm/complete` (accepts optional `images`), `api/llm/translate`, `api/llm/transcribe`, `api/llm/summarize`, `api/llm/generate-image` (all `IsServiceRequest \| IsStaffUser`; hosts mount the app under `agent/`). LLM/STT/image failures are HTTP 200 with `status: "failure"` |
@@ -51,7 +51,7 @@ same name → environment variable → default. All keys are read **lazily at ca
 | `OPENAI_COMPAT_MODELS` | `{}` | Per-size model names for openai-compat; missing sizes fall back to `MODELS[size]`. |
 | `CLI_BINARY` / `CLI_TIMEOUT` | `"claude"` / `120` | Claude Code CLI binary and the provider timeout (seconds). |
 | `MAX_TOKENS` | `4096` | Completion token cap passed to providers. |
-| `STT_PROVIDERS` | `{}` | Overlay **merged over** `stt.BUILTIN_STT_PROVIDERS` (whisper-http / elevenlabs / assemblyai) — same merge semantics as `PROVIDERS`; see "STT providers" below. |
+| `STT_PROVIDERS` | `{}` | Overlay **merged over** `stt.BUILTIN_STT_PROVIDERS` (whisper-http / elevenlabs / assemblyai / deepgram / gladia / soniox / speechmatics / xai-stt) — same merge semantics as `PROVIDERS`; see "STT providers" below. |
 | `DEFAULT_STT_PROVIDER` | `"whisper-http"` | STT provider used when the request pins none and no language route matches. |
 | `STT_FALLBACK_CHAIN` | `[]` | Provider names tried in order after the default — on **retryable** failure only. |
 | `STT_LANGUAGE_ROUTES` | `{}` | `{iso-639-1: [provider names]}` language matrix; beats the default chain, loses to an explicit `provider` in the request. |
@@ -59,6 +59,11 @@ same name → environment variable → default. All keys are read **lazily at ca
 | `WHISPER_BASE_URL` / `WHISPER_API_KEY` / `WHISPER_MODEL` | `""` / `""` / `"whisper-1"` | OpenAI-compatible Whisper endpoint (OpenAI API or self-hosted faster-whisper — the key is optional for self-hosted). |
 | `ELEVENLABS_API_KEY` / `ELEVENLABS_STT_URL` / `ELEVENLABS_STT_MODEL` | `""` / Scribe URL / `"scribe_v2"` | ElevenLabs Scribe credentials/endpoint/model. |
 | `ASSEMBLYAI_API_KEY` / `ASSEMBLYAI_BASE_URL` / `ASSEMBLYAI_MODEL` | `""` / `"https://api.assemblyai.com"` / `"universal"` | AssemblyAI credentials/endpoint/`speech_model`. |
+| `DEEPGRAM_API_KEY` / `DEEPGRAM_BASE_URL` / `DEEPGRAM_MODEL` | `""` / `"https://api.deepgram.com"` / `"nova-3"` | Deepgram credentials/endpoint/model (synchronous `/v1/listen`). |
+| `GLADIA_API_KEY` / `GLADIA_BASE_URL` / `GLADIA_MODEL` | `""` / `"https://api.gladia.io"` / `"solaria-1"` | Gladia credentials/endpoint/model (async upload+create+poll). |
+| `SONIOX_API_KEY` / `SONIOX_BASE_URL` / `SONIOX_MODEL` | `""` / `"https://api.soniox.com"` / `"stt-async-v5"` | Soniox credentials/endpoint/model (async; uploads are cleaned up after every run). |
+| `SPEECHMATICS_API_KEY` / `SPEECHMATICS_BASE_URL` / `SPEECHMATICS_MODEL` | `""` / `"https://eu1.asr.api.speechmatics.com"` / `"melia-1"` | Speechmatics credentials/region endpoint/model (melia-1 exists in EU1/US1 only). |
+| `XAI_API_KEY` / `XAI_STT_URL` | `""` / `"https://api.x.ai/v1/stt"` | xAI STT credentials/endpoint (single synchronous POST; the endpoint has no model parameter). |
 | `IMAGE_PROVIDERS` | `{}` | Overlay **merged over** `images.BUILTIN_IMAGE_PROVIDERS` (openai-images) — same merge semantics as `PROVIDERS`; see "Image generation" below. |
 | `DEFAULT_IMAGE_PROVIDER` | `"openai-images"` | Image provider used when the request pins none. |
 | `IMAGES_BASE_URL` / `IMAGES_API_KEY` | `""` / `""` | OpenAI-compatible `/images/generations` endpoint + key; **both fall back to the `OPENAI_COMPAT_*` pair**, so an OpenAI-flavoured host configures nothing extra. |
@@ -158,7 +163,8 @@ documented maximum and raises `ProviderError`.
 `stt/__init__.py` mirrors the LLM registry exactly. Three layers, later wins
 per name:
 
-1. `stt.BUILTIN_STT_PROVIDERS` (`whisper-http` / `elevenlabs` / `assemblyai`);
+1. `stt.BUILTIN_STT_PROVIDERS` (`whisper-http` / `elevenlabs` / `assemblyai` /
+   `deepgram` / `gladia` / `soniox` / `speechmatics` / `xai-stt`);
 2. `STAPEL_AGENT["STT_PROVIDERS"]` — merged **over** the built-ins (add one
    name, never restate the rest; `None`/`""` removes a name);
 3. runtime `stapel_agent.register_stt_provider(name, cls_or_path)` — highest
@@ -181,9 +187,23 @@ ABC contract (`stt/base.py`, Django-free):
 
 | Member | Signature | Contract |
 |---|---|---|
-| `transcribe` | `(*, audio: AudioRef, language: str \| None = None, diarization: bool = False, timeout_seconds: int \| None = None) -> NormalizedTranscript` | Synchronous (polling-based) batch transcription. Raise `RetryableTranscriptionError` on transient failure, `TranscriptionError` on permanent failure. |
-| `name` / `supports_diarization` / `supported_languages` / `cost_per_hour` | class attributes | Stable id (stored on the PromptLog row), capability flags, optional USD/hour for billing hosts. |
+| `transcribe` | `(*, audio: AudioRef, language: str \| None = None, diarization: bool = False, timeout_seconds: int \| None = None, keyterms: list[str] \| None = None, provider_options: dict \| None = None) -> NormalizedTranscript` | Synchronous (polling-based) batch transcription. Raise `RetryableTranscriptionError` on transient failure, `TranscriptionError` on permanent failure. `keyterms` = the generic vocabulary-biasing seam (see below); `provider_options` = free-form per-provider passthrough applied AFTER the adapter's own request params — never silently dropped. |
+| `name` / `supports_diarization` / `supports_keyterms` / `supported_languages` / `cost_per_hour` | class attributes | Stable id (stored on the PromptLog row), capability flags, optional USD/hour for billing hosts. |
 | `speech_model` | class attribute (`str \| None`, default None) | **Per-registration model pin** — the STT mirror of fixing a model on an LLM registration. Set it on a subclass to force one engine/model for that registered name, overriding the provider's configured default (`WHISPER_MODEL` / `ELEVENLABS_STT_MODEL` / `ASSEMBLYAI_MODEL`); None falls back to that default. `effective_model()` returns the pin-or-default and `default_speech_model()` the configured default (providers override it to read their setting). Two registrations of one adapter class can thus carry different models without a settings change or a fork. |
+
+**Vocabulary biasing** (`keyterms`): a normalized list of plain terms (no
+provider weight syntax). Adapters with `supports_keyterms = True` map it onto
+their provider's own parameter — Deepgram Nova-3 repeated `keyterm` query
+params (~500-token budget), ElevenLabs Scribe `keyterms` (<50 chars / ≤5
+words / ≤1000 terms; +20% billing surcharge), AssemblyAI `keyterms_prompt`
+(≤6 words per phrase, ≤1000 words total), xAI repeated `keyterm` multipart
+fields (≤100 × 50 chars). Per-provider limits TRUNCATE (never error);
+adapters without support report the request instead of failing. Application
+metadata comes back generically as `NormalizedTranscript.biasing =
+{"applied": bool, "terms_sent": int, "terms_truncated": int} | None` —
+**counts only, never the terms**: term lists are customer data and stay out
+of transcripts, ledgers and logs. Dictionary storage/selection, routing
+matrices and biasing telemetry are app-layer concerns, not core's.
 
 `AudioRef` carries exactly one of `url` / `path` / `data` (+ optional `mime`).
 Cloud adapters that need a fetchable URL call `audio.require_url(provider=...)`

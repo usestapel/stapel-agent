@@ -188,7 +188,16 @@ class FakeSttProvider(SttProvider):
         )
         cls.error = None
 
-    def transcribe(self, *, audio, language=None, diarization=False, timeout_seconds=None):
+    def transcribe(
+        self,
+        *,
+        audio,
+        language=None,
+        diarization=False,
+        timeout_seconds=None,
+        keyterms=None,
+        provider_options=None,
+    ):
         cls = type(self)
         cls.calls.append(
             {
@@ -196,10 +205,18 @@ class FakeSttProvider(SttProvider):
                 "language": language,
                 "diarization": diarization,
                 "timeout_seconds": timeout_seconds,
+                "keyterms": keyterms,
+                "provider_options": provider_options,
             }
         )
         if cls.error is not None:
             raise cls.error
+        if keyterms and not cls.supports_keyterms:
+            # The house contract for non-supporting adapters: report the
+            # request as not applied instead of failing.
+            from stapel_agent.stt.base import unsupported_biasing
+
+            cls.result.biasing = unsupported_biasing(keyterms)
         return cls.result
 
 

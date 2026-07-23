@@ -28,12 +28,18 @@ from ..base import (
     SttProvider,
     TranscriptionError,
     normalize_language,
+    unsupported_biasing,
 )
 
 
 class WhisperHttpProvider(SttProvider):
     name = "whisper-http"
     supports_diarization = False
+    # The OpenAI dialect has no keyterm/vocabulary parameter — requested
+    # keyterms are reported as not applied (biasing block), never dropped
+    # silently. (A host that wants Whisper's ``prompt`` biasing can send
+    # it via provider_options={"prompt": ...} — a caller-owned decision.)
+    supports_keyterms = False
 
     def default_speech_model(self) -> Optional[str]:
         return agent_settings.WHISPER_MODEL
@@ -45,6 +51,8 @@ class WhisperHttpProvider(SttProvider):
         language: Optional[str] = None,
         diarization: bool = False,
         timeout_seconds: Optional[int] = None,
+        keyterms: Optional[list[str]] = None,
+        provider_options: Optional[dict] = None,
     ) -> NormalizedTranscript:
         base_url = (agent_settings.WHISPER_BASE_URL or "").rstrip("/")
         if not base_url:
@@ -66,6 +74,10 @@ class WhisperHttpProvider(SttProvider):
         }
         if language:
             data["language"] = normalize_language(language)
+        if provider_options:
+            # The passthrough seam: caller-pinned provider specifics win
+            # over (are applied after) the adapter's own params.
+            data.update(provider_options)
         headers = {}
         api_key = agent_settings.WHISPER_API_KEY
         if api_key:
@@ -111,7 +123,9 @@ class WhisperHttpProvider(SttProvider):
             raise RetryableTranscriptionError(
                 f"whisper returned non-JSON: {resp.text[:300]}", provider=self.name
             ) from exc
-        return _normalize(body, provider=self.name)
+        transcript = _normalize(body, provider=self.name)
+        transcript.biasing = unsupported_biasing(keyterms)
+        return transcript
 
 
 def _normalize(payload: dict, *, provider: str) -> NormalizedTranscript:

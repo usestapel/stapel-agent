@@ -81,6 +81,12 @@ class NormalizedTranscript:
             when the provider doesn't ship it).
         speakers_detected: Distinct speaker labels seen in ``words``.
         raw: Untouched provider response for debugging / re-parsing.
+        biasing: Vocabulary-biasing application metadata — ``{"applied":
+            bool, "terms_sent": int, "terms_truncated": int}`` when the
+            caller requested ``keyterms``, else None. COUNTS ONLY, never
+            the terms themselves: term lists are customer data and must
+            not leak into transcripts, logs or ledgers (privacy canon —
+            the safe thing is the default).
     """
 
     provider: str
@@ -90,6 +96,7 @@ class NormalizedTranscript:
     utterances: list[NormalizedUtterance] = field(default_factory=list)
     speakers_detected: list[str] = field(default_factory=list)
     raw: dict = field(default_factory=dict)
+    biasing: Optional[dict] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -113,6 +120,38 @@ def transcript_from_dict(data: dict) -> NormalizedTranscript:
         utterances=[NormalizedUtterance(**u) for u in data.get("utterances") or []],
         speakers_detected=list(data.get("speakers_detected") or []),
         raw=data.get("raw") or {},
+        biasing=data.get("biasing"),
+    )
+
+
+def biasing_metadata(
+    *, applied: bool, terms_sent: int, terms_truncated: int
+) -> dict:
+    """The generic biasing block for ``NormalizedTranscript.biasing``.
+
+    One constructor so every adapter emits the same three-key shape —
+    and ONLY counts (never the term strings; see the privacy note on
+    ``NormalizedTranscript``).
+    """
+    return {
+        "applied": bool(applied),
+        "terms_sent": int(terms_sent),
+        "terms_truncated": int(terms_truncated),
+    }
+
+
+def unsupported_biasing(keyterms: Optional[list[str]]) -> Optional[dict]:
+    """Biasing block for an adapter WITHOUT keyterm support.
+
+    Requested keyterms are reported as not applied (all counted as
+    truncated) rather than raised — the caller's telemetry decides what
+    a silent non-application means. Returns None when nothing was
+    requested.
+    """
+    if not keyterms:
+        return None
+    return biasing_metadata(
+        applied=False, terms_sent=0, terms_truncated=len(keyterms)
     )
 
 
@@ -299,6 +338,11 @@ class SttProvider(ABC):
 
     name: str = ""
     supports_diarization: bool = False
+    #: True when the adapter wires ``keyterms`` into the provider's own
+    #: vocabulary-biasing parameter. Adapters without support still ACCEPT
+    #: the argument and report ``biasing={"applied": False, ...}`` — see
+    #: ``unsupported_biasing``.
+    supports_keyterms: bool = False
     supported_languages: Optional[frozenset[str]] = None
     cost_per_hour: Optional[float] = None
     speech_model: Optional[str] = None
@@ -324,8 +368,23 @@ class SttProvider(ABC):
         language: Optional[str] = None,
         diarization: bool = False,
         timeout_seconds: Optional[int] = None,
+        keyterms: Optional[list[str]] = None,
+        provider_options: Optional[dict] = None,
     ) -> NormalizedTranscript:
         """Run a synchronous (polling-based) batch transcription.
+
+        ``keyterms`` is the GENERIC vocabulary-biasing seam: a normalized
+        list of plain terms (no provider-specific weight syntax). Adapters
+        with ``supports_keyterms`` map it onto their provider's parameter,
+        enforcing per-provider limits as TRUNCATION (counted in
+        ``NormalizedTranscript.biasing``), never as errors; adapters
+        without support report ``biasing={"applied": False, ...}``.
+
+        ``provider_options`` is a free-form per-provider passthrough,
+        applied AFTER the adapter's own request params — a caller can pin
+        provider specifics (a new knob, a beta flag) without a core
+        release. Unknown keys go to the provider as-is; the adapter must
+        NEVER silently drop them.
 
         Raises RetryableTranscriptionError on transient failure (network,
         429, 5xx, poll timeout — the service falls back to the next
@@ -350,7 +409,9 @@ __all__ = [
     "RetryableTranscriptionError",
     "SttProvider",
     "TranscriptionError",
+    "biasing_metadata",
     "normalize_language",
     "transcript_from_dict",
+    "unsupported_biasing",
     "utterances_from_words",
 ]

@@ -23,6 +23,11 @@ BUILTIN_STT_PROVIDERS = {
     "whisper-http": "stapel_agent.stt.providers.whisper_http.WhisperHttpProvider",
     "elevenlabs": "stapel_agent.stt.providers.elevenlabs.ElevenLabsProvider",
     "assemblyai": "stapel_agent.stt.providers.assemblyai.AssemblyAIProvider",
+    "deepgram": "stapel_agent.stt.providers.deepgram.DeepgramProvider",
+    "gladia": "stapel_agent.stt.providers.gladia.GladiaProvider",
+    "soniox": "stapel_agent.stt.providers.soniox.SonioxProvider",
+    "speechmatics": "stapel_agent.stt.providers.speechmatics.SpeechmaticsProvider",
+    "xai-stt": "stapel_agent.stt.providers.xai_stt.XaiSttProvider",
 }
 
 # name → SttProvider subclass | dotted path | None (None masks the name).

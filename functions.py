@@ -171,6 +171,21 @@ TRANSCRIBE_SCHEMA = {
             "minimum": 1,
             "description": "Hard cap on one provider's submit+poll cycle.",
         },
+        "keyterms": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Normalized vocabulary-bias terms (plain "
+            "strings, no weight syntax). Adapters map them onto their "
+            "provider's biasing parameter; per-provider limits truncate "
+            "(counted in the transcript's biasing block), never fail.",
+        },
+        "provider_options": {
+            "type": "object",
+            "description": "Free-form per-provider passthrough, applied "
+            "AFTER the adapter's own request params — pin provider "
+            "specifics without a core release. Unknown keys go to the "
+            "provider as-is.",
+        },
     },
     "required": ["audio_url"],
     "additionalProperties": False,
@@ -208,9 +223,16 @@ def llm_transcribe(payload: dict) -> dict:
     """Speech-to-text — same result dict as ``POST api/v1/llm/transcribe``.
 
     Payload: ``{"audio_url": str, "language"?, "diarization"?,
-    "provider"?, "timeout_seconds"?}``. Returns ``{"status": "ok",
-    "transcript": {...}, "provider_used": str, "fallback_used": bool}``
-    or ``{"status": "failure", "reason": str}``.
+    "provider"?, "timeout_seconds"?, "keyterms"?: [str],
+    "provider_options"?: {...}}``. ``keyterms`` is the generic
+    vocabulary-biasing seam (plain terms; providers without support
+    report ``biasing.applied: false`` instead of failing);
+    ``provider_options`` passes provider-specific params through as-is,
+    after the adapter's own. Returns ``{"status": "ok", "transcript":
+    {...}, "provider_used": str, "fallback_used": bool}`` or
+    ``{"status": "failure", "reason": str}``; the transcript carries
+    ``biasing: {"applied", "terms_sent", "terms_truncated"} | null`` —
+    counts only, never the term strings.
     """
     from . import services
     from .stt.base import AudioRef
@@ -221,6 +243,8 @@ def llm_transcribe(payload: dict) -> dict:
         diarization=bool(payload.get("diarization", False)),
         provider=payload.get("provider"),
         timeout_seconds=payload.get("timeout_seconds"),
+        keyterms=payload.get("keyterms"),
+        provider_options=payload.get("provider_options"),
     )
 
 
@@ -237,7 +261,8 @@ def llm_stt_catalog(payload: dict) -> dict:
 
     Takes no arguments (``{}``). Returns ``{"status": "ok", "providers":
     [{"name", "available", "model", "pinned_model", "supports_diarization",
-    "supported_languages", "cost_per_hour"}...], "default_provider": str,
+    "supports_keyterms", "supported_languages", "cost_per_hour"}...],
+    "default_provider": str,
     "fallback_chain": [str], "language_routes": {lang: [str]}}``. ``model``
     is each registration's effective model — the per-registration
     ``speech_model`` pin when set, else the provider's configured default;

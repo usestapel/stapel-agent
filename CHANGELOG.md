@@ -5,6 +5,65 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-07-23
+
+Minor: the generic STT vocabulary-biasing seam + five new provider
+adapters ported from the iron-benchmark quads. Core stays generic —
+per-provider PARAMETER WIRING (how each API accepts biasing) lives here;
+dictionary storage/selection, routing matrices and biasing telemetry
+stay app-layer.
+
+### Added
+- **Biasing seam** (`stt/base.py`): `SttProvider.transcribe(...)` gains
+  `keyterms: list[str] | None` (normalized plain bias terms) and
+  `provider_options: dict | None` (free-form per-provider passthrough,
+  applied AFTER the adapter's own request params — a caller can pin
+  provider specifics without a core release; unknown keys go to the
+  provider as-is, never silently dropped). New capability class-attr
+  `supports_keyterms: bool = False`. `NormalizedTranscript` gains
+  `biasing: dict | None` — `{"applied": bool, "terms_sent": int,
+  "terms_truncated": int}`, **counts only, never the term strings**
+  (term lists are customer data; the safe thing is the default) —
+  threaded through `to_dict()`/`transcript_from_dict()`. Helpers
+  `biasing_metadata()` / `unsupported_biasing()`. Adapters without
+  keyterm support report requested terms as not applied instead of
+  failing; per-provider limits TRUNCATE with counts, never error.
+- **Keyterm wiring on existing adapters**: ElevenLabs Scribe `keyterms`
+  multipart list (<50 chars / ≤5 words / ≤1000 terms, prohibited chars
+  filtered; +20% surcharge noted), AssemblyAI `keyterms_prompt` (≤6
+  words per phrase, ≤1000 words total; the legacy `word_boost` pair is
+  never sent — gone from current docs).
+- **New adapters** (`stt/providers/`, registered as built-ins):
+  `deepgram` (Nova-3 `/v1/listen`, raw-bytes body, `Token` auth,
+  `diarize_model` — never the deprecated `diarize` boolean; keyterm =
+  repeated query param with the ported ~500-token budget estimator,
+  legacy `term:weight` syntax and duplicates truncated; keyterm add-on
+  $0.0013/min noted), `gladia` (upload→create→poll, solaria-1 pinned
+  explicitly), `soniox` (upload→create→poll→fetch with mandatory
+  file cleanup every run; sub-word token merge into words), `speechmatics`
+  (multipart submit + poll + transcript fetch; melia-1 wire language
+  "multi" + hints, `is_eos`-split derived utterances, "UU" → no speaker),
+  `xai-stt` (single multipart POST, file field last, `format`+`language`
+  pair rules, repeated `keyterm` fields ≤100 × 50 chars; no model
+  parameter exists — nothing to pin). Gladia/Soniox/Speechmatics ship
+  `supports_keyterms = False` (their vocabulary params are not covered
+  by the verified sources); their `provider_options` reach the request
+  body for hosts that own that decision. New settings:
+  `DEEPGRAM_*`, `GLADIA_*`, `SONIOX_*`, `SPEECHMATICS_*`, `XAI_API_KEY`
+  / `XAI_STT_URL`.
+- **Surfaces**: `llm.transcribe` schema (+ committed
+  `schemas/functions/llm.transcribe.json`), the HTTP transcribe
+  serializer/DTO and `services.transcribe()` accept `keyterms` +
+  `provider_options` (top-level schema stays `additionalProperties:
+  false`; the free-form zone is inside `provider_options` only); the
+  result transcript carries the `biasing` block. `llm.stt_catalog` /
+  `services.stt_catalog()` entries gain `supports_keyterms`.
+
+### Changed
+- `services.transcribe()` threads the seam kwargs to adapters ONLY when
+  provided, so out-of-tree adapters written against the pre-seam
+  signature keep working until a caller actually uses biasing.
+
 ## [0.2.10] — 2026-07-17
 
 Fleet follow-up to stapel-core 0.12.0 (legacy shim sweep). No source

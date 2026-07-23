@@ -69,6 +69,12 @@ class TranscribeRequest:
         diarization: Ask the provider for speaker labels.
         provider: Pin one STT provider (no fallback).
         timeout_seconds: Hard cap on one provider's submit+poll cycle.
+        keyterms: Normalized vocabulary-bias terms (plain strings).
+            Providers without keyterm support report the request as not
+            applied in the transcript's ``biasing`` block instead of
+            failing; per-provider limits truncate, never error.
+        provider_options: Free-form per-provider passthrough, applied
+            after the adapter's own request params.
     """
 
     audio_url: str
@@ -76,6 +82,8 @@ class TranscribeRequest:
     diarization: bool = False
     provider: Optional[str] = None
     timeout_seconds: Optional[int] = None
+    keyterms: Optional[List[str]] = None
+    provider_options: Optional[dict] = None
 
 
 @dataclass

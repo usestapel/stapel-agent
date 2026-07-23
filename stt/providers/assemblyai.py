@@ -10,6 +10,15 @@ Unlike Scribe (synchronous), AssemblyAI is async:
 Settings: ``ASSEMBLYAI_API_KEY`` (required), ``ASSEMBLYAI_BASE_URL``,
 ``ASSEMBLYAI_MODEL`` (``speech_model``; default ``universal`` — 99
 languages; set ``best`` for the tier-1 pro model).
+
+Vocabulary biasing (``keyterms``): the CURRENT parameter is
+``keyterms_prompt`` (JSON body, list of strings). Documented limits
+(official docs survey 2026-07-18, universal-3-5-pro): <=1000
+words/phrases per request where EACH WORD of a phrase counts toward the
+1000, and <=6 words per phrase. The legacy ``word_boost``/``boost_param``
+pair is GONE from current docs (404) — never sent. Out-of-limit terms
+are TRUNCATED (counted in ``NormalizedTranscript.biasing``), never
+errors.
 """
 from __future__ import annotations
 
@@ -28,11 +37,37 @@ from ..base import (
     RetryableTranscriptionError,
     SttProvider,
     TranscriptionError,
+    biasing_metadata,
 )
 
 logger = logging.getLogger(__name__)
 
 SUBMIT_TIMEOUT_S = 60
+
+# Documented keyterms_prompt limits (docs survey 2026-07-18): out-of-limit
+# terms are truncated with counts in `biasing`, never raised.
+MAX_KEYTERM_PHRASE_WORDS = 6
+MAX_KEYTERM_TOTAL_WORDS = 1000  # each word of a phrase counts
+
+
+def _filter_keyterms(keyterms: list[str]) -> tuple[list[str], int]:
+    """(accepted, truncated_count) under the documented limits."""
+    accepted: list[str] = []
+    truncated = 0
+    total_words = 0
+    for term in keyterms:
+        stripped = term.strip()
+        words = len(stripped.split())
+        if (
+            not stripped
+            or words > MAX_KEYTERM_PHRASE_WORDS
+            or total_words + words > MAX_KEYTERM_TOTAL_WORDS
+        ):
+            truncated += 1
+            continue
+        accepted.append(stripped)
+        total_words += words
+    return accepted, truncated
 POLL_TIMEOUT_S = 30
 INITIAL_POLL_INTERVAL_S = 5.0
 MAX_POLL_INTERVAL_S = 30.0
@@ -42,6 +77,7 @@ POLL_INTERVAL_GROWTH = 1.5
 class AssemblyAIProvider(SttProvider):
     name = "assemblyai"
     supports_diarization = True
+    supports_keyterms = True
     cost_per_hour = 0.37  # 'best' tier list price; 'universal' is cheaper
 
     def default_speech_model(self) -> Optional[str]:
@@ -54,6 +90,8 @@ class AssemblyAIProvider(SttProvider):
         language: Optional[str] = None,
         diarization: bool = False,
         timeout_seconds: Optional[int] = None,
+        keyterms: Optional[list[str]] = None,
+        provider_options: Optional[dict] = None,
     ) -> NormalizedTranscript:
         api_key = agent_settings.ASSEMBLYAI_API_KEY
         if not api_key:
@@ -80,9 +118,26 @@ class AssemblyAIProvider(SttProvider):
         else:
             body["language_detection"] = True
 
+        biasing = None
+        if keyterms:
+            accepted, truncated = _filter_keyterms(keyterms)
+            if accepted:
+                body["keyterms_prompt"] = accepted
+            biasing = biasing_metadata(
+                applied=bool(accepted),
+                terms_sent=len(accepted),
+                terms_truncated=truncated,
+            )
+        if provider_options:
+            # The passthrough seam: applied AFTER the adapter's own params
+            # so a caller can pin provider specifics without a core release.
+            body.update(provider_options)
+
         transcript_id = self._submit(body)
         payload = self._poll(transcript_id, timeout_seconds=timeout)
-        return _normalize(payload, provider=self.name)
+        transcript = _normalize(payload, provider=self.name)
+        transcript.biasing = biasing
+        return transcript
 
     # ── HTTP helpers ──────────────────────────────────────────
 

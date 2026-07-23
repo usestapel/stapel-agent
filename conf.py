@@ -80,6 +80,27 @@ agent_settings = AppSettings(
         "ASSEMBLYAI_API_KEY": "",
         "ASSEMBLYAI_BASE_URL": "https://api.assemblyai.com",
         "ASSEMBLYAI_MODEL": "universal",
+        # Deepgram (synchronous /v1/listen, raw-bytes body).
+        "DEEPGRAM_API_KEY": "",
+        "DEEPGRAM_BASE_URL": "https://api.deepgram.com",
+        "DEEPGRAM_MODEL": "nova-3",
+        # Gladia (async upload+create+poll).
+        "GLADIA_API_KEY": "",
+        "GLADIA_BASE_URL": "https://api.gladia.io",
+        "GLADIA_MODEL": "solaria-1",
+        # Soniox (async upload+create+poll+fetch, mandatory cleanup).
+        "SONIOX_API_KEY": "",
+        "SONIOX_BASE_URL": "https://api.soniox.com",
+        "SONIOX_MODEL": "stt-async-v5",
+        # Speechmatics (async submit+poll+fetch). Melia 1 exists in
+        # EU1/US1 only — the base URL selects the region.
+        "SPEECHMATICS_API_KEY": "",
+        "SPEECHMATICS_BASE_URL": "https://eu1.asr.api.speechmatics.com",
+        "SPEECHMATICS_MODEL": "melia-1",
+        # xAI STT (single synchronous multipart POST; the endpoint has NO
+        # model parameter — nothing to pin).
+        "XAI_API_KEY": "",
+        "XAI_STT_URL": "https://api.x.ai/v1/stt",
         # ── Image generation ────────────────────────────────────
         # Overlay merged OVER images.BUILTIN_IMAGE_PROVIDERS
         # (openai-images) — same merge semantics as PROVIDERS/STT_PROVIDERS.

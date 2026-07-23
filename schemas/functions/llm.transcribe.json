@@ -24,6 +24,15 @@
       "type": "integer",
       "minimum": 1,
       "description": "Hard cap on one provider's submit+poll cycle."
+    },
+    "keyterms": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Normalized vocabulary-bias terms (plain strings, no weight syntax). Adapters map them onto their provider's biasing parameter; per-provider limits truncate (counted in the transcript's biasing block), never fail."
+    },
+    "provider_options": {
+      "type": "object",
+      "description": "Free-form per-provider passthrough, applied AFTER the adapter's own request params — pin provider specifics without a core release. Unknown keys go to the provider as-is."
     }
   },
   "required": ["audio_url"],

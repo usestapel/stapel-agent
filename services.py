@@ -393,7 +393,8 @@ def stt_catalog() -> dict:
 
         {"name": str, "available": bool, "model": str | None,
          "pinned_model": bool, "supports_diarization": bool,
-         "supported_languages": [str] | None, "cost_per_hour": float | None}
+         "supports_keyterms": bool, "supported_languages": [str] | None,
+         "cost_per_hour": float | None}
 
     Names walk the effective registry (built-ins ← ``STT_PROVIDERS`` merge
     ← runtime). Each provider is instantiated to read its capability flags
@@ -425,6 +426,7 @@ def stt_catalog() -> dict:
                 "model": model,
                 "pinned_model": backend.speech_model is not None,
                 "supports_diarization": bool(backend.supports_diarization),
+                "supports_keyterms": bool(backend.supports_keyterms),
                 "supported_languages": sorted(langs) if langs is not None else None,
                 "cost_per_hour": backend.cost_per_hour,
             }
@@ -449,6 +451,8 @@ def transcribe(
     diarization: bool = False,
     provider: str | None = None,
     timeout_seconds: int | None = None,
+    keyterms: list[str] | None = None,
+    provider_options: dict | None = None,
     user_id: str | None = None,
     metadata: dict | None = None,
 ) -> dict:
@@ -459,6 +463,14 @@ def transcribe(
     ``RetryableTranscriptionError`` — fatal errors (bad input, auth) stop
     the walk. Every call writes one PromptLog row (``source=transcribe``,
     ``model`` = provider name, token columns null).
+
+    ``keyterms`` (normalized vocabulary-bias terms) and
+    ``provider_options`` (free-form per-provider passthrough) are
+    threaded to the adapter ONLY when set, so adapters written against
+    the pre-seam signature keep working for calls that don't use the
+    seam. The transcript dict carries the generic ``biasing`` block
+    (counts only — never the terms; term lists are customer data and are
+    likewise kept OUT of the PromptLog row).
 
     Returns ``{"status": "ok", "transcript": {...}, "provider_used": str,
     "fallback_used": bool}`` or ``{"status": "failure", "reason": ...}``.
@@ -523,12 +535,20 @@ def transcribe(
             logger.warning("stapel-agent: %s", failure_reason)
             continue
 
+        # The biasing seam is passed only when used — see the docstring.
+        seam_kwargs = {}
+        if keyterms is not None:
+            seam_kwargs["keyterms"] = list(keyterms)
+        if provider_options is not None:
+            seam_kwargs["provider_options"] = dict(provider_options)
+
         try:
             transcript = backend.transcribe(
                 audio=audio,
                 language=language,
                 diarization=diarization,
                 timeout_seconds=timeout_seconds,
+                **seam_kwargs,
             )
         except RetryableTranscriptionError as exc:
             failure_reason = str(exc)

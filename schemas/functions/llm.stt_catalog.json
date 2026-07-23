@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "llm.stt_catalog",
-  "description": "Enumerate the addressable speech-to-text surface — the registered STT provider names, what each would run, and the routing config. Takes no arguments. Returns {status: 'ok', providers: [{name, available, model, pinned_model, supports_diarization, supported_languages, cost_per_hour}], default_provider, fallback_chain, language_routes}. Each provider's `model` is its effective model — the per-registration `speech_model` pin when set, else the configured default (`pinned_model` flags which). Read-only: writes no PromptLog row.",
+  "description": "Enumerate the addressable speech-to-text surface — the registered STT provider names, what each would run, and the routing config. Takes no arguments. Returns {status: 'ok', providers: [{name, available, model, pinned_model, supports_diarization, supports_keyterms, supported_languages, cost_per_hour}], default_provider, fallback_chain, language_routes}. Each provider's `model` is its effective model — the per-registration `speech_model` pin when set, else the configured default (`pinned_model` flags which). Read-only: writes no PromptLog row.",
   "type": "object",
   "properties": {},
   "additionalProperties": false

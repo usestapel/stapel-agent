@@ -86,6 +86,11 @@ class TestConfDefaults:
             "whisper-http",
             "elevenlabs",
             "assemblyai",
+            "deepgram",
+            "gladia",
+            "soniox",
+            "speechmatics",
+            "xai-stt",
         }
         assert agent_settings.DEFAULT_STT_PROVIDER == "whisper-http"
         assert agent_settings.STT_FALLBACK_CHAIN == []
