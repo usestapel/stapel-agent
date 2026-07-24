@@ -14,6 +14,9 @@ ERR_400_INVALID_IMAGE_COUNT = "error.400.invalid_image_count"
 ERR_400_INVALID_TIMEOUT = "error.400.invalid_timeout"
 ERR_400_INVALID_NUM_SPEAKERS = "error.400.invalid_num_speakers"
 ERR_400_EMPTY_TEXTS = "error.400.empty_texts"
+ERR_400_EMPTY_QUERY = "error.400.empty_query"
+ERR_400_EMPTY_DOCUMENTS = "error.400.empty_documents"
+ERR_400_INVALID_TOP_N = "error.400.invalid_top_n"
 
 AGENT_ERRORS = {
     ERR_400_INVALID_MODEL_SIZE: "Model must be one of: small, medium, large",
@@ -25,6 +28,11 @@ AGENT_ERRORS = {
     ERR_400_INVALID_TIMEOUT: "timeout_seconds must be a positive integer (>= 1)",
     ERR_400_INVALID_NUM_SPEAKERS: "num_speakers must be a positive integer (>= 1)",
     ERR_400_EMPTY_TEXTS: "texts must be a non-empty list of non-empty strings",
+    ERR_400_EMPTY_QUERY: "query must be a non-empty string",
+    ERR_400_EMPTY_DOCUMENTS: (
+        "documents must be a non-empty list of non-empty strings"
+    ),
+    ERR_400_INVALID_TOP_N: "top_n must be a positive integer (>= 1)",
 }
 
 register_service_errors(AGENT_ERRORS)

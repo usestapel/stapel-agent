@@ -873,6 +873,118 @@ def embed(
     }
 
 
+# ─── Rerank ───────────────────────────────────────────────────────────
+
+
+def get_rerank_provider(name: str):
+    """Instantiate the rerank provider registered under *name*
+    (runtime → ``RERANK_PROVIDERS`` merge → built-ins). Raises
+    RerankError for unknown names — ``rerank()`` degrades that to
+    ``status: "failure"``."""
+    from .rerank import registered_rerank_providers
+    from .rerank.base import RerankError
+
+    target = registered_rerank_providers().get(name)
+    if not target:
+        raise RerankError(
+            f"Unknown rerank provider '{name}' — register it via "
+            "STAPEL_AGENT['RERANK_PROVIDERS'] or "
+            "stapel_agent.rerank.register_rerank_provider",
+            provider=name,
+        )
+    cls = import_string(target) if isinstance(target, str) else target
+    return cls()
+
+
+def rerank(
+    query,
+    documents,
+    *,
+    top_n: int | None = None,
+    provider: str | None = None,
+    timeout_seconds: int | None = None,
+    provider_options: dict | None = None,
+    user_id: str | None = None,
+    metadata: dict | None = None,
+) -> dict:
+    """Rerank *documents* against *query* through the configured backend.
+
+    Single-provider surface (explicit *provider* or
+    ``DEFAULT_RERANK_PROVIDER``). Results are ``(index, score)`` pairs
+    sorted by score descending; ``index`` points into the input
+    documents list — the caller joins back positionally, the documents
+    never round-trip. Retrieval and final cutoff policies stay
+    app-layer.
+
+    One PromptLog row per call — ``source=rerank``, ``model`` = provider
+    name, and ONLY counts/usage in the row: prompt =
+    ``query+docs:<n>``, response null, metadata carries ``{model,
+    document_count, result_count, usage}``. **Never the query, never the
+    document texts** — rerank inputs are customer data and must not leak
+    into the ledger (privacy canon — the safe thing is the default; same
+    rule as embeddings/STT keyterms).
+
+    Returns ``{"status": "ok", "rerank": {...}, "provider_used": str}``
+    or ``{"status": "failure", "reason": ...}``.
+    """
+    from .rerank.base import RerankError
+
+    name = provider or agent_settings.DEFAULT_RERANK_PROVIDER
+    doc_count = len(documents) if isinstance(documents, (list, tuple)) else 0
+    start = time.monotonic()
+
+    def _log(status: str, *, error: str | None = None, extra: dict | None = None):
+        PromptLog.objects.create(
+            source=PromptSource.RERANK,
+            model=name,
+            model_size="",
+            # Counts only — the ledger must never see the query or docs.
+            prompt=f"query+docs:{doc_count}",
+            response=None,
+            status=status,
+            error_message=error,
+            duration_ms=int((time.monotonic() - start) * 1000),
+            user_id=str(user_id) if user_id is not None else None,
+            metadata={
+                **(metadata or {}),
+                "document_count": doc_count,
+                **({"top_n": top_n} if top_n is not None else {}),
+                **(extra or {}),
+            },
+        )
+
+    try:
+        backend = get_rerank_provider(name)
+        result = backend.rerank(
+            query=query,
+            documents=documents,
+            top_n=top_n,
+            timeout_seconds=timeout_seconds,
+            provider_options=provider_options,
+        )
+    except RerankError as exc:
+        _log(PromptStatus.ERROR, error=str(exc))
+        return {"status": "failure", "reason": str(exc)}
+    except ImportError as exc:
+        reason = f"Rerank provider '{name}' could not be loaded: {exc}"
+        _log(PromptStatus.ERROR, error=reason)
+        return {"status": "failure", "reason": reason}
+
+    _log(
+        PromptStatus.SUCCESS,
+        extra={
+            "model": result.model,
+            "result_count": len(result.results),
+            "usage": result.usage,
+        },
+    )
+    return {
+        "status": "ok",
+        "rerank": result.to_dict(),
+        "provider_used": name,
+    }
+
+
 # ─── Image generation ─────────────────────────────────────────────────
 
 
@@ -989,7 +1101,9 @@ __all__ = [
     "get_embedding_provider",
     "get_image_provider",
     "get_provider",
+    "get_rerank_provider",
     "get_stt_provider",
+    "rerank",
     "stt_catalog",
     "summarize",
     "transcribe",

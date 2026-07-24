@@ -22,6 +22,7 @@ class PromptSource(models.TextChoices):
     DIARIZE = "diarize", "Diarize"
     SUMMARIZE = "summarize", "Summarize"
     EMBED = "embed", "Embed"
+    RERANK = "rerank", "Rerank"
     GENERATE_IMAGE = "generate_image", "Generate Image"
     OTHER = "other", "Other"
 

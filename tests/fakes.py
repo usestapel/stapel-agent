@@ -23,6 +23,14 @@ from stapel_agent.embeddings.base import (
     require_texts,
 )
 from stapel_agent.images.base import GeneratedImage, ImageGenProvider
+from stapel_agent.rerank.base import (
+    NormalizedRerank,
+    RerankError,
+    RerankProvider,
+    RerankResult,
+    rank_results,
+    require_rerank_inputs,
+)
 from stapel_agent.providers.base import LlmProvider, ProviderResult
 from stapel_agent.stt.base import (
     NormalizedTranscript,
@@ -397,3 +405,73 @@ class FatalEmbeddingProvider(FakeEmbeddingProvider):
 
 class NotAnEmbeddingProvider:
     """Deliberately not an EmbeddingProvider subclass — for W009."""
+
+
+class FakeRerankProvider(RerankProvider):
+    """Recording rerank fake — deterministic length-as-score ranking
+    (score = len(document)), so the sort order and the index-join are
+    assertable end-to-end from the document texts alone."""
+
+    name = "fake-rerank"
+
+    calls: list[dict] = []
+    error: Exception | None = None
+
+    @classmethod
+    def reset(cls):
+        cls.calls = []
+        cls.error = None
+
+    def rerank(
+        self,
+        *,
+        query,
+        documents,
+        top_n=None,
+        timeout_seconds=None,
+        provider_options=None,
+    ):
+        cls = type(self)
+        cls.calls.append(
+            {
+                "query": query,
+                "documents": documents,
+                "top_n": top_n,
+                "timeout_seconds": timeout_seconds,
+                "provider_options": provider_options,
+            }
+        )
+        if cls.error is not None:
+            raise cls.error
+        query, docs = require_rerank_inputs(
+            query, documents, top_n=top_n, provider=self.name
+        )
+        results = [
+            RerankResult(index=i, score=float(len(doc)))
+            for i, doc in enumerate(docs)
+        ]
+        return NormalizedRerank(
+            provider=self.name,
+            model="fake-rerank-1",
+            results=rank_results(
+                results, n_documents=len(docs), top_n=top_n, provider=self.name
+            ),
+            usage={"input_tokens": len(query) + sum(len(d) for d in docs)},
+        )
+
+
+class FatalRerankProvider(FakeRerankProvider):
+    """Always fails permanently — for the failure-envelope path."""
+
+    name = "fatal-rerank"
+
+    @classmethod
+    def reset(cls):
+        super().reset()
+        cls.error = RerankError(
+            "auth rejected", provider=cls.name, status_code=401
+        )
+
+
+class NotARerankProvider:
+    """Deliberately not a RerankProvider subclass — for W011."""

@@ -366,6 +366,77 @@ def llm_embed(payload: dict) -> dict:
     )
 
 
+RERANK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "query": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The query the documents are scored against.",
+        },
+        "documents": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+            "description": "Candidate documents. Result indexes point "
+            "into this list — the caller joins back positionally; the "
+            "documents never round-trip in the response. Empty batches "
+            "and empty strings are rejected.",
+        },
+        "top_n": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Keep only the N best-scored results "
+            "(applied after the sort). Omit to score every document.",
+        },
+        "provider": {
+            "type": "string",
+            "description": "Rerank provider name from "
+            "STAPEL_AGENT['RERANK_PROVIDERS'].",
+        },
+        "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Hard cap on the rerank request.",
+        },
+        "provider_options": {
+            "type": "object",
+            "description": "Free-form per-provider passthrough, applied "
+            "AFTER the adapter's own request params — pin provider "
+            "specifics without a core release. Unknown keys go to the "
+            "provider as-is.",
+        },
+    },
+    "required": ["query", "documents"],
+    "additionalProperties": False,
+}
+
+
+@function("llm.rerank", schema=RERANK_SCHEMA)
+def llm_rerank(payload: dict) -> dict:
+    """Rerank — same result dict as ``POST api/v1/llm/rerank``.
+
+    Payload: ``{"query": str, "documents": [str, ...], "top_n"?,
+    "provider"?, "timeout_seconds"?, "provider_options"?: {...}}``.
+    Returns ``{"status": "ok", "rerank": {"provider", "model",
+    "results": [{"index", "score"}, ...], "usage", "raw"},
+    "provider_used": str}`` (results sorted by score descending, index =
+    position in the input documents list) or ``{"status": "failure",
+    "reason": str}``. The ledger records counts/usage only — never the
+    query, never the document texts.
+    """
+    from . import services
+
+    return services.rerank(
+        payload["query"],
+        payload["documents"],
+        top_n=payload.get("top_n"),
+        provider=payload.get("provider"),
+        timeout_seconds=payload.get("timeout_seconds"),
+        provider_options=payload.get("provider_options"),
+    )
+
+
 STT_CATALOG_SCHEMA = {
     "type": "object",
     "properties": {},

@@ -20,6 +20,7 @@ from .serializers import (
     DiarizeRequestSerializer,
     EmbedRequestSerializer,
     GenerateImageRequestSerializer,
+    RerankRequestSerializer,
     SummarizeRequestSerializer,
     SummarizeResponseSerializer,
     TranscribeRequestSerializer,
@@ -210,6 +211,40 @@ class LlmEmbedView(SerializerSeamMixin, APIView):
         data = ser.validated_data
         payload = services.embed(
             data.texts,
+            provider=data.provider,
+            timeout_seconds=data.timeout_seconds,
+            provider_options=data.provider_options,
+            user_id=_request_user_id(request),
+        )
+        return StapelResponse(payload)
+
+
+@extend_schema(tags=["LLM"])
+class LlmRerankView(SerializerSeamMixin, APIView):
+    """Rerank — ``POST api/llm/rerank``.
+
+    Results are ``(index, score)`` pairs sorted by score descending;
+    ``index`` points into the request's documents list — the caller
+    joins back positionally, the documents never round-trip. The ledger
+    records counts/usage only — never the query, never the documents.
+    Rerank failures are HTTP 200 with ``status: "failure"``.
+    """
+
+    permission_classes = [IsServiceRequest | IsStaffUser]
+    request_serializer_class = RerankRequestSerializer
+    # Deliberately no response serializer: `rerank` carries the raw
+    # provider leftovers (arbitrary JSON) — same rationale as complete's
+    # result; see MODULE.md.
+
+    @extend_schema(request=RerankRequestSerializer, responses={200: dict})
+    def post(self, request):  # noqa: R007
+        ser = self.get_request_serializer_class()(data=request.data)
+        ser.is_valid(raise_exception=True)
+        data = ser.validated_data
+        payload = services.rerank(
+            data.query,
+            data.documents,
+            top_n=data.top_n,
             provider=data.provider,
             timeout_seconds=data.timeout_seconds,
             provider_options=data.provider_options,

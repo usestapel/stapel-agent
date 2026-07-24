@@ -17,6 +17,7 @@ from .views import (
     LlmDiarizeView,
     LlmEmbedView,
     LlmGenerateImageView,
+    LlmRerankView,
     LlmSummarizeView,
     LlmTranscribeView,
     LlmTranslateView,
@@ -28,6 +29,7 @@ urlpatterns = [
     path("llm/transcribe", LlmTranscribeView.as_view(), name="llm-transcribe"),
     path("llm/diarize", LlmDiarizeView.as_view(), name="llm-diarize"),
     path("llm/embed", LlmEmbedView.as_view(), name="llm-embed"),
+    path("llm/rerank", LlmRerankView.as_view(), name="llm-rerank"),
     path("llm/summarize", LlmSummarizeView.as_view(), name="llm-summarize"),
     path(
         "llm/generate-image",

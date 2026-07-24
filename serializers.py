@@ -10,6 +10,7 @@ from .dto import (
     DiarizeRequest,
     EmbedRequest,
     GenerateImageRequest,
+    RerankRequest,
     SummarizeRequest,
     SummarizeResponse,
     TranscribeRequest,
@@ -17,12 +18,15 @@ from .dto import (
     TranslateResponse,
 )
 from .errors import (
+    ERR_400_EMPTY_DOCUMENTS,
+    ERR_400_EMPTY_QUERY,
     ERR_400_EMPTY_TEXTS,
     ERR_400_INVALID_IMAGE,
     ERR_400_INVALID_IMAGE_COUNT,
     ERR_400_INVALID_MODEL_SIZE,
     ERR_400_INVALID_NUM_SPEAKERS,
     ERR_400_INVALID_TIMEOUT,
+    ERR_400_INVALID_TOP_N,
     ERR_400_SUMMARIZE_INPUT,
 )
 from .services import MODEL_SIZES
@@ -120,6 +124,37 @@ class EmbedRequestSerializer(StapelDataclassSerializer):
             not isinstance(t, str) or not t.strip() for t in value
         ):
             raise StapelValidationError(ERR_400_EMPTY_TEXTS)
+        return value
+
+
+class RerankRequestSerializer(StapelDataclassSerializer):
+    class Meta:
+        dataclass = RerankRequest
+
+    def validate_timeout_seconds(self, value):
+        return _validate_timeout_seconds(value)
+
+    def validate_query(self, value):
+        # Mirror the fatal gate in rerank.base.require_rerank_inputs at
+        # the HTTP boundary: an empty query is a 400, not a provider
+        # round-trip.
+        if not isinstance(value, str) or not value.strip():
+            raise StapelValidationError(ERR_400_EMPTY_QUERY)
+        return value
+
+    def validate_documents(self, value):
+        # Same gate for the batch: empty list / empty entries → 400.
+        if not value or any(
+            not isinstance(d, str) or not d.strip() for d in value
+        ):
+            raise StapelValidationError(ERR_400_EMPTY_DOCUMENTS)
+        return value
+
+    def validate_top_n(self, value):
+        # Mirrors the comm schema's `minimum: 1` — a zero/negative cutoff
+        # is meaningless and stays a 400, never a 500.
+        if value is not None and int(value) < 1:
+            raise StapelValidationError(ERR_400_INVALID_TOP_N)
         return value
 
 

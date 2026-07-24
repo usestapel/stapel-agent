@@ -213,6 +213,32 @@ def fake_embeddings(settings):
 
 
 @pytest.fixture
+def fake_rerank(settings):
+    """Route reranking to the recording FakeRerankProvider (default),
+    with a fatal sibling registered for the failure path.
+
+    Same merge semantics as the other fixtures: the RERANK_PROVIDERS
+    overlay adds names without restating the built-ins.
+    """
+    from stapel_agent.tests.fakes import FakeRerankProvider, FatalRerankProvider
+
+    fakes = (FakeRerankProvider, FatalRerankProvider)
+    settings.STAPEL_AGENT = {
+        **getattr(settings, "STAPEL_AGENT", {}),
+        "RERANK_PROVIDERS": {
+            "fake-rerank": "stapel_agent.tests.fakes.FakeRerankProvider",
+            "fatal-rerank": "stapel_agent.tests.fakes.FatalRerankProvider",
+        },
+        "DEFAULT_RERANK_PROVIDER": "fake-rerank",
+    }
+    for cls in fakes:
+        cls.reset()
+    yield FakeRerankProvider
+    for cls in fakes:
+        cls.reset()
+
+
+@pytest.fixture
 def fake_images(settings):
     """Route image generation to the recording FakeImageProvider (default),
     with a size-restricted sibling registered for the validation path.

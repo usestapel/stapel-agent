@@ -1,6 +1,6 @@
 """stapel-agent — LLM facade: completion (text + vision), translation,
-transcription, diarization, summarization, embeddings, image generation,
-prompt cache/ledger.
+transcription, diarization, summarization, embeddings, reranking,
+image generation, prompt cache/ledger.
 
 Public API (lazily resolved, PEP 562 — importing this package pulls in
 no Django code until an attribute is actually accessed):
@@ -12,6 +12,17 @@ no Django code until an attribute is actually accessed):
     diarize                     — speaker diarization through the configured backend
     summarize                   — text/transcript summarization (map-reduce)
     embed                       — text embeddings through the configured backend
+    rerank                      — the rerank SUBPACKAGE (registry + base). The
+                                  service verb deliberately stays at
+                                  ``stapel_agent.services.rerank`` (+ the
+                                  ``llm.rerank`` comm function and the HTTP
+                                  endpoint): the subpackage is named ``rerank``
+                                  too, and Python binds submodules onto the
+                                  parent package OVER lazy exports — a
+                                  same-named function export would be silently
+                                  shadowed by any ``stapel_agent.rerank.*``
+                                  import, so the attribute is pinned to the
+                                  subpackage, never left import-order-dependent
     generate_image              — image generation through the configured backend
     LlmProvider                 — base class for custom LLM backends
     ProviderResult              — completion text + token accounting dataclass
@@ -23,6 +34,9 @@ no Django code until an attribute is actually accessed):
     NormalizedDiarization       — canonical diarization output schema
     EmbeddingProvider           — base class for custom embedding backends
     NormalizedEmbeddings        — canonical embeddings output schema
+    RerankProvider              — base class for custom rerank backends
+    NormalizedRerank            — canonical rerank output schema
+    RerankResult                — one scored (index, score) rerank entry
     ImageGenProvider            — base class for custom image-gen backends
     GeneratedImage              — one generated image (url and/or data_b64)
     CachePolicy                 — base class for custom prompt-cache policies
@@ -34,6 +48,8 @@ no Django code until an attribute is actually accessed):
     registered_diarization_providers — effective diarization provider mapping
     register_embedding_provider — runtime embedding provider registration
     registered_embedding_providers — effective embedding provider mapping
+    register_rerank_provider    — runtime rerank provider registration
+    registered_rerank_providers — effective rerank provider mapping
     register_image_provider     — runtime image provider registration
     registered_image_providers  — effective image provider mapping
 """
@@ -49,8 +65,11 @@ __all__ = [
     "LlmProvider",
     "NormalizedDiarization",
     "NormalizedEmbeddings",
+    "NormalizedRerank",
     "NormalizedTranscript",
     "ProviderResult",
+    "RerankProvider",
+    "RerankResult",
     "SttProvider",
     "agent_settings",
     "complete",
@@ -61,12 +80,15 @@ __all__ = [
     "register_embedding_provider",
     "register_image_provider",
     "register_provider",
+    "register_rerank_provider",
     "register_stt_provider",
     "registered_diarization_providers",
     "registered_embedding_providers",
     "registered_image_providers",
     "registered_providers",
+    "registered_rerank_providers",
     "registered_stt_providers",
+    "rerank",
     "summarize",
     "transcribe",
     "translate",
@@ -81,6 +103,12 @@ _EXPORTS = {
     "diarize": (".services", "diarize"),
     "summarize": (".services", "summarize"),
     "embed": (".services", "embed"),
+    # The subpackage itself — NOT services.rerank: the names collide, and
+    # importing any stapel_agent.rerank.* module would rebind the attribute
+    # to the subpackage anyway (submodule binding beats PEP 562). Pinning
+    # the module keeps the attribute deterministic; the verb lives at
+    # services.rerank / llm.rerank / POST api/v1/llm/rerank.
+    "rerank": (".rerank", None),
     "generate_image": (".services", "generate_image"),
     "LlmProvider": (".providers.base", "LlmProvider"),
     "ProviderResult": (".providers.base", "ProviderResult"),
@@ -91,6 +119,9 @@ _EXPORTS = {
     "NormalizedDiarization": (".diarization.base", "NormalizedDiarization"),
     "EmbeddingProvider": (".embeddings.base", "EmbeddingProvider"),
     "NormalizedEmbeddings": (".embeddings.base", "NormalizedEmbeddings"),
+    "RerankProvider": (".rerank.base", "RerankProvider"),
+    "NormalizedRerank": (".rerank.base", "NormalizedRerank"),
+    "RerankResult": (".rerank.base", "RerankResult"),
     "ImageRef": (".images.base", "ImageRef"),
     "ImageGenProvider": (".images.base", "ImageGenProvider"),
     "GeneratedImage": (".images.base", "GeneratedImage"),
@@ -112,6 +143,8 @@ _EXPORTS = {
         ".embeddings",
         "registered_embedding_providers",
     ),
+    "register_rerank_provider": (".rerank", "register_rerank_provider"),
+    "registered_rerank_providers": (".rerank", "registered_rerank_providers"),
     "register_image_provider": (".images", "register_image_provider"),
     "registered_image_providers": (".images", "registered_image_providers"),
 }
@@ -126,7 +159,9 @@ def __getattr__(name):
         ) from None
     from importlib import import_module
 
-    value = getattr(import_module(module_path, __name__), attr)
+    value = import_module(module_path, __name__)
+    if attr is not None:
+        value = getattr(value, attr)
     globals()[name] = value  # cache: subsequent lookups skip __getattr__
     return value
 

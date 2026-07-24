@@ -131,6 +131,32 @@ class EmbedRequest:
 
 
 @dataclass
+class RerankRequest:
+    """Rerank request.
+
+    Attributes:
+        query: The query the documents are scored against.
+        documents: Candidate documents (non-empty). Result indexes point
+            into this list — the caller joins back positionally; the
+            documents never round-trip in the response.
+        top_n: Keep only the N best-scored results (>= 1, applied after
+            the sort); omit to score every document.
+        provider: Rerank provider name; defaults to
+            DEFAULT_RERANK_PROVIDER.
+        timeout_seconds: Hard cap on the rerank request.
+        provider_options: Free-form per-provider passthrough, applied
+            after the adapter's own request params.
+    """
+
+    query: str
+    documents: List[str]
+    top_n: Optional[int] = None
+    provider: Optional[str] = None
+    timeout_seconds: Optional[int] = None
+    provider_options: Optional[dict] = None
+
+
+@dataclass
 class SummarizeRequest:
     """Summarization request — exactly one of text/transcript.
 

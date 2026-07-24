@@ -131,6 +131,23 @@ agent_settings = AppSettings(
         # server-side — bge-m3 / multilingual-e5 class). Key optional.
         "EMBEDDINGS_HTTP_BASE_URL": "",
         "EMBEDDINGS_HTTP_API_KEY": "",
+        # ── Rerank ──────────────────────────────────────────────
+        # Overlay merged OVER rerank.BUILTIN_RERANK_PROVIDERS
+        # (deepinfra-rerank / rerank-http) — same merge semantics.
+        "RERANK_PROVIDERS": {},
+        "DEFAULT_RERANK_PROVIDER": "deepinfra-rerank",
+        # Hard cap (seconds) on one rerank request.
+        "RERANK_TIMEOUT": 120,
+        # DeepInfra inference API (POST {base}/inference/{model}); the
+        # base URL includes /v1. RERANK_API_KEY is the DeepInfra key —
+        # app layers alias their DEEPINFRA_API_KEY onto it.
+        "RERANK_BASE_URL": "https://api.deepinfra.com/v1",
+        "RERANK_API_KEY": "",
+        "RERANK_MODEL": "Qwen/Qwen3-Reranker-8B",
+        # Generic self-hosted reranker speaking the TEI /rerank dialect
+        # (POST {base}/rerank, {"query", "texts"} → [{"index", "score"}];
+        # model fixed server-side). Keyless — the self-host fallback.
+        "RERANK_HTTP_BASE_URL": "",
         # ── Image generation ────────────────────────────────────
         # Overlay merged OVER images.BUILTIN_IMAGE_PROVIDERS
         # (openai-images) — same merge semantics as PROVIDERS/STT_PROVIDERS.

@@ -261,6 +261,61 @@ def check_embedding_providers(app_configs, **kwargs):
     )
 
 
+@checks.register("stapel_agent")
+def check_rerank_providers(app_configs, **kwargs):
+    """Rerank registry checks — W-level like STT's: the surface is
+    optional and a broken entry degrades to ``status: "failure"`` per
+    request.
+
+    - ``stapel_agent.W011`` — a ``RERANK_PROVIDERS`` entry cannot be
+      imported or is not a ``RerankProvider`` subclass;
+    - ``stapel_agent.W012`` — ``DEFAULT_RERANK_PROVIDER`` references a
+      name missing from the effective registry;
+    - ``stapel_agent.W013`` — the default is the built-in ``rerank-http``
+      but ``RERANK_HTTP_BASE_URL`` is empty (every request would fail).
+    """
+    from .conf import agent_settings
+    from .rerank import registered_rerank_providers
+    from .rerank.base import RerankProvider
+
+    effective = registered_rerank_providers()
+    issues = _registry_issues(
+        kind="Rerank",
+        effective=effective,
+        base_cls=RerankProvider,
+        entry_check_id="stapel_agent.W011",
+        default_check_id="stapel_agent.W012",
+        default_name=agent_settings.DEFAULT_RERANK_PROVIDER,
+        default_setting="DEFAULT_RERANK_PROVIDER",
+        register_hint=(
+            "STAPEL_AGENT['RERANK_PROVIDERS'] / "
+            "register_rerank_provider()"
+        ),
+    )
+
+    # The self-host adapter has no usable zero-config default (unlike
+    # deepinfra-rerank, whose base URL ships filled in) — a resolvable
+    # default that cannot serve a single request should be visible.
+    from .rerank import BUILTIN_RERANK_PROVIDERS
+
+    default = agent_settings.DEFAULT_RERANK_PROVIDER
+    if (
+        default == "rerank-http"
+        and effective.get(default) == BUILTIN_RERANK_PROVIDERS["rerank-http"]
+        and not agent_settings.RERANK_HTTP_BASE_URL
+    ):
+        issues.append(
+            checks.Warning(
+                "STAPEL_AGENT['DEFAULT_RERANK_PROVIDER'] is 'rerank-http' "
+                "but STAPEL_AGENT['RERANK_HTTP_BASE_URL'] is empty — every "
+                "rerank request will fail.",
+                hint="Set RERANK_HTTP_BASE_URL to the self-hosted /rerank server.",
+                id="stapel_agent.W013",
+            )
+        )
+    return issues
+
+
 def _registry_issues(
     *,
     kind: str,
@@ -321,5 +376,6 @@ __all__ = [
     "check_embedding_providers",
     "check_image_providers",
     "check_providers",
+    "check_rerank_providers",
     "check_stt_providers",
 ]

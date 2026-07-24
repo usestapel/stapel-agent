@@ -5,6 +5,86 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-07-24
+
+Minor: a new generic **rerank** seam — query-vs-documents relevance
+scoring — layered end-to-end the way embeddings is (ABC + normalized
+dataclass + error taxonomy → provider adapters → registry + settings →
+service + PromptLog → comm function + HTTP endpoint + committed
+schema). Core stays generic: parameter wiring per API lives here;
+retrieval, chunking and final cutoff policies stay app-layer.
+
+### Added
+- **Rerank seam** (`rerank/base.py`):
+  `RerankProvider.rerank(*, query: str, documents: list[str],
+  top_n=None, timeout_seconds=None, provider_options=None) →
+  NormalizedRerank` (`provider`, `model`, `results:
+  [RerankResult(index, score)]` — **sorted by score descending**,
+  `usage`, `raw` — scores stripped from raw, never stored twice).
+  `index` = position in the INPUT documents list — the caller joins
+  back positionally; **documents never round-trip in the response**.
+  Input gate `require_rerank_inputs`: empty/non-string query, empty
+  batches, non-string/empty-string documents and non-positive `top_n`
+  are fatal BEFORE any provider call. Result gate `rank_results`: an
+  out-of-range index, a duplicate index or a count above the input
+  size is a loud fatal failure, never a misaligned join; `top_n`
+  truncates AFTER the sort, uniformly for every adapter.
+  Per-registration `rerank_model` pin mirrors the STT
+  `speech_model`/embeddings `embedding_model` canon.
+  `RerankError(ProviderError)` fatal vs `RetryableRerankError`
+  (429/5xx/timeouts).
+- **Rerank adapters**: `deepinfra-rerank`
+  (`rerank/providers/deepinfra.py` — the DeepInfra inference dialect,
+  `POST {RERANK_BASE_URL}/inference/{model}` with **paired arrays**
+  `{"queries": [query]×N, "documents": [...]}` → `{"scores": [...]}`;
+  the wire body is built by the pure `build_rerank_request()` so a
+  live-verification fix is one edit — the shape is encoded from
+  DeepInfra's documented reranker interface for
+  `Qwen/Qwen3-Reranker-8B` and marked [НЕ ВЕРИФИЦИРОВАНО live] in the
+  module docstring; base URL default `https://api.deepinfra.com/v1`,
+  `RERANK_MODEL` default `Qwen/Qwen3-Reranker-8B`, Bearer
+  `RERANK_API_KEY` required) and `rerank-http`
+  (`rerank/providers/http_server.py` — the TEI `/rerank` dialect:
+  `POST {RERANK_HTTP_BASE_URL}/rerank` `{"query", "texts"}` →
+  `[{"index", "score"}, ...]`; re-sorted here, model attribution None
+  — fixed server-side, never pretended; the keyless self-host
+  fallback). Settings: `RERANK_PROVIDERS` / `DEFAULT_RERANK_PROVIDER`
+  (merge-registry canon + `register_rerank_provider()`),
+  `RERANK_TIMEOUT`, `RERANK_BASE_URL`, `RERANK_API_KEY`,
+  `RERANK_MODEL`, `RERANK_HTTP_BASE_URL`.
+- **Surfaces**: `llm.rerank` comm function (+ committed
+  `schemas/functions/llm.rerank.json`), HTTP endpoint
+  `POST api/v1/llm/rerank` (DTO + serializer validation: non-empty
+  `query`/`documents`, `top_n ≥ 1`, positive timeout — new error keys
+  `error.400.empty_query`, `error.400.empty_documents`,
+  `error.400.invalid_top_n`). Envelope mirrors embed's:
+  `{"status": "ok", "rerank": {...}, "provider_used": str}` or the
+  failure envelope (HTTP 200).
+- **Ledger**: new `PromptSource.RERANK` (migration 0005). One row per
+  call, `model` = provider name. Privacy canon: the row carries
+  `query+docs:<n>` + `{model, document_count, result_count, top_n,
+  usage}` — **never the query, never the document texts, never the
+  scores** (tested).
+- **Checks**: `stapel_agent.W011`/`W012` (rerank registry entry /
+  default) — W-level, same degrade-per-request rationale as
+  STT/images — plus `W013`: the default is the built-in `rerank-http`
+  but `RERANK_HTTP_BASE_URL` is empty (a resolvable default that
+  cannot serve a single request should be visible).
+- Public API: `RerankProvider`, `NormalizedRerank`, `RerankResult`,
+  `register_rerank_provider` / `registered_rerank_providers`;
+  `stapel_agent.rerank` resolves to the rerank subpackage. The service
+  verb deliberately stays at `stapel_agent.services.rerank` (not a
+  package-level function export): the subpackage shares the name, and
+  Python binds submodules onto the parent OVER lazy exports — a
+  same-named function would be silently shadowed by any
+  `stapel_agent.rerank.*` import, so the attribute is pinned to the
+  subpackage instead of being left import-order-dependent.
+
+### Packaging
+- `tool.setuptools.packages` extended with `stapel_agent.rerank` /
+  `stapel_agent.rerank.providers` (the 0.4.0 wheel shipped broken by
+  exactly this omission); wheel contents verified as a release gate.
+
 ## [0.4.1] — 2026-07-24
 
 ### Fixed

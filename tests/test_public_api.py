@@ -21,8 +21,11 @@ class TestLazyExports:
             "LlmProvider",
             "NormalizedDiarization",
             "NormalizedEmbeddings",
+            "NormalizedRerank",
             "NormalizedTranscript",
             "ProviderResult",
+            "RerankProvider",
+            "RerankResult",
             "SttProvider",
             "agent_settings",
             "complete",
@@ -33,12 +36,15 @@ class TestLazyExports:
             "register_embedding_provider",
             "register_image_provider",
             "register_provider",
+            "register_rerank_provider",
             "register_stt_provider",
             "registered_diarization_providers",
             "registered_embedding_providers",
             "registered_image_providers",
             "registered_providers",
+            "registered_rerank_providers",
             "registered_stt_providers",
+            "rerank",
             "summarize",
             "transcribe",
             "translate",
@@ -86,6 +92,36 @@ class TestLazyExports:
             is registered_embedding_providers
         )
         assert stapel_agent.embed is embed
+
+    def test_rerank_seam_resolves(self):
+        import stapel_agent.rerank as rerank_pkg
+        from stapel_agent.rerank import (
+            register_rerank_provider,
+            registered_rerank_providers,
+        )
+        from stapel_agent.rerank.base import (
+            NormalizedRerank,
+            RerankProvider,
+            RerankResult,
+        )
+        from stapel_agent.services import rerank
+
+        assert stapel_agent.RerankProvider is RerankProvider
+        assert stapel_agent.NormalizedRerank is NormalizedRerank
+        assert stapel_agent.RerankResult is RerankResult
+        assert stapel_agent.register_rerank_provider is register_rerank_provider
+        assert (
+            stapel_agent.registered_rerank_providers
+            is registered_rerank_providers
+        )
+        # `stapel_agent.rerank` is the SUBPACKAGE, pinned deliberately:
+        # the seam's package shares its name with the service verb, and
+        # Python binds submodules onto the parent OVER lazy exports — a
+        # function export here would be silently shadowed by any
+        # stapel_agent.rerank.* import. The verb stays at services.rerank
+        # (asserted callable) + llm.rerank + POST api/v1/llm/rerank.
+        assert stapel_agent.rerank is rerank_pkg
+        assert callable(rerank)
 
     def test_agent_settings_resolves(self):
         from stapel_agent.conf import agent_settings

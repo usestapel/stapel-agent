@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "llm.rerank",
+  "description": "Rerank documents against a query through the configured backend (explicit provider > DEFAULT_RERANK_PROVIDER). Returns {status: 'ok', rerank: NormalizedRerank, provider_used: string} or {status: 'failure', reason: string}. Results are (index, score) pairs sorted by score descending; index points into the input documents list — the caller joins back positionally, the documents never round-trip. The ledger records counts/usage only — never the query, never the document texts.",
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The query the documents are scored against."
+    },
+    "documents": {
+      "type": "array",
+      "items": {"type": "string"},
+      "minItems": 1,
+      "description": "Candidate documents. Result indexes point into this list — the caller joins back positionally; the documents never round-trip in the response. Empty batches and empty strings are rejected."
+    },
+    "top_n": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Keep only the N best-scored results (applied after the sort). Omit to score every document."
+    },
+    "provider": {
+      "type": "string",
+      "description": "Rerank provider name from STAPEL_AGENT['RERANK_PROVIDERS']."
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Hard cap on the rerank request."
+    },
+    "provider_options": {
+      "type": "object",
+      "description": "Free-form per-provider passthrough, applied AFTER the adapter's own request params — pin provider specifics without a core release. Unknown keys go to the provider as-is."
+    }
+  },
+  "required": ["query", "documents"],
+  "additionalProperties": false
+}
