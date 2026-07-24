@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-agent"
-version = "0.4.0"
+version = "0.4.1"
 description = "LLM facade Django app for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -40,7 +40,7 @@ all = ["stapel-agent[anthropic]"]
 
 [tool.setuptools]
 package-dir = {"stapel_agent" = "."}
-packages = ["stapel_agent", "stapel_agent.images", "stapel_agent.images.providers", "stapel_agent.migrations", "stapel_agent.providers", "stapel_agent.stt", "stapel_agent.stt.providers"]
+packages = ["stapel_agent", "stapel_agent.diarization", "stapel_agent.diarization.providers", "stapel_agent.embeddings", "stapel_agent.embeddings.providers", "stapel_agent.images", "stapel_agent.images.providers", "stapel_agent.migrations", "stapel_agent.providers", "stapel_agent.stt", "stapel_agent.stt.providers"]
 
 [tool.setuptools.package-data]
 stapel_agent = ["py.typed", "migrations/*.py", "schemas/**/*.json", "migrations/**/*.py"]

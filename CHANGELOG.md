@@ -5,6 +5,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-07-24
+
+### Fixed
+- **0.4.0 wheel shipped without the new packages** — the explicit
+  `tool.hatch`/setuptools `packages` list in pyproject predates the
+  auto-discovery era and did not include `stapel_agent.diarization[.providers]`
+  / `stapel_agent.embeddings[.providers]`, so importing the 0.4.0 seams
+  raised ModuleNotFoundError. List extended; wheel contents verified.
+
 ## [0.4.0] — 2026-07-24
 
 Minor: two new generic seams — speaker **diarization** and text
