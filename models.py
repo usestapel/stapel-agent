@@ -19,7 +19,9 @@ class PromptSource(models.TextChoices):
     LLM_FACADE = "llm_facade", "LLM Facade"
     TRANSLATE = "translate", "Translate"
     TRANSCRIBE = "transcribe", "Transcribe"
+    DIARIZE = "diarize", "Diarize"
     SUMMARIZE = "summarize", "Summarize"
+    EMBED = "embed", "Embed"
     GENERATE_IMAGE = "generate_image", "Generate Image"
     OTHER = "other", "Other"
 

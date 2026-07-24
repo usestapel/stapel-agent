@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "llm.embed",
+  "description": "Text embeddings through the configured backend (explicit provider > DEFAULT_EMBEDDING_PROVIDER). Returns {status: 'ok', embeddings: NormalizedEmbeddings, provider_used: string} or {status: 'failure', reason: string}. Vectors preserve input order; the ledger records counts/usage only — never the texts, never the vectors.",
+  "type": "object",
+  "properties": {
+    "texts": {
+      "type": "array",
+      "items": {"type": "string"},
+      "minItems": 1,
+      "description": "Batch of texts to embed. Output vectors preserve this order. Empty batches and empty strings are rejected."
+    },
+    "provider": {
+      "type": "string",
+      "description": "Embedding provider name from STAPEL_AGENT['EMBEDDING_PROVIDERS']."
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Hard cap on the embeddings request."
+    },
+    "provider_options": {
+      "type": "object",
+      "description": "Free-form per-provider passthrough, applied AFTER the adapter's own request params — pin provider specifics without a core release. Unknown keys go to the provider as-is."
+    }
+  },
+  "required": ["texts"],
+  "additionalProperties": false
+}

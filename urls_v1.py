@@ -14,6 +14,8 @@ from django.urls import path
 
 from .views import (
     LlmCompleteView,
+    LlmDiarizeView,
+    LlmEmbedView,
     LlmGenerateImageView,
     LlmSummarizeView,
     LlmTranscribeView,
@@ -24,6 +26,8 @@ urlpatterns = [
     path("llm/complete", LlmCompleteView.as_view(), name="llm-complete"),
     path("llm/translate", LlmTranslateView.as_view(), name="llm-translate"),
     path("llm/transcribe", LlmTranscribeView.as_view(), name="llm-transcribe"),
+    path("llm/diarize", LlmDiarizeView.as_view(), name="llm-diarize"),
+    path("llm/embed", LlmEmbedView.as_view(), name="llm-embed"),
     path("llm/summarize", LlmSummarizeView.as_view(), name="llm-summarize"),
     path(
         "llm/generate-image",

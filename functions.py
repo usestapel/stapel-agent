@@ -248,6 +248,124 @@ def llm_transcribe(payload: dict) -> dict:
     )
 
 
+DIARIZE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "audio_url": {
+            "type": "string",
+            "description": "Fetchable audio URL (presigned S3/MinIO GET). "
+            "comm carries URLs only, never raw bytes.",
+        },
+        "num_speakers": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Exact speaker count hint; omit to let the "
+            "provider decide. Bound hints (min_speakers/max_speakers) "
+            "travel via provider_options and are mutually exclusive with "
+            "the exact count.",
+        },
+        "provider": {
+            "type": "string",
+            "description": "Diarization provider name from "
+            "STAPEL_AGENT['DIARIZATION_PROVIDERS'].",
+        },
+        "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Hard cap on the diarization request.",
+        },
+        "provider_options": {
+            "type": "object",
+            "description": "Free-form per-provider passthrough, applied "
+            "AFTER the adapter's own request params — pin provider "
+            "specifics without a core release. Unknown keys go to the "
+            "provider as-is.",
+        },
+    },
+    "required": ["audio_url"],
+    "additionalProperties": False,
+}
+
+
+@function("llm.diarize", schema=DIARIZE_SCHEMA)
+def llm_diarize(payload: dict) -> dict:
+    """Speaker diarization — same result dict as ``POST api/v1/llm/diarize``.
+
+    Payload: ``{"audio_url": str, "num_speakers"?: int, "provider"?,
+    "timeout_seconds"?, "provider_options"?: {...}}``. Returns
+    ``{"status": "ok", "diarization": {"provider", "duration_seconds",
+    "turns": [{"speaker", "start", "end", "confidence"}],
+    "speakers_detected", "raw"}, "provider_used": str}`` or ``{"status":
+    "failure", "reason": str}``. Turns are WHO-spoke-WHEN only — fusing
+    them with STT words (merge policy) is the caller's job.
+    """
+    from . import services
+    from .stt.base import AudioRef
+
+    return services.diarize(
+        AudioRef(url=payload["audio_url"]),
+        num_speakers=payload.get("num_speakers"),
+        provider=payload.get("provider"),
+        timeout_seconds=payload.get("timeout_seconds"),
+        provider_options=payload.get("provider_options"),
+    )
+
+
+EMBED_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "texts": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+            "description": "Batch of texts to embed. Output vectors "
+            "preserve this order. Empty batches and empty strings are "
+            "rejected.",
+        },
+        "provider": {
+            "type": "string",
+            "description": "Embedding provider name from "
+            "STAPEL_AGENT['EMBEDDING_PROVIDERS'].",
+        },
+        "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Hard cap on the embeddings request.",
+        },
+        "provider_options": {
+            "type": "object",
+            "description": "Free-form per-provider passthrough, applied "
+            "AFTER the adapter's own request params — pin provider "
+            "specifics without a core release. Unknown keys go to the "
+            "provider as-is.",
+        },
+    },
+    "required": ["texts"],
+    "additionalProperties": False,
+}
+
+
+@function("llm.embed", schema=EMBED_SCHEMA)
+def llm_embed(payload: dict) -> dict:
+    """Text embeddings — same result dict as ``POST api/v1/llm/embed``.
+
+    Payload: ``{"texts": [str, ...], "provider"?, "timeout_seconds"?,
+    "provider_options"?: {...}}``. Returns ``{"status": "ok",
+    "embeddings": {"provider", "model", "dim", "vectors": [[...], ...],
+    "usage", "raw"}, "provider_used": str}`` (vectors in input order) or
+    ``{"status": "failure", "reason": str}``. The ledger records counts/
+    usage only — never the texts, never the vectors.
+    """
+    from . import services
+
+    return services.embed(
+        payload["texts"],
+        provider=payload.get("provider"),
+        timeout_seconds=payload.get("timeout_seconds"),
+        provider_options=payload.get("provider_options"),
+    )
+
+
 STT_CATALOG_SCHEMA = {
     "type": "object",
     "properties": {},

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "llm.diarize",
+  "description": "Speaker diarization through the configured backend (explicit provider > DEFAULT_DIARIZATION_PROVIDER; single provider, no fallback chain). comm carries URLs only, never raw audio bytes. Returns {status: 'ok', diarization: NormalizedDiarization, provider_used: string} or {status: 'failure', reason: string}. Turns are who-spoke-when only — fusing them with STT words (merge policy) is the caller's job.",
+  "type": "object",
+  "properties": {
+    "audio_url": {
+      "type": "string",
+      "description": "Fetchable audio URL (presigned S3/MinIO GET)."
+    },
+    "num_speakers": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Exact speaker count hint; omit to let the provider decide. Bound hints (min_speakers/max_speakers) travel via provider_options and are mutually exclusive with the exact count."
+    },
+    "provider": {
+      "type": "string",
+      "description": "Diarization provider name from STAPEL_AGENT['DIARIZATION_PROVIDERS']."
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Hard cap on the diarization request."
+    },
+    "provider_options": {
+      "type": "object",
+      "description": "Free-form per-provider passthrough, applied AFTER the adapter's own request params — pin provider specifics without a core release. Unknown keys go to the provider as-is."
+    }
+  },
+  "required": ["audio_url"],
+  "additionalProperties": false
+}

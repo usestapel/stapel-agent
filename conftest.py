@@ -157,6 +157,62 @@ def fake_stt(settings):
 
 
 @pytest.fixture
+def fake_diarization(settings):
+    """Route diarization to the recording FakeDiarizationProvider
+    (default), with a fatal sibling registered for the failure path.
+
+    Same merge semantics as the other fixtures: the
+    DIARIZATION_PROVIDERS overlay adds names without restating the
+    built-in pyannote-http.
+    """
+    from stapel_agent.tests.fakes import (
+        FakeDiarizationProvider,
+        FatalDiarizationProvider,
+    )
+
+    fakes = (FakeDiarizationProvider, FatalDiarizationProvider)
+    settings.STAPEL_AGENT = {
+        **getattr(settings, "STAPEL_AGENT", {}),
+        "DIARIZATION_PROVIDERS": {
+            "fake-diar": "stapel_agent.tests.fakes.FakeDiarizationProvider",
+            "fatal-diar": "stapel_agent.tests.fakes.FatalDiarizationProvider",
+        },
+        "DEFAULT_DIARIZATION_PROVIDER": "fake-diar",
+    }
+    for cls in fakes:
+        cls.reset()
+    yield FakeDiarizationProvider
+    for cls in fakes:
+        cls.reset()
+
+
+@pytest.fixture
+def fake_embeddings(settings):
+    """Route embeddings to the recording FakeEmbeddingProvider (default),
+    with a fatal sibling registered for the failure path.
+
+    Same merge semantics as the other fixtures: the EMBEDDING_PROVIDERS
+    overlay adds names without restating the built-ins.
+    """
+    from stapel_agent.tests.fakes import FakeEmbeddingProvider, FatalEmbeddingProvider
+
+    fakes = (FakeEmbeddingProvider, FatalEmbeddingProvider)
+    settings.STAPEL_AGENT = {
+        **getattr(settings, "STAPEL_AGENT", {}),
+        "EMBEDDING_PROVIDERS": {
+            "fake-embed": "stapel_agent.tests.fakes.FakeEmbeddingProvider",
+            "fatal-embed": "stapel_agent.tests.fakes.FatalEmbeddingProvider",
+        },
+        "DEFAULT_EMBEDDING_PROVIDER": "fake-embed",
+    }
+    for cls in fakes:
+        cls.reset()
+    yield FakeEmbeddingProvider
+    for cls in fakes:
+        cls.reset()
+
+
+@pytest.fixture
 def fake_images(settings):
     """Route image generation to the recording FakeImageProvider (default),
     with a size-restricted sibling registered for the validation path.

@@ -12,6 +12,8 @@ ERR_400_SUMMARIZE_INPUT = "error.400.summarize_input"
 ERR_400_INVALID_IMAGE = "error.400.invalid_image"
 ERR_400_INVALID_IMAGE_COUNT = "error.400.invalid_image_count"
 ERR_400_INVALID_TIMEOUT = "error.400.invalid_timeout"
+ERR_400_INVALID_NUM_SPEAKERS = "error.400.invalid_num_speakers"
+ERR_400_EMPTY_TEXTS = "error.400.empty_texts"
 
 AGENT_ERRORS = {
     ERR_400_INVALID_MODEL_SIZE: "Model must be one of: small, medium, large",
@@ -21,6 +23,8 @@ AGENT_ERRORS = {
     ),
     ERR_400_INVALID_IMAGE_COUNT: "n must be between 1 and 10",
     ERR_400_INVALID_TIMEOUT: "timeout_seconds must be a positive integer (>= 1)",
+    ERR_400_INVALID_NUM_SPEAKERS: "num_speakers must be a positive integer (>= 1)",
+    ERR_400_EMPTY_TEXTS: "texts must be a non-empty list of non-empty strings",
 }
 
 register_service_errors(AGENT_ERRORS)

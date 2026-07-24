@@ -13,19 +13,29 @@ class TestLazyExports:
         assert stapel_agent.__all__ == [
             "AudioRef",
             "CachePolicy",
+            "DiarizationProvider",
+            "EmbeddingProvider",
             "GeneratedImage",
             "ImageGenProvider",
             "ImageRef",
             "LlmProvider",
+            "NormalizedDiarization",
+            "NormalizedEmbeddings",
             "NormalizedTranscript",
             "ProviderResult",
             "SttProvider",
             "agent_settings",
             "complete",
+            "diarize",
+            "embed",
             "generate_image",
+            "register_diarization_provider",
+            "register_embedding_provider",
             "register_image_provider",
             "register_provider",
             "register_stt_provider",
+            "registered_diarization_providers",
+            "registered_embedding_providers",
             "registered_image_providers",
             "registered_providers",
             "registered_stt_providers",
@@ -33,6 +43,49 @@ class TestLazyExports:
             "transcribe",
             "translate",
         ]
+
+    def test_diarization_seam_resolves(self):
+        from stapel_agent.diarization import (
+            register_diarization_provider,
+            registered_diarization_providers,
+        )
+        from stapel_agent.diarization.base import (
+            DiarizationProvider,
+            NormalizedDiarization,
+        )
+        from stapel_agent.services import diarize
+
+        assert stapel_agent.DiarizationProvider is DiarizationProvider
+        assert stapel_agent.NormalizedDiarization is NormalizedDiarization
+        assert (
+            stapel_agent.register_diarization_provider
+            is register_diarization_provider
+        )
+        assert (
+            stapel_agent.registered_diarization_providers
+            is registered_diarization_providers
+        )
+        assert stapel_agent.diarize is diarize
+
+    def test_embedding_seam_resolves(self):
+        from stapel_agent.embeddings import (
+            register_embedding_provider,
+            registered_embedding_providers,
+        )
+        from stapel_agent.embeddings.base import (
+            EmbeddingProvider,
+            NormalizedEmbeddings,
+        )
+        from stapel_agent.services import embed
+
+        assert stapel_agent.EmbeddingProvider is EmbeddingProvider
+        assert stapel_agent.NormalizedEmbeddings is NormalizedEmbeddings
+        assert stapel_agent.register_embedding_provider is register_embedding_provider
+        assert (
+            stapel_agent.registered_embedding_providers
+            is registered_embedding_providers
+        )
+        assert stapel_agent.embed is embed
 
     def test_agent_settings_resolves(self):
         from stapel_agent.conf import agent_settings

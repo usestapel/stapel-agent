@@ -10,6 +10,18 @@ from __future__ import annotations
 import base64
 
 from stapel_agent.cache import CachePolicy
+from stapel_agent.diarization.base import (
+    DiarizationError,
+    DiarizationProvider,
+    DiarTurn,
+    NormalizedDiarization,
+)
+from stapel_agent.embeddings.base import (
+    EmbeddingError,
+    EmbeddingProvider,
+    NormalizedEmbeddings,
+    require_texts,
+)
 from stapel_agent.images.base import GeneratedImage, ImageGenProvider
 from stapel_agent.providers.base import LlmProvider, ProviderResult
 from stapel_agent.stt.base import (
@@ -268,3 +280,120 @@ class FatalSttProvider(FakeSttProvider):
 
 class NotAnSttProvider:
     """Deliberately not an SttProvider subclass — for the W003 check."""
+
+
+class FakeDiarizationProvider(DiarizationProvider):
+    """Recording diarization fake — same class-level-state pattern
+    (``get_diarization_provider`` instantiates a fresh object per request)."""
+
+    name = "fake-diar"
+
+    calls: list[dict] = []
+    result: NormalizedDiarization | None = None
+    error: Exception | None = None
+
+    @classmethod
+    def reset(cls):
+        cls.calls = []
+        cls.result = NormalizedDiarization(
+            provider=cls.name,
+            duration_seconds=4.0,
+            turns=[
+                DiarTurn(speaker="SPEAKER_00", start=0.0, end=2.0),
+                DiarTurn(speaker="SPEAKER_01", start=2.0, end=4.0, confidence=0.9),
+            ],
+            speakers_detected=["SPEAKER_00", "SPEAKER_01"],
+        )
+        cls.error = None
+
+    def diarize(
+        self,
+        *,
+        audio,
+        num_speakers=None,
+        timeout_seconds=None,
+        provider_options=None,
+    ):
+        cls = type(self)
+        cls.calls.append(
+            {
+                "audio": audio,
+                "num_speakers": num_speakers,
+                "timeout_seconds": timeout_seconds,
+                "provider_options": provider_options,
+            }
+        )
+        if cls.error is not None:
+            raise cls.error
+        return cls.result
+
+
+class FatalDiarizationProvider(FakeDiarizationProvider):
+    """Always fails permanently — for the failure-envelope path."""
+
+    name = "fatal-diar"
+
+    @classmethod
+    def reset(cls):
+        super().reset()
+        cls.error = DiarizationError(
+            "audio is not decodable", provider=cls.name, status_code=400
+        )
+
+
+class NotADiarizationProvider:
+    """Deliberately not a DiarizationProvider subclass — for W007."""
+
+
+class FakeEmbeddingProvider(EmbeddingProvider):
+    """Recording embedding fake — one deterministic vector per text, in
+    input order (so order-preservation is assertable end-to-end)."""
+
+    name = "fake-embed"
+
+    calls: list[dict] = []
+    error: Exception | None = None
+
+    @classmethod
+    def reset(cls):
+        cls.calls = []
+        cls.error = None
+
+    def embed(self, *, texts, timeout_seconds=None, provider_options=None):
+        cls = type(self)
+        cls.calls.append(
+            {
+                "texts": texts,
+                "timeout_seconds": timeout_seconds,
+                "provider_options": provider_options,
+            }
+        )
+        if cls.error is not None:
+            raise cls.error
+        batch = require_texts(texts, provider=self.name)
+        return NormalizedEmbeddings(
+            provider=self.name,
+            model="fake-embed-1",
+            dim=2,
+            # Positional fingerprint: vectors[i] encodes i, so a reorder
+            # anywhere in the pipeline is machine-visible.
+            vectors=[[float(i), float(len(t))] for i, t in enumerate(batch)],
+            usage={"prompt_tokens": sum(len(t) for t in batch)},
+        )
+
+
+class FatalEmbeddingProvider(FakeEmbeddingProvider):
+    """Always fails permanently — for the failure-envelope path."""
+
+    name = "fatal-embed"
+
+    @classmethod
+    def reset(cls):
+        super().reset()
+        cls.error = EmbeddingError(
+            "auth rejected", provider=cls.name, status_code=401
+        )
+
+
+class NotAnEmbeddingProvider:
+    """Deliberately not an EmbeddingProvider subclass — for W009."""

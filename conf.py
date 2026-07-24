@@ -101,6 +101,36 @@ agent_settings = AppSettings(
         # model parameter — nothing to pin).
         "XAI_API_KEY": "",
         "XAI_STT_URL": "https://api.x.ai/v1/stt",
+        # ── Diarization (speaker turns) ─────────────────────────
+        # Overlay merged OVER diarization.BUILTIN_DIARIZATION_PROVIDERS
+        # (pyannote-http) — same merge semantics as PROVIDERS/STT_PROVIDERS.
+        "DIARIZATION_PROVIDERS": {},
+        "DEFAULT_DIARIZATION_PROVIDER": "pyannote-http",
+        # Hard cap (seconds) on one diarization request.
+        "DIARIZATION_TIMEOUT": 1800,
+        # Self-hosted pyannote wrapper service (plain HTTP multipart
+        # POST {base}/diarize). Key optional — self-hosted often has none.
+        "PYANNOTE_BASE_URL": "",
+        "PYANNOTE_API_KEY": "",
+        # ── Embeddings ──────────────────────────────────────────
+        # Overlay merged OVER embeddings.BUILTIN_EMBEDDING_PROVIDERS
+        # (openai-embeddings / embeddings-http) — same merge semantics.
+        "EMBEDDING_PROVIDERS": {},
+        "DEFAULT_EMBEDDING_PROVIDER": "openai-embeddings",
+        # Hard cap (seconds) on one embeddings request.
+        "EMBEDDINGS_TIMEOUT": 120,
+        # OpenAI-compatible /embeddings endpoint (base URL includes /v1,
+        # like OPENAI_COMPAT_BASE_URL). Both fall back to the
+        # OPENAI_COMPAT_* pair, so a host already on an OpenAI-flavoured
+        # stack configures nothing extra.
+        "EMBEDDINGS_BASE_URL": "",
+        "EMBEDDINGS_API_KEY": "",
+        "EMBEDDINGS_MODEL": "text-embedding-3-small",
+        # Generic self-hosted embeddings server (POST {base}/embed,
+        # {"texts": [...]} → {"vectors": [[...]]}; model fixed
+        # server-side — bge-m3 / multilingual-e5 class). Key optional.
+        "EMBEDDINGS_HTTP_BASE_URL": "",
+        "EMBEDDINGS_HTTP_API_KEY": "",
         # ── Image generation ────────────────────────────────────
         # Overlay merged OVER images.BUILTIN_IMAGE_PROVIDERS
         # (openai-images) — same merge semantics as PROVIDERS/STT_PROVIDERS.

@@ -87,6 +87,50 @@ class TranscribeRequest:
 
 
 @dataclass
+class DiarizeRequest:
+    """Speaker-diarization request.
+
+    Attributes:
+        audio_url: Fetchable audio URL (presigned S3/MinIO GET).
+        num_speakers: Exact speaker count hint (>= 1); omit to let the
+            provider decide. Bound hints (min_speakers/max_speakers)
+            travel via ``provider_options`` and are mutually exclusive
+            with the exact count.
+        provider: Diarization provider name; defaults to
+            DEFAULT_DIARIZATION_PROVIDER.
+        timeout_seconds: Hard cap on the diarization request.
+        provider_options: Free-form per-provider passthrough, applied
+            after the adapter's own request params.
+    """
+
+    audio_url: str
+    num_speakers: Optional[int] = None
+    provider: Optional[str] = None
+    timeout_seconds: Optional[int] = None
+    provider_options: Optional[dict] = None
+
+
+@dataclass
+class EmbedRequest:
+    """Text-embeddings request.
+
+    Attributes:
+        texts: Batch of texts to embed (non-empty; output vectors
+            preserve this order).
+        provider: Embedding provider name; defaults to
+            DEFAULT_EMBEDDING_PROVIDER.
+        timeout_seconds: Hard cap on the embeddings request.
+        provider_options: Free-form per-provider passthrough, applied
+            after the adapter's own request params.
+    """
+
+    texts: List[str]
+    provider: Optional[str] = None
+    timeout_seconds: Optional[int] = None
+    provider_options: Optional[dict] = None
+
+
+@dataclass
 class SummarizeRequest:
     """Summarization request — exactly one of text/transcript.
 

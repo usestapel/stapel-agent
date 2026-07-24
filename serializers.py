@@ -7,6 +7,8 @@ from stapel_core.django.api.serializers import StapelDataclassSerializer
 
 from .dto import (
     CompleteRequest,
+    DiarizeRequest,
+    EmbedRequest,
     GenerateImageRequest,
     SummarizeRequest,
     SummarizeResponse,
@@ -15,9 +17,11 @@ from .dto import (
     TranslateResponse,
 )
 from .errors import (
+    ERR_400_EMPTY_TEXTS,
     ERR_400_INVALID_IMAGE,
     ERR_400_INVALID_IMAGE_COUNT,
     ERR_400_INVALID_MODEL_SIZE,
+    ERR_400_INVALID_NUM_SPEAKERS,
     ERR_400_INVALID_TIMEOUT,
     ERR_400_SUMMARIZE_INPUT,
 )
@@ -83,6 +87,40 @@ class TranscribeRequestSerializer(StapelDataclassSerializer):
 
     def validate_timeout_seconds(self, value):
         return _validate_timeout_seconds(value)
+
+
+class DiarizeRequestSerializer(StapelDataclassSerializer):
+    class Meta:
+        dataclass = DiarizeRequest
+
+    def validate_timeout_seconds(self, value):
+        return _validate_timeout_seconds(value)
+
+    def validate_num_speakers(self, value):
+        # The provider-side contract requires >= 1 (an exact count of 0
+        # speakers is meaningless) — reject at the boundary so it stays
+        # a 400, mirroring the comm schema's `minimum: 1`.
+        if value is not None and int(value) < 1:
+            raise StapelValidationError(ERR_400_INVALID_NUM_SPEAKERS)
+        return value
+
+
+class EmbedRequestSerializer(StapelDataclassSerializer):
+    class Meta:
+        dataclass = EmbedRequest
+
+    def validate_timeout_seconds(self, value):
+        return _validate_timeout_seconds(value)
+
+    def validate_texts(self, value):
+        # Mirror the fatal gate in embeddings.base.require_texts at the
+        # HTTP boundary: an empty batch / empty entries are a 400, not a
+        # provider round-trip.
+        if not value or any(
+            not isinstance(t, str) or not t.strip() for t in value
+        ):
+            raise StapelValidationError(ERR_400_EMPTY_TEXTS)
+        return value
 
 
 class SummarizeRequestSerializer(StapelDataclassSerializer):

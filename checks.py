@@ -201,4 +201,125 @@ def check_image_providers(app_configs, **kwargs):
     return issues
 
 
-__all__ = ["check_image_providers", "check_providers", "check_stt_providers"]
+@checks.register("stapel_agent")
+def check_diarization_providers(app_configs, **kwargs):
+    """Diarization registry checks — W-level like STT's: the surface is
+    optional and a broken entry degrades to ``status: "failure"`` per
+    request.
+
+    - ``stapel_agent.W007`` — a ``DIARIZATION_PROVIDERS`` entry cannot
+      be imported or is not a ``DiarizationProvider`` subclass;
+    - ``stapel_agent.W008`` — ``DEFAULT_DIARIZATION_PROVIDER`` references
+      a name missing from the effective registry.
+    """
+    from .conf import agent_settings
+    from .diarization import registered_diarization_providers
+    from .diarization.base import DiarizationProvider
+
+    return _registry_issues(
+        kind="Diarization",
+        effective=registered_diarization_providers(),
+        base_cls=DiarizationProvider,
+        entry_check_id="stapel_agent.W007",
+        default_check_id="stapel_agent.W008",
+        default_name=agent_settings.DEFAULT_DIARIZATION_PROVIDER,
+        default_setting="DEFAULT_DIARIZATION_PROVIDER",
+        register_hint=(
+            "STAPEL_AGENT['DIARIZATION_PROVIDERS'] / "
+            "register_diarization_provider()"
+        ),
+    )
+
+
+@checks.register("stapel_agent")
+def check_embedding_providers(app_configs, **kwargs):
+    """Embedding registry checks — W-level like STT's: the surface is
+    optional and a broken entry degrades to ``status: "failure"`` per
+    request.
+
+    - ``stapel_agent.W009`` — an ``EMBEDDING_PROVIDERS`` entry cannot be
+      imported or is not an ``EmbeddingProvider`` subclass;
+    - ``stapel_agent.W010`` — ``DEFAULT_EMBEDDING_PROVIDER`` references
+      a name missing from the effective registry.
+    """
+    from .conf import agent_settings
+    from .embeddings import registered_embedding_providers
+    from .embeddings.base import EmbeddingProvider
+
+    return _registry_issues(
+        kind="Embedding",
+        effective=registered_embedding_providers(),
+        base_cls=EmbeddingProvider,
+        entry_check_id="stapel_agent.W009",
+        default_check_id="stapel_agent.W010",
+        default_name=agent_settings.DEFAULT_EMBEDDING_PROVIDER,
+        default_setting="DEFAULT_EMBEDDING_PROVIDER",
+        register_hint=(
+            "STAPEL_AGENT['EMBEDDING_PROVIDERS'] / "
+            "register_embedding_provider()"
+        ),
+    )
+
+
+def _registry_issues(
+    *,
+    kind: str,
+    effective: dict,
+    base_cls,
+    entry_check_id: str,
+    default_check_id: str,
+    default_name: str,
+    default_setting: str,
+    register_hint: str,
+):
+    """The shared entries-importable + default-registered walk the image /
+    diarization / embedding checks all perform (STT keeps its own — it
+    also validates routes)."""
+    issues = []
+    for name, target in effective.items():
+        if isinstance(target, str):
+            try:
+                target = import_string(target)
+            except ImportError as exc:
+                issues.append(
+                    checks.Warning(
+                        f"{kind} provider {name!r} cannot be imported: {exc}",
+                        hint=(
+                            "Fix the dotted path, install the missing "
+                            "dependency, or remove the entry (set it to None)."
+                        ),
+                        id=entry_check_id,
+                    )
+                )
+                continue
+        if not (inspect.isclass(target) and issubclass(target, base_cls)):
+            issues.append(
+                checks.Warning(
+                    f"{kind} provider {name!r} resolves to {target!r}, which "
+                    f"is not a {base_cls.__module__}.{base_cls.__name__} "
+                    "subclass.",
+                    hint=f"Implement the {base_cls.__name__} ABC (see MODULE.md).",
+                    id=entry_check_id,
+                )
+            )
+
+    if default_name and default_name not in effective:
+        issues.append(
+            checks.Warning(
+                f"STAPEL_AGENT['{default_setting}'] is {default_name!r}, "
+                f"which is not in the effective {kind.lower()}-provider "
+                f"registry ({sorted(effective) or 'empty'}).",
+                hint=f"Register it via {register_hint}, or fix the name.",
+                id=default_check_id,
+            )
+        )
+    return issues
+
+
+__all__ = [
+    "check_diarization_providers",
+    "check_embedding_providers",
+    "check_image_providers",
+    "check_providers",
+    "check_stt_providers",
+]

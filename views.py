@@ -17,6 +17,8 @@ from .dto import SummarizeResponse, TranslateResponse
 from .images.base import ImageRef
 from .serializers import (
     CompleteRequestSerializer,
+    DiarizeRequestSerializer,
+    EmbedRequestSerializer,
     GenerateImageRequestSerializer,
     SummarizeRequestSerializer,
     SummarizeResponseSerializer,
@@ -148,6 +150,68 @@ class LlmTranscribeView(SerializerSeamMixin, APIView):
             provider=data.provider,
             timeout_seconds=data.timeout_seconds,
             keyterms=data.keyterms,
+            provider_options=data.provider_options,
+            user_id=_request_user_id(request),
+        )
+        return StapelResponse(payload)
+
+
+@extend_schema(tags=["LLM"])
+class LlmDiarizeView(SerializerSeamMixin, APIView):
+    """Speaker diarization — ``POST api/llm/diarize``.
+
+    Single-provider surface (explicit provider or
+    ``DEFAULT_DIARIZATION_PROVIDER``; no fallback chain). Diarization
+    failures are HTTP 200 with ``status: "failure"`` — the house
+    contract.
+    """
+
+    permission_classes = [IsServiceRequest | IsStaffUser]
+    request_serializer_class = DiarizeRequestSerializer
+    # Deliberately no response serializer: `diarization` embeds the raw
+    # provider payload (arbitrary JSON) — same rationale as transcribe's
+    # transcript; see MODULE.md.
+
+    @extend_schema(request=DiarizeRequestSerializer, responses={200: dict})
+    def post(self, request):  # noqa: R007
+        ser = self.get_request_serializer_class()(data=request.data)
+        ser.is_valid(raise_exception=True)
+        data = ser.validated_data
+        payload = services.diarize(
+            AudioRef(url=data.audio_url),
+            num_speakers=data.num_speakers,
+            provider=data.provider,
+            timeout_seconds=data.timeout_seconds,
+            provider_options=data.provider_options,
+            user_id=_request_user_id(request),
+        )
+        return StapelResponse(payload)
+
+
+@extend_schema(tags=["LLM"])
+class LlmEmbedView(SerializerSeamMixin, APIView):
+    """Text embeddings — ``POST api/llm/embed``.
+
+    Vectors preserve input order; the ledger records counts/usage only —
+    never the texts. Embedding failures are HTTP 200 with
+    ``status: "failure"``.
+    """
+
+    permission_classes = [IsServiceRequest | IsStaffUser]
+    request_serializer_class = EmbedRequestSerializer
+    # Deliberately no response serializer: `embeddings` carries the raw
+    # provider leftovers plus float matrices of provider-dependent
+    # dimensionality — same rationale as complete's result; see MODULE.md.
+
+    @extend_schema(request=EmbedRequestSerializer, responses={200: dict})
+    def post(self, request):  # noqa: R007
+        ser = self.get_request_serializer_class()(data=request.data)
+        ser.is_valid(raise_exception=True)
+        data = ser.validated_data
+        payload = services.embed(
+            data.texts,
+            provider=data.provider,
+            timeout_seconds=data.timeout_seconds,
             provider_options=data.provider_options,
             user_id=_request_user_id(request),
         )

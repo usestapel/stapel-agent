@@ -5,6 +5,91 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-07-24
+
+Minor: two new generic seams — speaker **diarization** and text
+**embeddings** — layered end-to-end the way transcribe is (ABC +
+normalized dataclass + error taxonomy → provider adapters → registry +
+settings → service + PromptLog → comm function + HTTP endpoint +
+committed schema). Core stays generic: parameter wiring per API lives
+here; fusing diarization turns with STT words, chunking policies and
+ranking stay app-layer.
+
+### Added
+- **Diarization seam** (`diarization/base.py`):
+  `DiarizationProvider.diarize(*, audio: AudioRef, num_speakers=None,
+  timeout_seconds=None, provider_options=None) → NormalizedDiarization`
+  (`provider`, `duration_seconds`, `turns: [DiarTurn(speaker, start,
+  end, confidence)]` — seconds-float, wire order preserved,
+  `speakers_detected`, `raw`). Errors join the house hierarchy:
+  `DiarizationError(ProviderError)` fatal vs
+  `RetryableDiarizationError` (429/5xx/timeouts). Ported iron-benchmark
+  invariants: speaker-count knob validation
+  (`validate_speaker_counts` — exact count XOR min/max bounds, all
+  ≥ 1, min ≤ max, fail loudly BEFORE any call), inverted-segment
+  clamping (`end < start` → clamped, never dropped), malformed-success
+  = loud failure. An EMPTY diarization is data, not an error (the
+  empty=error gate is hybrid-merge policy — caller's decision).
+- **`pyannote-http` adapter** (`diarization/providers/pyannote_http.py`):
+  one synchronous multipart POST to a self-hosted pyannote wrapper
+  (gigaam-style plain HTTP, NOT the pyannoteAI cloud jobs API):
+  `POST {PYANNOTE_BASE_URL}/diarize` (file + optional
+  `num_speakers`/`min_speakers`/`max_speakers` form fields, bounds via
+  `provider_options`) → `{"diarization": [{speaker, start, end,
+  confidence?}], "duration"?}` — request knobs named after
+  `pyannote.audio`'s own `apply()` signature, response segments in the
+  pyannoteAI `output.diarization` shape; the full wire contract is
+  documented in the module docstring. Upload-capable: any AudioRef
+  kind. Settings: `DIARIZATION_PROVIDERS` / `DEFAULT_DIARIZATION_PROVIDER`
+  (merge-registry canon + `register_diarization_provider()`),
+  `DIARIZATION_TIMEOUT`, `PYANNOTE_BASE_URL`, `PYANNOTE_API_KEY`
+  (optional — Bearer only when set).
+- **Embeddings seam** (`embeddings/base.py`):
+  `EmbeddingProvider.embed(*, texts: list[str], timeout_seconds=None,
+  provider_options=None) → NormalizedEmbeddings` (`provider`, `model`,
+  `dim`, `vectors` — **input order preserved**, `usage`, `raw` — raw
+  kept small, the vectors are never stored twice). Batch gate
+  `require_texts`: empty batches / non-string / empty-string entries
+  are fatal BEFORE any provider call. A returned count mismatch is a
+  loud fatal failure, never a misaligned batch. Per-registration
+  `embedding_model` pin mirrors the STT `speech_model` canon.
+  `EmbeddingError(ProviderError)` fatal vs `RetryableEmbeddingError`.
+- **Embedding adapters**: `openai-embeddings`
+  (`embeddings/providers/openai_compat.py` — `POST {base}/embeddings`,
+  `{"model", "input": [...]}`, wire entries re-ordered by `index`;
+  `EMBEDDINGS_BASE_URL`/`EMBEDDINGS_API_KEY` fall back to the
+  `OPENAI_COMPAT_*` pair, `EMBEDDINGS_MODEL` default
+  `text-embedding-3-small`) and `embeddings-http`
+  (`embeddings/providers/http_server.py` — generic self-host contract
+  for local multilingual models class bge-m3/multilingual-e5:
+  `POST {EMBEDDINGS_HTTP_BASE_URL}/embed` `{"texts": [...]}` →
+  `{"vectors": [[...]], "model"?, "dim"?, "usage"?}`, documented in the
+  module docstring; model attribution = server echo, never pretended).
+  Settings: `EMBEDDING_PROVIDERS` / `DEFAULT_EMBEDDING_PROVIDER` +
+  `register_embedding_provider()`, `EMBEDDINGS_TIMEOUT`,
+  `EMBEDDINGS_HTTP_BASE_URL`, `EMBEDDINGS_HTTP_API_KEY`.
+- **Surfaces**: `llm.diarize` and `llm.embed` comm functions (+
+  committed `schemas/functions/llm.diarize.json` / `llm.embed.json`),
+  HTTP endpoints `POST api/v1/llm/diarize` / `POST api/v1/llm/embed`
+  (DTO + serializer validation: `num_speakers ≥ 1`, non-empty `texts`,
+  positive timeout — new error keys `error.400.invalid_num_speakers`,
+  `error.400.empty_texts`). Envelopes mirror transcribe's:
+  `{"status": "ok", "diarization"|"embeddings": {...},
+  "provider_used": str}` or the failure envelope (HTTP 200).
+- **Ledger**: new `PromptSource.DIARIZE` / `PromptSource.EMBED`
+  (migration 0004). One row per call, `model` = provider name.
+  Privacy canon: the diarize row carries the PII-safe
+  `audio.describe()` descriptor + turn/speaker COUNTS; the embed row
+  carries `texts:<n>` + `{model, batch_size, dim, usage}` — **never
+  the texts, never the vectors** (tested).
+- **Checks**: `stapel_agent.W007`/`W008` (diarization registry entry /
+  default), `W009`/`W010` (embedding registry entry / default) — all
+  W-level, same degrade-per-request rationale as STT/images.
+- Public API: `diarize`, `embed`, `DiarizationProvider`,
+  `NormalizedDiarization`, `EmbeddingProvider`, `NormalizedEmbeddings`,
+  `register_diarization_provider` / `registered_diarization_providers`,
+  `register_embedding_provider` / `registered_embedding_providers`.
+
 ## [0.3.0] — 2026-07-23
 
 Minor: the generic STT vocabulary-biasing seam + five new provider

@@ -580,6 +580,111 @@ def transcribe(
     return {"status": "failure", "reason": failure_reason}
 
 
+# ─── Diarization ──────────────────────────────────────────────────────
+
+
+def get_diarization_provider(name: str):
+    """Instantiate the diarization provider registered under *name*
+    (runtime → ``DIARIZATION_PROVIDERS`` merge → built-ins). Raises
+    DiarizationError for unknown names — ``diarize()`` degrades that to
+    ``status: "failure"``."""
+    from .diarization import registered_diarization_providers
+    from .diarization.base import DiarizationError
+
+    target = registered_diarization_providers().get(name)
+    if not target:
+        raise DiarizationError(
+            f"Unknown diarization provider '{name}' — register it via "
+            "STAPEL_AGENT['DIARIZATION_PROVIDERS'] or "
+            "stapel_agent.diarization.register_diarization_provider",
+            provider=name,
+        )
+    cls = import_string(target) if isinstance(target, str) else target
+    return cls()
+
+
+def diarize(
+    audio,
+    *,
+    num_speakers: int | None = None,
+    provider: str | None = None,
+    timeout_seconds: int | None = None,
+    provider_options: dict | None = None,
+    user_id: str | None = None,
+    metadata: dict | None = None,
+) -> dict:
+    """Diarize *audio* (an ``AudioRef``) through the configured backend.
+
+    Single-provider surface (no fallback chain — mirrors image
+    generation, not the STT router): explicit *provider* or
+    ``DEFAULT_DIARIZATION_PROVIDER``. One PromptLog row per call
+    (``source=diarize``, ``model`` = provider name, prompt =
+    ``audio.describe()`` — the PII-safe descriptor, never bytes/signed
+    URLs; token columns null). Fusing the returned turns with STT words
+    is the CALLER's job — merge policy is app know-how, not core.
+
+    Returns ``{"status": "ok", "diarization": {...}, "provider_used":
+    str}`` or ``{"status": "failure", "reason": ...}``.
+    """
+    from .diarization.base import DiarizationError
+    from .stt.base import AudioRef
+
+    if not isinstance(audio, AudioRef):
+        return {"status": "failure", "reason": "audio must be an AudioRef"}
+
+    name = provider or agent_settings.DEFAULT_DIARIZATION_PROVIDER
+    start = time.monotonic()
+
+    def _log(status: str, *, error: str | None = None, extra: dict | None = None):
+        PromptLog.objects.create(
+            source=PromptSource.DIARIZE,
+            model=name,
+            model_size="",
+            prompt=audio.describe(),
+            response=None,
+            status=status,
+            error_message=error,
+            duration_ms=int((time.monotonic() - start) * 1000),
+            user_id=str(user_id) if user_id is not None else None,
+            metadata={
+                **(metadata or {}),
+                "audio": audio.describe(),
+                "num_speakers": num_speakers,
+                **(extra or {}),
+            },
+        )
+
+    try:
+        backend = get_diarization_provider(name)
+        result = backend.diarize(
+            audio=audio,
+            num_speakers=num_speakers,
+            timeout_seconds=timeout_seconds,
+            provider_options=provider_options,
+        )
+    except DiarizationError as exc:
+        _log(PromptStatus.ERROR, error=str(exc))
+        return {"status": "failure", "reason": str(exc)}
+    except ImportError as exc:
+        reason = f"Diarization provider '{name}' could not be loaded: {exc}"
+        _log(PromptStatus.ERROR, error=reason)
+        return {"status": "failure", "reason": reason}
+
+    _log(
+        PromptStatus.SUCCESS,
+        extra={
+            "turns": len(result.turns),
+            "speakers_detected": len(result.speakers_detected),
+            "duration_seconds": result.duration_seconds,
+        },
+    )
+    return {
+        "status": "ok",
+        "diarization": result.to_dict(),
+        "provider_used": name,
+    }
+
+
 # ─── Summarization ────────────────────────────────────────────────────
 
 
@@ -670,6 +775,102 @@ def summarize(
     if merged["status"] == "failure":
         return {"status": "failure", "reason": merged.get("reason")}
     return {"status": "ok", "summary": merged.get("result") or "", "usage": usage}
+
+
+# ─── Embeddings ───────────────────────────────────────────────────────
+
+
+def get_embedding_provider(name: str):
+    """Instantiate the embedding provider registered under *name*
+    (runtime → ``EMBEDDING_PROVIDERS`` merge → built-ins). Raises
+    EmbeddingError for unknown names — ``embed()`` degrades that to
+    ``status: "failure"``."""
+    from .embeddings import registered_embedding_providers
+    from .embeddings.base import EmbeddingError
+
+    target = registered_embedding_providers().get(name)
+    if not target:
+        raise EmbeddingError(
+            f"Unknown embedding provider '{name}' — register it via "
+            "STAPEL_AGENT['EMBEDDING_PROVIDERS'] or "
+            "stapel_agent.embeddings.register_embedding_provider",
+            provider=name,
+        )
+    cls = import_string(target) if isinstance(target, str) else target
+    return cls()
+
+
+def embed(
+    texts,
+    *,
+    provider: str | None = None,
+    timeout_seconds: int | None = None,
+    provider_options: dict | None = None,
+    user_id: str | None = None,
+    metadata: dict | None = None,
+) -> dict:
+    """Embed a batch of texts through the configured backend.
+
+    Single-provider surface (explicit *provider* or
+    ``DEFAULT_EMBEDDING_PROVIDER``); input order is preserved in the
+    returned vectors. Chunking policies and ranking stay app-layer.
+
+    One PromptLog row per call — ``source=embed``, ``model`` = provider
+    name, and ONLY counts/usage in the row: prompt = ``texts:<n>``,
+    response null, metadata carries ``{model, batch_size, dim, usage}``.
+    **Never the texts** — embedding inputs are customer data and must not
+    leak into the ledger (privacy canon — the safe thing is the default;
+    same rule as STT keyterms). The vectors likewise never land in the
+    ledger (they are the response payload, not observability data).
+
+    Returns ``{"status": "ok", "embeddings": {...}, "provider_used":
+    str}`` or ``{"status": "failure", "reason": ...}``.
+    """
+    from .embeddings.base import EmbeddingError
+
+    name = provider or agent_settings.DEFAULT_EMBEDDING_PROVIDER
+    batch_size = len(texts) if isinstance(texts, (list, tuple)) else 0
+    start = time.monotonic()
+
+    def _log(status: str, *, error: str | None = None, extra: dict | None = None):
+        PromptLog.objects.create(
+            source=PromptSource.EMBED,
+            model=name,
+            model_size="",
+            # Counts only — the ledger must never see the texts.
+            prompt=f"texts:{batch_size}",
+            response=None,
+            status=status,
+            error_message=error,
+            duration_ms=int((time.monotonic() - start) * 1000),
+            user_id=str(user_id) if user_id is not None else None,
+            metadata={**(metadata or {}), "batch_size": batch_size, **(extra or {})},
+        )
+
+    try:
+        backend = get_embedding_provider(name)
+        result = backend.embed(
+            texts=texts,
+            timeout_seconds=timeout_seconds,
+            provider_options=provider_options,
+        )
+    except EmbeddingError as exc:
+        _log(PromptStatus.ERROR, error=str(exc))
+        return {"status": "failure", "reason": str(exc)}
+    except ImportError as exc:
+        reason = f"Embedding provider '{name}' could not be loaded: {exc}"
+        _log(PromptStatus.ERROR, error=reason)
+        return {"status": "failure", "reason": reason}
+
+    _log(
+        PromptStatus.SUCCESS,
+        extra={"model": result.model, "dim": result.dim, "usage": result.usage},
+    )
+    return {
+        "status": "ok",
+        "embeddings": result.to_dict(),
+        "provider_used": name,
+    }
 
 
 # ─── Image generation ─────────────────────────────────────────────────
@@ -781,7 +982,11 @@ __all__ = [
     "MODEL_SIZES",
     "complete",
     "complete_json",
+    "diarize",
+    "embed",
     "generate_image",
+    "get_diarization_provider",
+    "get_embedding_provider",
     "get_image_provider",
     "get_provider",
     "get_stt_provider",
