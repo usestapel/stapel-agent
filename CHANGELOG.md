@@ -5,6 +5,60 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-07-25
+
+Minor (**behaviour change in AssemblyAI biasing**): a second diarization
+backend — the pyannoteAI cloud job API — and an end to silent
+non-biasing on models that do not honor `keyterms_prompt` for the
+requested language.
+
+### Added
+- **`pyannote-cloud` diarization adapter**
+  (`diarization/providers/pyannote_cloud.py`): the billed
+  api.pyannote.ai job API next to the existing self-hosted
+  `pyannote-http` shim. Flow: `POST {base}/media/input` → presigned
+  `PUT` (skipped entirely when the `AudioRef` already carries an http(s)
+  URL — pyannoteAI fetches it server-side) → `POST {base}/diarize`
+  (**the billing event**) → poll `GET {base}/jobs/{id}`. Output maps
+  through the same `turns_from_segments` contract as the self-hosted
+  adapter, so callers see one `NormalizedDiarization` shape.
+  Two opinionated, overridable pins: `model` defaults to `precision-2`
+  (the flagship — the open-weights ladder 3.1 < community-1 <
+  precision-2 is a different quality point, and mixing them invalidates
+  any measured comparison) and `exclusive` defaults to `True` (the
+  non-overlapping speaker layer; `provider_options={"exclusive": False}`
+  returns the raw one, and the untouched response is always in `raw`).
+  Speaker-count knobs validate BEFORE the billable call
+  (`num_speakers` XOR `min`/`max` bounds); the submit is never
+  auto-retried here — transient failures surface as
+  `RetryableDiarizationError` and the caller's retry policy (where the
+  spend cap lives) decides whether to pay again. `billable_seconds()` is
+  the pure per-second-with-20s-floor helper for host cost models.
+- Settings `PYANNOTEAI_API_KEY` / `PYANNOTEAI_BASE_URL` (default
+  `https://api.pyannote.ai/v1`) / `PYANNOTEAI_MODEL` (`precision-2`) /
+  `PYANNOTEAI_EXCLUSIVE` (`True`). The key is deliberately SEPARATE from
+  the self-host `PYANNOTE_API_KEY`: same vendor name, different service,
+  and one shared setting silently sends a self-host bearer to the cloud
+  (or back).
+- `AssemblyAIProvider.keyterms_supported_for(language)` +
+  `KEYTERMS_LANGUAGES` — the documented per-model coverage map
+  (docs survey 2026-07-24).
+
+### Changed
+- **AssemblyAI reports biasing honestly outside the model's keyterms
+  coverage.** `keyterms_prompt` is honored by universal-3.5-pro (the
+  `best` alias) for its own six native languages (en/es/de/fr/pt/it);
+  other languages fall back internally to Universal-2, where the
+  parameter is Beta and English-only. Sending terms outside that
+  coverage produced the worst failure available: a successful request,
+  ignored terms, and `biasing.applied: true` — silent non-biasing no
+  downstream invariant can catch. Now the parameter is not sent and the
+  block reports `applied: false` with every term counted as truncated
+  (the `unsupported_biasing` shape). Unknown model names and
+  auto-detected language keep the previous send-and-count behaviour;
+  hosts with better information override `keyterms_supported_for` per
+  registration or force the raw parameter via `provider_options`.
+
 ## [0.5.0] — 2026-07-24
 
 Minor: a new generic **rerank** seam — query-vs-documents relevance

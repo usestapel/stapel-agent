@@ -167,6 +167,70 @@ class TestAssemblyAIKeyterms:
             "terms_truncated": 1,
         }
 
+    def test_language_outside_model_coverage_reports_not_applied(
+        self, configured, monkeypatch
+    ):
+        """keyterms_prompt is Beta English-only on Universal-2 (the
+        default 'universal' model). Sending terms for zh would succeed
+        and be ignored — silent non-biasing. The adapter must not claim
+        applied=true and must not send the parameter."""
+        transcript, posted = self._run(
+            monkeypatch, language="zh", keyterms=["IronMemo", "SSH"]
+        )
+        assert "keyterms_prompt" not in posted[0]["json"]
+        assert transcript.biasing == {
+            "applied": False,
+            "terms_sent": 0,
+            "terms_truncated": 2,
+        }
+        # terms are not smuggled into the request through another field
+        assert "IronMemo" not in json.dumps(posted[0]["json"])
+
+    def test_language_inside_model_coverage_still_biases(
+        self, configured, monkeypatch
+    ):
+        transcript, posted = self._run(
+            monkeypatch, language="en-US", keyterms=["IronMemo"]
+        )
+        assert posted[0]["json"]["keyterms_prompt"] == ["IronMemo"]
+        assert transcript.biasing["applied"] is True
+
+    def test_pro_model_covers_its_six_native_languages(
+        self, configured, monkeypatch
+    ):
+        configured.STAPEL_AGENT = {
+            "ASSEMBLYAI_API_KEY": "aai-test", "ASSEMBLYAI_MODEL": "best",
+        }
+        transcript, posted = self._run(
+            monkeypatch, language="de", keyterms=["IronMemo"]
+        )
+        assert posted[0]["json"]["keyterms_prompt"] == ["IronMemo"]
+        assert transcript.biasing["applied"] is True
+        # ...but not the wide tail (falls back to Universal-2 internally)
+        transcript, posted = self._run(
+            monkeypatch, language="ja", keyterms=["IronMemo"]
+        )
+        assert "keyterms_prompt" not in posted[0]["json"]
+        assert transcript.biasing["applied"] is False
+
+    def test_unknown_model_and_autodetect_keep_sending(
+        self, configured, monkeypatch
+    ):
+        # No language pinned: coverage is unknowable before the call.
+        transcript, posted = self._run(monkeypatch, keyterms=["IronMemo"])
+        assert posted[0]["json"]["keyterms_prompt"] == ["IronMemo"]
+        assert transcript.biasing["applied"] is True
+        # Unrecognized model name: refusing to bias would be its own
+        # silent failure — send, and let the biasing counts be honest.
+        configured.STAPEL_AGENT = {
+            "ASSEMBLYAI_API_KEY": "aai-test", "ASSEMBLYAI_MODEL": "universal-9",
+        }
+        transcript, posted = self._run(
+            monkeypatch, language="zh", keyterms=["IronMemo"]
+        )
+        assert posted[0]["json"]["keyterms_prompt"] == ["IronMemo"]
+        assert transcript.biasing["applied"] is True
+
     def test_provider_options_win_over_adapter_params(self, configured, monkeypatch):
         _, posted = self._run(
             monkeypatch,

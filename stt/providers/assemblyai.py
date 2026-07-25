@@ -19,6 +19,23 @@ words/phrases per request where EACH WORD of a phrase counts toward the
 pair is GONE from current docs (404) — never sent. Out-of-limit terms
 are TRUNCATED (counted in ``NormalizedTranscript.biasing``), never
 errors.
+
+**Language coverage is NOT uniform** (docs survey 2026-07-24) and this is
+the adapter's one opinionated gate: ``keyterms_prompt`` is honored by
+universal-3.5-pro (the ``best`` alias) for ITS OWN native languages
+(en/es/de/fr/pt/it) — other languages fall back internally to
+Universal-2, where the parameter is Beta and **English-only**. Sending
+terms outside that coverage is the worst failure mode available here:
+the request succeeds, the provider ignores the terms, and the biasing
+block would still say ``applied: true`` — silent non-biasing that no
+downstream invariant can catch. So when the requested language is
+outside the effective model's coverage the parameter is NOT sent and
+the block honestly reports ``applied: false`` with every term counted as
+truncated (``KEYTERMS_LANGUAGES``; a host that knows better overrides it
+per-registration, and ``provider_options`` can still force the raw
+parameter). With no language pinned (auto-detect) coverage is unknowable
+before the call, so the terms ARE sent — pin the language when you need
+the guarantee.
 """
 from __future__ import annotations
 
@@ -38,6 +55,7 @@ from ..base import (
     SttProvider,
     TranscriptionError,
     biasing_metadata,
+    unsupported_biasing,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,6 +66,23 @@ SUBMIT_TIMEOUT_S = 60
 # terms are truncated with counts in `biasing`, never raised.
 MAX_KEYTERM_PHRASE_WORDS = 6
 MAX_KEYTERM_TOTAL_WORDS = 1000  # each word of a phrase counts
+
+
+#: Documented ``keyterms_prompt`` language coverage per speech model
+#: (docs survey 2026-07-24). Keys are AssemblyAI ``speech_model`` values
+#: (incl. the ``best`` alias), values are ISO-639-1 primary subtags. A
+#: model absent from this map is treated as UNKNOWN coverage — terms are
+#: sent (the pre-gate behaviour), because refusing to bias on an
+#: unrecognized model name would be its own silent failure.
+KEYTERMS_LANGUAGES = {
+    # universal-3.5-pro and its 'best' alias: the model's native six.
+    "best": frozenset({"en", "es", "de", "fr", "pt", "it"}),
+    "universal-3-5-pro": frozenset({"en", "es", "de", "fr", "pt", "it"}),
+    "universal-3.5-pro": frozenset({"en", "es", "de", "fr", "pt", "it"}),
+    # Universal-2: keyterms_prompt is Beta, English-only.
+    "universal": frozenset({"en"}),
+    "universal-2": frozenset({"en"}),
+}
 
 
 def _filter_keyterms(keyterms: list[str]) -> tuple[list[str], int]:
@@ -82,6 +117,17 @@ class AssemblyAIProvider(SttProvider):
 
     def default_speech_model(self) -> Optional[str]:
         return agent_settings.ASSEMBLYAI_MODEL
+
+    def keyterms_supported_for(self, language: Optional[str]) -> bool:
+        """Does THIS registration's model honor ``keyterms_prompt`` for
+        *language*? Unknown model or no language pinned → True (send;
+        see the module docstring). Override per-registration when a host
+        has better information than :data:`KEYTERMS_LANGUAGES`."""
+        covered = KEYTERMS_LANGUAGES.get(str(self.effective_model() or "").lower())
+        if covered is None or not language:
+            return True
+        primary = language.strip().lower().replace("_", "-").split("-")[0]
+        return primary in covered
 
     def transcribe(
         self,
@@ -119,7 +165,18 @@ class AssemblyAIProvider(SttProvider):
             body["language_detection"] = True
 
         biasing = None
-        if keyterms:
+        if keyterms and not self.keyterms_supported_for(language):
+            # Outside the model's documented keyterms coverage: the
+            # provider would accept the request and ignore the terms, so
+            # report the non-application honestly instead of claiming
+            # applied=true (see the module docstring).
+            logger.info(
+                "assemblyai: keyterms not applied — model %r does not honor "
+                "keyterms_prompt for language %r",
+                self.effective_model(), language,
+            )
+            biasing = unsupported_biasing(keyterms)
+        elif keyterms:
             accepted, truncated = _filter_keyterms(keyterms)
             if accepted:
                 body["keyterms_prompt"] = accepted

@@ -50,6 +50,20 @@ consuming project.
 | ASSEMBLYAI_BASE_URL | env | AssemblyAI base URL. | no | https://api.assemblyai.com |
 | ASSEMBLYAI_MODEL | env | AssemblyAI model. | no | universal |
 
+### Diarization — speaker turns (source: env / vault for keys)
+
+| Key | Source | Purpose | Required | Default |
+|-----|--------|---------|----------|---------|
+| DIARIZATION_PROVIDERS | env | overlay merged OVER built-in diarization providers. | no | {} |
+| DEFAULT_DIARIZATION_PROVIDER | env | diarization provider when a request names none. | no | pyannote-http |
+| DIARIZATION_TIMEOUT | env | hard cap (seconds) on one diarization request. | no | 1800 |
+| PYANNOTE_BASE_URL | env | self-hosted pyannote wrapper (multipart POST {base}/diarize). | no | (empty) |
+| PYANNOTE_API_KEY | vault | bearer for that SELF-HOSTED service (often none). | no | (empty) |
+| PYANNOTEAI_API_KEY | vault | pyannoteAI **cloud** key — a different service from the self-host bearer above; never share one setting between them. | no | (empty) |
+| PYANNOTEAI_BASE_URL | env | pyannoteAI cloud job API base. | no | https://api.pyannote.ai/v1 |
+| PYANNOTEAI_MODEL | env | cloud model pin (`precision-2` flagship; the open-weights ladder is a different quality point). | no | precision-2 |
+| PYANNOTEAI_EXCLUSIVE | env | ask the cloud for the non-overlapping speaker layer. | no | true |
+
 ### Image generation (source: env / vault for keys)
 
 | Key | Source | Purpose | Required | Default |

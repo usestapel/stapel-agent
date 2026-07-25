@@ -112,6 +112,17 @@ agent_settings = AppSettings(
         # POST {base}/diarize). Key optional — self-hosted often has none.
         "PYANNOTE_BASE_URL": "",
         "PYANNOTE_API_KEY": "",
+        # pyannoteAI CLOUD (api.pyannote.ai — billed job API). A SEPARATE
+        # credential from the self-host bearer above on purpose: same
+        # vendor name, different service, and one shared key setting
+        # silently sends a self-host token to the cloud (or back).
+        # MODEL defaults to the flagship precision-2; EXCLUSIVE asks for
+        # the non-overlapping speaker layer (per-call override lives in
+        # provider_options).
+        "PYANNOTEAI_API_KEY": "",
+        "PYANNOTEAI_BASE_URL": "https://api.pyannote.ai/v1",
+        "PYANNOTEAI_MODEL": "precision-2",
+        "PYANNOTEAI_EXCLUSIVE": True,
         # ── Embeddings ──────────────────────────────────────────
         # Overlay merged OVER embeddings.BUILTIN_EMBEDDING_PROVIDERS
         # (openai-embeddings / embeddings-http) — same merge semantics.

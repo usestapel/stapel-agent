@@ -31,6 +31,11 @@ from stapel_agent.diarization.base import (
     turns_from_segments,
     validate_speaker_counts,
 )
+from stapel_agent.diarization.providers.pyannote_cloud import (
+    MIN_BILLED_SECONDS,
+    PyannoteCloudProvider,
+    billable_seconds,
+)
 from stapel_agent.diarization.providers.pyannote_http import PyannoteHttpProvider
 from stapel_agent.models import PromptLog
 from stapel_agent.providers.base import ProviderError
@@ -284,10 +289,226 @@ class TestPyannoteHttp:
 # ─── registry ──────────────────────────────────────────────────────────
 
 
+# ─── pyannote-cloud adapter (api.pyannote.ai, billed job API) ──────────
+
+
+PYANNOTE_JOB = {
+    "jobId": "job-1",
+    "status": "succeeded",
+    "output": {
+        "diarization": [
+            {"speaker": "SPEAKER_00", "start": 0.0, "end": 2.5},
+            {"speaker": "SPEAKER_01", "start": 2.5, "end": 4.0, "confidence": 0.9},
+        ],
+        "duration": 4.2,
+    },
+}
+
+
+class TestPyannoteCloud:
+    @pytest.fixture
+    def configured(self, settings):
+        settings.STAPEL_AGENT = {"PYANNOTEAI_API_KEY": "cloud-key"}
+        return settings
+
+    @pytest.fixture(autouse=True)
+    def no_sleep(self, monkeypatch):
+        monkeypatch.setattr(
+            "stapel_agent.diarization.providers.pyannote_cloud.time.sleep",
+            lambda *_: None,
+        )
+
+    def _run(self, monkeypatch, *, requests_queue, audio=None, **kwargs):
+        """Drive the adapter with a scripted `requests.request` queue
+        (media/submit) plus `requests.get` (poll) and `requests.put`
+        (media upload). Returns (result, captured_calls)."""
+        captured = []
+        queue = list(requests_queue)
+
+        def _next(kind, url, **kw):
+            captured.append({"kind": kind, "url": url, **kw})
+            step = queue.pop(0)
+            if isinstance(step, Exception):
+                raise step
+            return step
+
+        mod = "stapel_agent.diarization.providers.pyannote_cloud.requests"
+        monkeypatch.setattr(
+            f"{mod}.request",
+            lambda method, url, **kw: _next(method, url, **kw),
+        )
+        monkeypatch.setattr(f"{mod}.get", lambda url, **kw: _next("get", url, **kw))
+        monkeypatch.setattr(f"{mod}.put", lambda url, **kw: _next("put", url, **kw))
+
+        result = PyannoteCloudProvider().diarize(
+            audio=audio or AudioRef(url="https://cdn.example/rec.wav"), **kwargs
+        )
+        return result, captured
+
+    def test_missing_key_is_fatal_before_any_call(self, settings, monkeypatch):
+        settings.STAPEL_AGENT = {}
+        called = []
+        monkeypatch.setattr(
+            "stapel_agent.diarization.providers.pyannote_cloud.requests.request",
+            lambda *a, **k: called.append(1),
+        )
+        with pytest.raises(DiarizationError, match="PYANNOTEAI_API_KEY") as exc_info:
+            PyannoteCloudProvider().diarize(audio=AudioRef(url="https://x/a.wav"))
+        assert not isinstance(exc_info.value, RetryableDiarizationError)
+        assert called == []
+
+    def test_url_audio_skips_upload_and_pins_precision_2(self, configured, monkeypatch):
+        result, captured = self._run(
+            monkeypatch,
+            requests_queue=[
+                FakeResponse({"jobId": "job-1"}),      # submit
+                FakeResponse(PYANNOTE_JOB),            # poll
+            ],
+            num_speakers=4,
+        )
+        submit = captured[0]
+        assert submit["url"] == "https://api.pyannote.ai/v1/diarize"
+        assert submit["headers"] == {"Authorization": "Bearer cloud-key"}
+        assert submit["json"] == {
+            "url": "https://cdn.example/rec.wav",   # no media object created
+            "model": "precision-2",
+            "exclusive": True,
+            "numSpeakers": 4,
+        }
+        assert captured[1]["url"] == "https://api.pyannote.ai/v1/jobs/job-1"
+
+        assert result.provider == "pyannote-cloud"
+        assert result.duration_seconds == 4.2
+        assert result.speakers_detected == ["SPEAKER_00", "SPEAKER_01"]
+        assert result.turns[1].confidence == 0.9
+        assert result.raw == PYANNOTE_JOB
+
+    def test_bytes_audio_uploads_via_media_input(self, configured, monkeypatch):
+        _, captured = self._run(
+            monkeypatch,
+            requests_queue=[
+                FakeResponse({"url": "https://presigned.example/put"}),  # media/input
+                FakeResponse(None, status_code=200, text=""),            # PUT
+                FakeResponse({"jobId": "job-2"}),                        # submit
+                FakeResponse({**PYANNOTE_JOB, "jobId": "job-2"}),        # poll
+            ],
+            audio=AudioRef(data=b"wav-bytes", mime="audio/wav"),
+        )
+        media, put, submit, _poll = captured
+        assert media["url"] == "https://api.pyannote.ai/v1/media/input"
+        assert media["json"]["url"].startswith("media://stapel-agent/")
+        assert put["kind"] == "put"
+        assert put["url"] == "https://presigned.example/put"
+        assert put["data"] == b"wav-bytes"
+        assert put["headers"] == {"Content-Type": "audio/wav"}
+        # the job reads the media:// object, not the presigned PUT url
+        assert submit["json"]["url"] == media["json"]["url"]
+
+    def test_model_and_exclusive_are_overridable(self, configured, monkeypatch):
+        configured.STAPEL_AGENT = {
+            "PYANNOTEAI_API_KEY": "cloud-key",
+            "PYANNOTEAI_MODEL": "community-1",
+            "PYANNOTEAI_EXCLUSIVE": False,
+        }
+        _, captured = self._run(
+            monkeypatch,
+            requests_queue=[FakeResponse({"jobId": "j"}), FakeResponse(PYANNOTE_JOB)],
+            provider_options={"exclusive": True, "confidence": True},
+        )
+        body = captured[0]["json"]
+        assert body["model"] == "community-1"
+        assert body["exclusive"] is True      # provider_options wins
+        assert body["confidence"] is True     # unknown keys pass through
+
+    def test_bounds_travel_via_provider_options(self, configured, monkeypatch):
+        _, captured = self._run(
+            monkeypatch,
+            requests_queue=[FakeResponse({"jobId": "j"}), FakeResponse(PYANNOTE_JOB)],
+            provider_options={"min_speakers": 2, "max_speakers": 4},
+        )
+        assert captured[0]["json"]["minSpeakers"] == 2
+        assert captured[0]["json"]["maxSpeakers"] == 4
+
+    def test_exact_count_with_bounds_is_fatal_before_any_billable_call(
+        self, configured, monkeypatch
+    ):
+        called = []
+        monkeypatch.setattr(
+            "stapel_agent.diarization.providers.pyannote_cloud.requests.request",
+            lambda *a, **k: called.append(1),
+        )
+        with pytest.raises(DiarizationError, match="contradictory"):
+            PyannoteCloudProvider().diarize(
+                audio=AudioRef(url="https://x/a.wav"),
+                num_speakers=2,
+                provider_options={"max_speakers": 4},
+            )
+        assert called == []
+
+    def test_failed_job_is_fatal_not_retryable(self, configured, monkeypatch):
+        with pytest.raises(DiarizationError, match="failed") as exc_info:
+            self._run(
+                monkeypatch,
+                requests_queue=[
+                    FakeResponse({"jobId": "j"}),
+                    FakeResponse({"status": "failed", "message": "bad audio"}),
+                ],
+            )
+        assert not isinstance(exc_info.value, RetryableDiarizationError)
+
+    def test_running_job_keeps_polling(self, configured, monkeypatch):
+        result, captured = self._run(
+            monkeypatch,
+            requests_queue=[
+                FakeResponse({"jobId": "j"}),
+                FakeResponse({"status": "running"}),
+                FakeResponse({"status": "created"}),
+                FakeResponse(PYANNOTE_JOB),
+            ],
+        )
+        assert len(captured) == 4
+        assert result.turns
+
+    def test_submit_429_and_5xx_are_retryable(self, configured, monkeypatch):
+        for status in (429, 503):
+            with pytest.raises(RetryableDiarizationError):
+                self._run(
+                    monkeypatch,
+                    requests_queue=[FakeResponse({}, status_code=status, text="nope")],
+                )
+
+    def test_submit_4xx_is_fatal(self, configured, monkeypatch):
+        with pytest.raises(DiarizationError) as exc_info:
+            self._run(
+                monkeypatch,
+                requests_queue=[FakeResponse({}, status_code=402, text="pay up")],
+            )
+        assert not isinstance(exc_info.value, RetryableDiarizationError)
+
+    def test_missing_diarization_key_is_fatal(self, configured, monkeypatch):
+        with pytest.raises(DiarizationError, match="diarization"):
+            self._run(
+                monkeypatch,
+                requests_queue=[
+                    FakeResponse({"jobId": "j"}),
+                    FakeResponse({"status": "succeeded", "output": {}}),
+                ],
+            )
+
+    def test_billable_seconds_floor_is_twenty(self):
+        assert billable_seconds(None) == MIN_BILLED_SECONDS == 20
+        assert billable_seconds(3.2) == 20
+        assert billable_seconds(77.6) == 78   # per-second, rounded up
+        assert billable_seconds(300.0) == 300
+
+
 class TestRegistry:
     def test_builtin_pyannote_registered(self):
         assert "pyannote-http" in registered_diarization_providers()
         assert "pyannote-http" in BUILTIN_DIARIZATION_PROVIDERS
+        # self-host shim and the billed cloud API are separate names
+        assert "pyannote-cloud" in registered_diarization_providers()
+        assert "pyannote-cloud" in BUILTIN_DIARIZATION_PROVIDERS
 
     def test_settings_merge_over_builtins(self, settings):
         settings.STAPEL_AGENT = {

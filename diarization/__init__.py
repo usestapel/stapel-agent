@@ -24,6 +24,9 @@ BUILTIN_DIARIZATION_PROVIDERS = {
     "pyannote-http": (
         "stapel_agent.diarization.providers.pyannote_http.PyannoteHttpProvider"
     ),
+    "pyannote-cloud": (
+        "stapel_agent.diarization.providers.pyannote_cloud.PyannoteCloudProvider"
+    ),
 }
 
 # name → DiarizationProvider subclass | dotted path | None (None masks the name).
