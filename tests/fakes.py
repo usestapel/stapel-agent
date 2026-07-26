@@ -367,11 +367,12 @@ class FakeEmbeddingProvider(EmbeddingProvider):
         cls.calls = []
         cls.error = None
 
-    def embed(self, *, texts, timeout_seconds=None, provider_options=None):
+    def embed(self, *, texts, model=None, timeout_seconds=None, provider_options=None):
         cls = type(self)
         cls.calls.append(
             {
                 "texts": texts,
+                "model": model,
                 "timeout_seconds": timeout_seconds,
                 "provider_options": provider_options,
             }
@@ -381,7 +382,9 @@ class FakeEmbeddingProvider(EmbeddingProvider):
         batch = require_texts(texts, provider=self.name)
         return NormalizedEmbeddings(
             provider=self.name,
-            model="fake-embed-1",
+            # Attribution = what actually ran: the caller's pin when it
+            # was honored, else this fake's own model.
+            model=model or "fake-embed-1",
             dim=2,
             # Positional fingerprint: vectors[i] encodes i, so a reorder
             # anywhere in the pipeline is machine-visible.

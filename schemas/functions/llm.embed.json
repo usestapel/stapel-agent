@@ -10,6 +10,10 @@
       "minItems": 1,
       "description": "Batch of texts to embed. Output vectors preserve this order. Empty batches and empty strings are rejected."
     },
+    "model": {
+      "type": "string",
+      "description": "Concrete embedding model name (NOT a size alias like llm.complete's) overriding the registration pin / the provider's configured default. The caller owns its embedding SPACE: vectors from different models are not comparable, so an indexer that stamps rows with a model and filters searches by it must be able to ask for that exact model. Providers that cannot select one (single-model self-hosted servers) ignore it and report what actually ran in embeddings.model — the response is the attribution, never the request."
+    },
     "provider": {
       "type": "string",
       "description": "Embedding provider name from STAPEL_AGENT['EMBEDDING_PROVIDERS']."

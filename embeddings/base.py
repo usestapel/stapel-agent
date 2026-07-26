@@ -128,7 +128,8 @@ class EmbeddingProvider(ABC):
     def effective_model(self) -> Optional[str]:
         """The model this registration would request right now: the
         pinned ``embedding_model`` class-attr when set, else
-        ``default_embedding_model()``."""
+        ``default_embedding_model()``. A per-call ``embed(model=...)``
+        overrides both — see :meth:`embed`."""
         return self.embedding_model or self.default_embedding_model()
 
     @abstractmethod
@@ -136,6 +137,7 @@ class EmbeddingProvider(ABC):
         self,
         *,
         texts: list[str],
+        model: Optional[str] = None,
         timeout_seconds: Optional[int] = None,
         provider_options: Optional[dict] = None,
     ) -> NormalizedEmbeddings:
@@ -146,6 +148,15 @@ class EmbeddingProvider(ABC):
         fail loudly on a mismatch instead of returning a misaligned
         batch. Every adapter runs ``require_texts`` first (empty batches
         and empty texts are fatal, never sent).
+
+        ``model`` is the CALLER's per-call model pin, winning over
+        ``effective_model()`` (registration pin → configured default) —
+        the caller owns its embedding space and must be able to request
+        the exact model its stored vectors were built with. Adapters that
+        cannot select a model (single-model self-hosted servers) ignore
+        it with a warning and MUST NOT echo it back as attribution:
+        ``NormalizedEmbeddings.model`` reports what ACTUALLY ran, so a
+        caller stamping rows with it never mislabels a vector space.
 
         ``provider_options`` is the house free-form per-provider
         passthrough, applied AFTER the adapter's own request params —

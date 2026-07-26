@@ -117,6 +117,11 @@ class EmbedRequest:
     Attributes:
         texts: Batch of texts to embed (non-empty; output vectors
             preserve this order).
+        model: Concrete embedding model name overriding the
+            registration pin / configured default — vector-index callers
+            pin the model their stored space was built with. Providers
+            that cannot select a model ignore it; the response reports
+            what actually ran.
         provider: Embedding provider name; defaults to
             DEFAULT_EMBEDDING_PROVIDER.
         timeout_seconds: Hard cap on the embeddings request.
@@ -125,6 +130,7 @@ class EmbedRequest:
     """
 
     texts: List[str]
+    model: Optional[str] = None
     provider: Optional[str] = None
     timeout_seconds: Optional[int] = None
     provider_options: Optional[dict] = None

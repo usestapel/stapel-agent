@@ -34,7 +34,14 @@ from __future__ import annotations
 
 import inspect
 
-from .base import LlmProvider
+# The base class is imported inside register_provider() — NOT here. A
+# module-level ``from .base import LlmProvider`` makes this package body
+# hold its own module lock while it takes the submodule's; a thread
+# importing ``stapel_agent.providers.base`` first takes the same two locks
+# in the opposite order. Python 3.14 reports that as `_DeadlockError` — it
+# is what killed iron-agent's runserver thread at startup (system checks
+# walk the registries on django-main-thread while the autoreloader's main
+# thread imports the URLconf → 502 until the next restart).
 
 BUILTIN_PROVIDERS = {
     "anthropic": "stapel_agent.providers.anthropic.AnthropicProvider",
@@ -52,6 +59,8 @@ def register_provider(name: str, provider) -> None:
     ``AppConfig.ready()``. Re-registering a name overrides it;
     ``None``/``""`` masks it (removes it from the effective mapping).
     """
+    from .base import LlmProvider
+
     if provider is None or provider == "":
         _runtime_providers[name] = None
         return

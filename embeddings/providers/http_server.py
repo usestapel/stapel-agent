@@ -26,13 +26,16 @@ The vector count must equal the input count (a mismatch is a loud fatal
 failure, never a misaligned batch). ``raw`` keeps the response minus
 ``vectors`` (vectors are never stored twice). ``model`` attribution is
 the server's echo when present, else None — never a pretended request
-value (there is no model request parameter to pretend with).
+value (there is no model request parameter to pretend with). A per-call
+``embed(model=...)`` pin is therefore not honorable here: it is logged
+as ignored, never sent, and never echoed back as attribution.
 
 Settings (all read lazily): ``EMBEDDINGS_HTTP_BASE_URL`` (required),
 ``EMBEDDINGS_HTTP_API_KEY`` (optional), ``EMBEDDINGS_TIMEOUT``.
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 import requests
@@ -47,6 +50,9 @@ from ..base import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 class HttpServerEmbeddingsProvider(EmbeddingProvider):
     name = "embeddings-http"
 
@@ -54,10 +60,22 @@ class HttpServerEmbeddingsProvider(EmbeddingProvider):
         self,
         *,
         texts: list[str],
+        model: Optional[str] = None,
         timeout_seconds: Optional[int] = None,
         provider_options: Optional[dict] = None,
     ) -> NormalizedEmbeddings:
         batch = require_texts(texts, provider=self.name)
+        if model:
+            # This wire has no model parameter — the shim serves one fixed
+            # model. Say so instead of sending an unknown field, and leave
+            # attribution to the server's echo below: a caller that stamps
+            # rows with the response must never get its own request back.
+            logger.warning(
+                "stapel-agent: %s cannot select a model — requested %r "
+                "ignored (the self-hosted server's model is fixed); "
+                "attribution comes from the server's own echo",
+                self.name, model,
+            )
         base_url = (agent_settings.EMBEDDINGS_HTTP_BASE_URL or "").rstrip("/")
         if not base_url:
             raise EmbeddingError(

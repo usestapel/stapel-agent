@@ -322,6 +322,19 @@ EMBED_SCHEMA = {
             "preserve this order. Empty batches and empty strings are "
             "rejected.",
         },
+        "model": {
+            "type": "string",
+            "description": "Concrete embedding model name (NOT a size "
+            "alias like llm.complete's) overriding the registration pin / "
+            "the provider's configured default. The caller owns its "
+            "embedding SPACE: vectors from different models are not "
+            "comparable, so an indexer that stamps rows with a model and "
+            "filters searches by it must be able to ask for that exact "
+            "model. Providers that cannot select one (single-model "
+            "self-hosted servers) ignore it and report what actually ran "
+            "in embeddings.model — the response is the attribution, never "
+            "the request.",
+        },
         "provider": {
             "type": "string",
             "description": "Embedding provider name from "
@@ -349,17 +362,23 @@ EMBED_SCHEMA = {
 def llm_embed(payload: dict) -> dict:
     """Text embeddings — same result dict as ``POST api/v1/llm/embed``.
 
-    Payload: ``{"texts": [str, ...], "provider"?, "timeout_seconds"?,
-    "provider_options"?: {...}}``. Returns ``{"status": "ok",
-    "embeddings": {"provider", "model", "dim", "vectors": [[...], ...],
-    "usage", "raw"}, "provider_used": str}`` (vectors in input order) or
-    ``{"status": "failure", "reason": str}``. The ledger records counts/
-    usage only — never the texts, never the vectors.
+    Payload: ``{"texts": [str, ...], "model"?, "provider"?,
+    "timeout_seconds"?, "provider_options"?: {...}}``. ``model`` is a
+    concrete model name (unlike ``llm.complete``'s size alias) that
+    overrides the registration pin / configured default — vector-index
+    callers pin the model their stored space was built with. Returns
+    ``{"status": "ok", "embeddings": {"provider", "model", "dim",
+    "vectors": [[...], ...], "usage", "raw"}, "provider_used": str}``
+    (vectors in input order) or ``{"status": "failure", "reason": str}``;
+    ``embeddings.model`` is what ACTUALLY ran, which is what an indexer
+    must stamp its rows with. The ledger records counts/usage only —
+    never the texts, never the vectors.
     """
     from . import services
 
     return services.embed(
         payload["texts"],
+        model=payload.get("model"),
         provider=payload.get("provider"),
         timeout_seconds=payload.get("timeout_seconds"),
         provider_options=payload.get("provider_options"),

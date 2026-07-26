@@ -8,7 +8,8 @@ compatibles.
 
 Request: ``{"model": <model>, "input": [<texts>...]}`` (+ any
 ``provider_options`` merged AFTER, so a caller can pin ``dimensions``,
-``encoding_format`` etc. without a core release).
+``encoding_format`` etc. without a core release). ``<model>`` is the
+per-call ``embed(model=...)`` pin when given, else ``effective_model()``.
 
 Response: ``{"data": [{"embedding": [...], "index": n}, ...], "model",
 "usage"}``. Entries are re-ordered by ``index`` before returning — the
@@ -49,6 +50,7 @@ class OpenAIEmbeddingsProvider(EmbeddingProvider):
         self,
         *,
         texts: list[str],
+        model: Optional[str] = None,
         timeout_seconds: Optional[int] = None,
         provider_options: Optional[dict] = None,
     ) -> NormalizedEmbeddings:
@@ -73,7 +75,10 @@ class OpenAIEmbeddingsProvider(EmbeddingProvider):
             else int(timeout_seconds)
         )
 
-        model = self.effective_model()
+        # Caller pin wins over the registration pin / configured default:
+        # the requester is the one that knows which vector space its
+        # stored rows live in.
+        model = model or self.effective_model()
         body: dict = {"model": model, "input": batch}
         if provider_options:
             # The passthrough seam: caller-pinned provider specifics win

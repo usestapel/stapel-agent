@@ -5,6 +5,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 import stapel_agent
 
 
@@ -234,3 +236,83 @@ class TestImportWithoutDjangoSettings:
             cwd=os.path.dirname(sys.executable),
         )
         assert result.returncode == 0, result.stderr
+
+
+class TestImportLockDiscipline:
+    """No package body may import its own submodules.
+
+    Incident (iron-agent, Python 3.14): ``runserver`` runs system checks on
+    ``django-main-thread`` while the autoreloader's main thread imports the
+    root URLconf. Both walk ``stapel_agent.*``. A package whose body does
+    ``from .base import X`` holds lock(pkg) while taking lock(pkg.base); a
+    thread entering through ``stapel_agent.<pkg>.base`` takes them in the
+    opposite order (the machinery imports the parent INSIDE the submodule's
+    lock). 3.14 raises ``_DeadlockError`` there — the server thread died and
+    the container answered 502 until someone restarted it.
+    """
+
+    REGISTRY_PACKAGES = (
+        "stapel_agent.providers",
+        "stapel_agent.stt",
+        "stapel_agent.embeddings",
+        "stapel_agent.rerank",
+        "stapel_agent.diarization",
+        "stapel_agent.images",
+    )
+
+    def test_no_package_body_imports_its_own_submodules(self):
+        import ast
+        import pathlib
+
+        root = pathlib.Path(stapel_agent.__file__).parent
+        offenders = []
+        for init in sorted(root.rglob("__init__.py")):
+            # A source checkout keeps stale copies under build/ and dist/ —
+            # they are not the shipped package.
+            if {"build", "dist"} & set(init.relative_to(root).parts):
+                continue
+            pkg = init.parent
+            submodules = {p.stem for p in pkg.glob("*.py")} | {
+                d.name for d in pkg.iterdir() if (d / "__init__.py").exists()
+            }
+            for node in ast.parse(init.read_text()).body:
+                if isinstance(node, ast.ImportFrom) and node.level == 1:
+                    head = (node.module or "").split(".")[0]
+                    if head and head in submodules:
+                        offenders.append(f"{init.relative_to(root)}: from .{node.module}")
+                    if not node.module:  # from . import submodule
+                        for alias in node.names:
+                            if alias.name in submodules:
+                                offenders.append(
+                                    f"{init.relative_to(root)}: from . import {alias.name}"
+                                )
+        assert not offenders, (
+            "package bodies importing their own submodules re-open the "
+            f"3.14 import-lock deadlock: {offenders}"
+        )
+
+    def test_importing_a_registry_does_not_pull_its_base_module(self):
+        """The runtime half of the invariant, in a clean interpreter."""
+        code = (
+            "import sys\n"
+            f"for pkg in {self.REGISTRY_PACKAGES!r}:\n"
+            "    __import__(pkg)\n"
+            "    assert pkg + '.base' not in sys.modules, pkg\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            env={k: v for k, v in os.environ.items() if k != "DJANGO_SETTINGS_MODULE"},
+            cwd=os.path.dirname(sys.executable),
+        )
+        assert result.returncode == 0, result.stderr
+
+    def test_registries_still_validate_the_base_class(self):
+        """The lazily imported base class still gates registrations."""
+        from stapel_agent.embeddings import register_embedding_provider
+        from stapel_agent.providers import register_provider
+
+        for register in (register_provider, register_embedding_provider):
+            with pytest.raises(TypeError, match="dotted path"):
+                register("bogus", object)

@@ -211,6 +211,7 @@ class LlmEmbedView(SerializerSeamMixin, APIView):
         data = ser.validated_data
         payload = services.embed(
             data.texts,
+            model=data.model,
             provider=data.provider,
             timeout_seconds=data.timeout_seconds,
             provider_options=data.provider_options,

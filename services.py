@@ -803,6 +803,7 @@ def get_embedding_provider(name: str):
 def embed(
     texts,
     *,
+    model: str | None = None,
     provider: str | None = None,
     timeout_seconds: int | None = None,
     provider_options: dict | None = None,
@@ -814,6 +815,15 @@ def embed(
     Single-provider surface (explicit *provider* or
     ``DEFAULT_EMBEDDING_PROVIDER``); input order is preserved in the
     returned vectors. Chunking policies and ranking stay app-layer.
+
+    *model* is a concrete model name that overrides the registration pin
+    and the provider's configured default. It is the caller's, not the
+    host's, decision on purpose: vectors from different models live in
+    different spaces, so an indexer stamping rows with a model and
+    filtering searches by it has to be able to ask for that exact model
+    (stapel-recordings' vector layer does). Providers that cannot select
+    a model ignore it — the returned ``embeddings.model`` is always what
+    ACTUALLY ran, never an echo of the request.
 
     One PromptLog row per call — ``source=embed``, ``model`` = provider
     name, and ONLY counts/usage in the row: prompt = ``texts:<n>``,
@@ -847,12 +857,18 @@ def embed(
             metadata={**(metadata or {}), "batch_size": batch_size, **(extra or {})},
         )
 
+    # The model pin travels only when asked for, so embedding adapters
+    # written against the pre-model signature keep working — same rule as
+    # the STT keyterms seam above.
+    seam_kwargs = {"model": str(model)} if model else {}
+
     try:
         backend = get_embedding_provider(name)
         result = backend.embed(
             texts=texts,
             timeout_seconds=timeout_seconds,
             provider_options=provider_options,
+            **seam_kwargs,
         )
     except EmbeddingError as exc:
         _log(PromptStatus.ERROR, error=str(exc))

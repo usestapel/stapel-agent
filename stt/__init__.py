@@ -17,7 +17,14 @@ from __future__ import annotations
 
 import inspect
 
-from .base import SttProvider
+# The base class is imported inside register_stt_provider() — NOT here. A
+# module-level ``from .base import SttProvider`` makes this package body
+# hold its own module lock while it takes the submodule's; a thread
+# importing ``stapel_agent.stt.base`` first takes the same two locks in
+# the opposite order. Python 3.14 reports that as `_DeadlockError` — it is
+# what killed iron-agent's runserver thread at startup (system checks walk
+# the registries on django-main-thread while the autoreloader's main
+# thread imports the URLconf → 502 until the next restart).
 
 BUILTIN_STT_PROVIDERS = {
     "whisper-http": "stapel_agent.stt.providers.whisper_http.WhisperHttpProvider",
@@ -38,6 +45,8 @@ def register_stt_provider(name: str, provider) -> None:
     """Register *provider* (an ``SttProvider`` subclass or a dotted path)
     under *name* at runtime — highest precedence. ``None``/``""`` masks
     the name; re-registering overrides."""
+    from .base import SttProvider
+
     if provider is None or provider == "":
         _runtime_stt_providers[name] = None
         return

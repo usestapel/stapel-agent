@@ -12,6 +12,7 @@ so stapel-translate's AgentProvider POSTs to
 
 from django.urls import path
 
+from .errors import AgentErrorKeysView
 from .views import (
     LlmCompleteView,
     LlmDiarizeView,
@@ -36,4 +37,6 @@ urlpatterns = [
         LlmGenerateImageView.as_view(),
         name="llm-generate-image",
     ),
+    # Error-key registry for the stapel-translate collector (service/staff only).
+    path("error-keys/", AgentErrorKeysView.as_view(), name="error-keys"),
 ]

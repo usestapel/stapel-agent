@@ -5,6 +5,64 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-07-26
+
+### Added — `llm.embed` accepts a per-call `model`
+
+Found on app.ironmemo.com when vector search was switched on:
+stapel-recordings puts `model` into the `llm.embed` payload whenever its
+embeddings model is configured, and `EMBED_SCHEMA` declared only
+`texts`/`provider`/`timeout_seconds`/`provider_options` with
+`additionalProperties: false` — so **every** embed call died with
+`SchemaValidationError("'model' was unexpected")`. The stand worked
+around it by leaving `RECORDINGS_EMBEDDINGS_MODEL` empty; the contract
+was the bug.
+
+`model` is now part of the contract (comm schema + the committed
+`schemas/functions/llm.embed.json` + `EmbedRequest` + `POST
+api/v1/llm/embed`) and travels down to the provider as
+`EmbeddingProvider.embed(model=...)`, winning over the registration pin
+and the configured default. This is a caller's decision on purpose:
+vectors from different models are different spaces, so an indexer that
+stamps rows with a model and filters searches by it has to be able to
+ask for that exact model. Adapters that cannot select one
+(`embeddings-http` — the shim's model is fixed server-side) log the pin
+as ignored and never echo it back; `embeddings.model` stays what
+ACTUALLY ran. The kwarg travels only when requested, so embedding
+adapters written against the previous signature keep working.
+
+### Fixed — startup deadlock in the registry packages (Python 3.14)
+
+iron-agent answered 502 right after `up -d` until someone restarted it:
+`runserver` runs Django system checks on `django-main-thread` while the
+autoreloader's main thread imports the root URLconf, and both walk
+`stapel_agent.*`. The six registry packages had `from .base import X` in
+their bodies, so a thread entering through `stapel_agent.<pkg>` held
+lock(pkg) while taking lock(pkg.base), and a thread entering through
+`stapel_agent.<pkg>.base` took the same two in the opposite order (the
+import machinery loads the parent INSIDE the submodule's lock). Python
+3.14 raises `_DeadlockError` on that inversion — the server thread died,
+the container stayed up, nothing listened on 8000.
+
+The base class is now imported inside `register_*_provider()`, so no
+package body holds its own lock while acquiring a submodule's. Two tests
+keep it that way: an AST invariant over every `__init__.py` and a
+clean-interpreter check that importing a registry does not pull its
+`base` module.
+
+### Added — `error-keys/` is finally mounted
+
+`AgentErrorKeysView` has existed since the port but no `urls*.py` ever mounted it — in
+*any* stapel library. stapel-translate's `error_collector` polls
+`/{prefix}/api/v1/error-keys/` on every service, so the whole endpoint class
+answered 404 from Django's URL resolver and the collector harvested nothing
+while reporting a plain `HTTP 404`. It is now mounted in `urls_v1.py` at
+`error-keys/` (v1 canon), service/staff-gated as the base view declares.
+
+Deliberately **not** in the contract triad: `ErrorKeysView` sets
+`schema = None` and `/error-keys` is on the flows allowlist, so `make
+contract` is a no-op diff — this is infrastructure, not product surface.
+
 ## [0.6.0] — 2026-07-25
 
 Minor (**behaviour change in AssemblyAI biasing**): a second diarization

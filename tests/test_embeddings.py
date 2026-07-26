@@ -213,6 +213,29 @@ class TestOpenAIEmbeddings:
             "dimensions": 256,
         }
 
+    def test_caller_model_pin_overrides_the_configured_default(
+        self, configured, monkeypatch
+    ):
+        _, captured = self._run(
+            monkeypatch,
+            [FakeResponse(OPENAI_BODY)],
+            texts=["a", "b"],
+            model="text-embedding-3-large",
+        )
+        assert captured[0]["json"]["model"] == "text-embedding-3-large"
+
+    def test_pinned_model_is_the_attribution_when_the_server_echoes_none(
+        self, configured, monkeypatch
+    ):
+        body = {k: v for k, v in OPENAI_BODY.items() if k != "model"}
+        result, _ = self._run(
+            monkeypatch,
+            [FakeResponse(body)],
+            texts=["a", "b"],
+            model="text-embedding-3-large",
+        )
+        assert result.model == "text-embedding-3-large"
+
     def test_count_mismatch_is_fatal(self, configured, monkeypatch):
         with pytest.raises(EmbeddingError, match="count mismatch") as exc_info:
             self._run(
@@ -321,6 +344,22 @@ class TestHttpServerEmbeddings:
             provider_options={"normalize": True},
         )
         assert captured[0]["json"] == {"texts": ["a", "b"], "normalize": True}
+
+    def test_model_pin_is_never_sent_nor_pretended(
+        self, configured, monkeypatch, caplog
+    ):
+        """This wire has no model parameter — the pin is dropped loudly and
+        attribution stays the server's echo (never the request)."""
+        with caplog.at_level("WARNING"):
+            result, captured = self._run(
+                monkeypatch,
+                [FakeResponse(HTTP_BODY)],
+                texts=["a", "b"],
+                model="text-embedding-3-large",
+            )
+        assert captured[0]["json"] == {"texts": ["a", "b"]}
+        assert result.model == "bge-m3"
+        assert "cannot select a model" in caplog.text
 
     def test_dim_inferred_when_absent(self, configured, monkeypatch):
         result, _ = self._run(
@@ -499,6 +538,38 @@ class TestEmbedService:
         assert call["timeout_seconds"] == 15
         assert call["provider_options"] == {"normalize": True}
 
+    def test_model_pin_reaches_the_provider_and_the_response(self, fake_embeddings):
+        result = services.embed(["a"], model="bge-m3")
+        assert fake_embeddings.calls[0]["model"] == "bge-m3"
+        # The caller stamps its rows with this — it must be what ran.
+        assert result["embeddings"]["model"] == "bge-m3"
+        assert PromptLog.objects.get().metadata["model"] == "bge-m3"
+
+    def test_unpinned_call_keeps_pre_model_adapters_working(self, settings):
+        """The pin travels only when asked for, so an adapter written
+        against the pre-model signature is not broken by the new seam."""
+        from stapel_agent.embeddings.base import (
+            EmbeddingProvider,
+            NormalizedEmbeddings,
+        )
+
+        class LegacySignature(EmbeddingProvider):
+            name = "legacy-embed"
+
+            def embed(self, *, texts, timeout_seconds=None, provider_options=None):
+                return NormalizedEmbeddings(
+                    provider=self.name, model="legacy-1", dim=1,
+                    vectors=[[1.0] for _ in texts],
+                )
+
+        settings.STAPEL_AGENT = {
+            **getattr(settings, "STAPEL_AGENT", {}),
+            "EMBEDDING_PROVIDERS": {"legacy-embed": LegacySignature},
+            "DEFAULT_EMBEDDING_PROVIDER": "legacy-embed",
+        }
+        result = services.embed(["a"])
+        assert result["embeddings"]["model"] == "legacy-1"
+
 
 # ─── comm function ─────────────────────────────────────────────────────
 
@@ -533,6 +604,36 @@ class TestLlmEmbedFunction:
     def test_schema_rejects_extra_keys(self, fake_embeddings):
         with pytest.raises(SchemaValidationError):
             call("llm.embed", {"texts": ["a"], "beep": 1})
+
+    def test_model_is_part_of_the_contract(self, fake_embeddings):
+        """Regression: stapel-recordings 0.6.2 sends ``model`` whenever
+        RECORDINGS_EMBEDDINGS_MODEL is set, and the schema rejected it —
+        every embed on app.ironmemo.com failed with "'model' was
+        unexpected" until the setting was blanked. The pin must reach the
+        provider and the response must report what actually ran."""
+        result = call("llm.embed", {"texts": ["a"], "model": "bge-m3"})
+        assert result["status"] == "ok"
+        assert fake_embeddings.calls[0]["model"] == "bge-m3"
+        assert result["embeddings"]["model"] == "bge-m3"
+
+    def test_committed_schema_matches_the_decorator_schema(self):
+        """The JSON in schemas/functions/ is what the autoloader registers
+        in every process that installs this package — it OVERRIDES the
+        decorator's dict, so a drift between the two is the same silent
+        contract break in a different disguise."""
+        import pathlib
+
+        from stapel_agent import functions
+
+        path = (
+            pathlib.Path(functions.__file__).parent
+            / "schemas" / "functions" / "llm.embed.json"
+        )
+        committed = json.loads(path.read_text())
+        EMBED_SCHEMA = functions.EMBED_SCHEMA
+        assert set(committed["properties"]) == set(EMBED_SCHEMA["properties"])
+        assert committed["required"] == EMBED_SCHEMA["required"]
+        assert committed["additionalProperties"] is False
 
 
 # ─── HTTP endpoint ─────────────────────────────────────────────────────
@@ -573,6 +674,16 @@ class TestEmbedEndpoint:
         call = fake_embeddings.calls[0]
         assert call["texts"] == ["hello", "world"]
         assert call["timeout_seconds"] == 20
+
+    def test_model_pin_forwarded(self, api_client, fake_embeddings):
+        resp = self._post(
+            api_client,
+            {"texts": ["hello"], "model": "bge-m3"},
+            HTTP_X_API_KEY="test-service-key",
+        )
+        assert resp.status_code == 200, resp.content
+        assert fake_embeddings.calls[0]["model"] == "bge-m3"
+        assert resp.json()["embeddings"]["model"] == "bge-m3"
 
     def test_staff_user_accepted_and_logged(
         self, staff_client, staff_user, fake_embeddings
