@@ -5,6 +5,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-07-26
+
+### Added
+- **`LlmProvider.configuration_error()`** — a backend answers for itself
+  whether it can serve a call yet (missing key, missing optional package,
+  missing CLI binary), read lazily from settings, never at import. The library
+  keeps no table of who needs which credential: that copy would drift the
+  moment a provider changes.
+- **`stapel_agent.W009`** — the default LLM provider is registered but not
+  usable. `check_providers` only ever proved DEFAULT_PROVIDER *resolves*; the
+  ironmemo stand defaulted to `anthropic` with an EMPTY `ANTHROPIC_API_KEY`
+  and no `claude` binary, so checks were green while every `llm.complete` /
+  `llm.summarize` call raised `ProviderError` — invisibly, because the fleet's
+  one caller (stapel-recordings' summarize step) is best-effort by design and
+  completed each recording with an empty summary. Warning rather than Error on
+  purpose: a deployment may install this app for STT/embeddings alone and
+  never make a text call — blocking those would be a false alarm about a
+  surface nobody uses. The hint names the silent consequence explicitly.
+
 ## [0.6.1] — 2026-07-26
 
 ### Added — `llm.embed` accepts a per-call `model`

@@ -46,6 +46,47 @@ def check_providers(app_configs, **kwargs):
             )
         )
 
+    # Registered is not usable. The check above proves DEFAULT_PROVIDER
+    # RESOLVES; it never asked whether it can actually serve a call. The
+    # ironmemo stand defaulted to 'anthropic' with an empty key: green
+    # checks, and every llm.summarize call failing — invisibly, because
+    # the caller treats summarization as best-effort and completed each
+    # recording with an empty summary (2026-07-26).
+    #
+    # Warning, not Error, deliberately: a deployment may install this app
+    # for STT/embeddings alone and never make a text call. Blocking those
+    # would be the same false positive as warning about a peer nobody
+    # talks to. The message says plainly what breaks, so it cannot be
+    # read as noise.
+    default_target = effective.get(default)
+    if default_target is not None:
+        try:
+            resolved = (
+                import_string(default_target)
+                if isinstance(default_target, str)
+                else default_target
+            )
+            reason = resolved.configuration_error()
+        except Exception:  # import/interface problems are W001/W002's job
+            reason = None
+        if reason:
+            issues.append(
+                checks.Warning(
+                    f"Default LLM provider {default!r} is registered but not "
+                    f"usable: {reason}. Every llm.complete / llm.summarize "
+                    "call will fail with a ProviderError.",
+                    hint=(
+                        "Configure it, or point "
+                        "STAPEL_AGENT['DEFAULT_PROVIDER'] at a backend that "
+                        "is. Note a best-effort caller (stapel-recordings' "
+                        "summarize step) SWALLOWS this failure — recordings "
+                        "complete with empty summaries and no error surfaces "
+                        "anywhere."
+                    ),
+                    id="stapel_agent.W009",
+                )
+            )
+
     for name, target in effective.items():
         if isinstance(target, str):
             try:

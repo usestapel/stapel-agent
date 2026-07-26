@@ -120,7 +120,60 @@ class TestRegisterProvider:
 
 
 class TestSystemChecks:
-    def test_clean_default_config(self):
+    def test_clean_default_config(self, settings):
+        # "Clean" now requires a CONFIGURED default. This test used to
+        # assert [] against stock settings — i.e. against a config that
+        # could not serve a single call (anthropic, no key), which is
+        # exactly the blindness W009 ends.
+        # openai-compat rather than anthropic-with-a-key: the anthropic
+        # backend also needs an optional package, and a library suite must
+        # not depend on whether that extra is installed in the venv running
+        # it.
+        settings.STAPEL_AGENT = {
+            "DEFAULT_PROVIDER": "openai-compat",
+            "OPENAI_COMPAT_BASE_URL": "http://vllm:8000/v1",
+        }
+        assert check_providers(None) == []
+
+    def test_default_provider_without_credentials_warns(self, settings):
+        """Registered is not usable — the ironmemo stand, 2026-07-26.
+
+        DEFAULT_PROVIDER='anthropic' with an empty key passed every check
+        while every llm.summarize call raised ProviderError, invisibly:
+        stapel-recordings' summarize step is best-effort, so recordings
+        completed with empty summaries and nothing reported why.
+        """
+        settings.STAPEL_AGENT = {"ANTHROPIC_API_KEY": ""}
+        issues = check_providers(None)
+        assert [i.id for i in issues] == ["stapel_agent.W009"]
+        assert "ANTHROPIC_API_KEY is empty" in issues[0].msg
+        # The hint must name the silent consequence, not just the misconfig.
+        assert "empty summaries" in issues[0].hint
+
+    def test_openai_compat_without_a_base_url_warns(self, settings):
+        settings.STAPEL_AGENT = {
+            "DEFAULT_PROVIDER": "openai-compat",
+            "OPENAI_COMPAT_BASE_URL": "",
+        }
+        assert [i.id for i in check_providers(None)] == ["stapel_agent.W009"]
+
+    def test_openai_compat_needs_no_api_key(self, settings):
+        """A self-hosted endpoint (vLLM/Ollama/TEI) legitimately has none."""
+        settings.STAPEL_AGENT = {
+            "DEFAULT_PROVIDER": "openai-compat",
+            "OPENAI_COMPAT_BASE_URL": "http://vllm:8000/v1",
+            "OPENAI_COMPAT_API_KEY": "",
+        }
+        assert check_providers(None) == []
+
+    def test_a_non_default_providers_credentials_are_not_checked(self, settings):
+        """Only the default is probed — an unconfigured alternative is not
+        a defect, it is simply not in use."""
+        settings.STAPEL_AGENT = {
+            "DEFAULT_PROVIDER": "openai-compat",
+            "OPENAI_COMPAT_BASE_URL": "http://vllm:8000/v1",
+            "ANTHROPIC_API_KEY": "",  # registered, unconfigured, unused
+        }
         assert check_providers(None) == []
 
     def test_bad_default_provider_is_error(self, settings):
@@ -135,20 +188,32 @@ class TestSystemChecks:
         assert "stapel_agent.E001" in [i.id for i in issues]
 
     def test_unimportable_dotted_path_is_warning(self, settings):
-        settings.STAPEL_AGENT = {"PROVIDERS": {"broken": "no.such.module.Cls"}}
+        settings.STAPEL_AGENT = {
+            # A usable default, so this test measures W001 and not the
+            # W009 "default provider unusable" warning added alongside it.
+            "DEFAULT_PROVIDER": "openai-compat",
+            "OPENAI_COMPAT_BASE_URL": "http://vllm:8000/v1",
+            "PROVIDERS": {"broken": "no.such.module.Cls"},
+        }
         issues = check_providers(None)
         assert [i.id for i in issues] == ["stapel_agent.W001"]
         assert "broken" in issues[0].msg
 
     def test_non_provider_class_is_warning(self, settings):
         settings.STAPEL_AGENT = {
-            "PROVIDERS": {"bad": "stapel_agent.tests.fakes.NotAProvider"}
+            "DEFAULT_PROVIDER": "openai-compat",
+            "OPENAI_COMPAT_BASE_URL": "http://vllm:8000/v1",
+            "PROVIDERS": {"bad": "stapel_agent.tests.fakes.NotAProvider"},
         }
         issues = check_providers(None)
         assert [i.id for i in issues] == ["stapel_agent.W002"]
         assert "bad" in issues[0].msg
 
-    def test_runtime_registered_class_passes(self):
+    def test_runtime_registered_class_passes(self, settings):
+        settings.STAPEL_AGENT = {
+            "DEFAULT_PROVIDER": "openai-compat",
+            "OPENAI_COMPAT_BASE_URL": "http://vllm:8000/v1",
+            }
         register_provider("custom", CustomProvider)
         assert check_providers(None) == []
 

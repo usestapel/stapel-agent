@@ -18,6 +18,19 @@ class OpenAICompatProvider(LlmProvider):
     supports_images = True
     supports_max_tokens = True
 
+    @classmethod
+    def configuration_error(cls) -> str | None:
+        # Only the base URL is mandatory: a self-hosted endpoint (vLLM,
+        # Ollama, TEI) legitimately needs no key, so a missing API key is
+        # not reported — the endpoint itself will 401 if it wanted one.
+        if not (agent_settings.OPENAI_COMPAT_BASE_URL or "").strip():
+            return (
+                "OPENAI_COMPAT_BASE_URL is empty — set "
+                "STAPEL_AGENT['OPENAI_COMPAT_BASE_URL'] to a "
+                "/chat/completions-compatible endpoint"
+            )
+        return None
+
     def resolve_model(self, model_size: str, default: str) -> str:
         models = agent_settings.OPENAI_COMPAT_MODELS or {}
         return models.get(model_size) or default

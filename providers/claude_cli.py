@@ -9,6 +9,7 @@ deliberately not read here).
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import tempfile
 
@@ -18,6 +19,16 @@ from .base import LlmProvider, ProviderError, ProviderResult, ProviderTimeout
 
 class ClaudeCodeCLIProvider(LlmProvider):
     name = "claude-code"
+
+    @classmethod
+    def configuration_error(cls) -> str | None:
+        # The binary is the credential here. It is routinely absent from a
+        # slim service image (the ironmemo agent image has no `claude`),
+        # and complete() only discovers that at call time.
+        binary = agent_settings.CLI_BINARY
+        if not shutil.which(binary):
+            return f"the {binary!r} CLI is not on PATH"
+        return None
 
     def complete(
         self, *, prompt: str, model: str, system_prompt: str | None = None

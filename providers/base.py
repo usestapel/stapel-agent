@@ -59,6 +59,30 @@ class LlmProvider(ABC):
     # old signature keep working untouched.
     supports_max_tokens: bool = False
 
+    @classmethod
+    def configuration_error(cls) -> str | None:
+        """Why this backend cannot serve a call yet, or None if it can.
+
+        Registered is not the same as usable. `check_providers` only ever
+        asked whether DEFAULT_PROVIDER resolves to an LlmProvider subclass
+        — so a deployment defaulting to `anthropic` with an EMPTY
+        ANTHROPIC_API_KEY passed every check while every text call raised
+        ProviderError (ironmemo stand, 2026-07-26). Nothing said so,
+        because the one caller in the fleet — stapel-recordings'
+        summarize step — is best-effort by design: it swallowed the error
+        and each recording completed with an empty summary.
+
+        Each backend answers for ITSELF (the library never keeps a table
+        of who needs which credential — that copy would drift the moment
+        a provider changes). Read settings lazily, exactly as complete()
+        does; never at import.
+
+        Returning None means "configured as far as can be known without
+        making a network call" — it is not a promise the credential is
+        valid, only that one is present.
+        """
+        return None
+
     def resolve_model(self, model_size: str, default: str) -> str:
         """Map a size ("small"/"medium"/"large") to this backend's model name.
 

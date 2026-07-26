@@ -16,6 +16,20 @@ class AnthropicProvider(LlmProvider):
     supports_images = True
     supports_max_tokens = True
 
+    @classmethod
+    def configuration_error(cls) -> str | None:
+        # Same two conditions complete() raises on, asked ahead of time.
+        if not agent_settings.ANTHROPIC_API_KEY:
+            return (
+                "ANTHROPIC_API_KEY is empty — set "
+                "STAPEL_AGENT['ANTHROPIC_API_KEY'] (or the env var)"
+            )
+        try:
+            import anthropic  # noqa: F401
+        except ImportError:
+            return "the 'anthropic' package is not installed (pip install stapel-agent[anthropic])"
+        return None
+
     def complete(
         self,
         *,
