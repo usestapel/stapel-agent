@@ -25,6 +25,13 @@ classifiers = [
 ]
 dependencies = [
     "stapel-core>=0.10,<1.0",
+    # Provider-response validation and LLM-authored contracts are declared
+    # as pydantic models. This is deliberate rather than incidental: the
+    # models being ported in carry `extra="forbid"` plus field/model
+    # validators whose exact behaviour IS the contract — an unknown field
+    # must fail loudly, not be dropped. Re-expressing them as dataclasses
+    # or DRF serializers would silently change what "valid" means.
+    "pydantic>=2,<3",
 ]
 
 [project.urls]
