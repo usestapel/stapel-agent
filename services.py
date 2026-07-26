@@ -62,6 +62,42 @@ def _usage(row_or_result) -> dict:
     }
 
 
+def _resolve_schema(schema):
+    """``schema`` may be a JSON Schema dict OR a pydantic model class.
+
+    Returns ``(schema_dict, model_or_None)``.
+
+    Accepting the model matters more than it looks: the schema that
+    constrains the decoder and the type that reads the answer back are
+    two statements of one truth, and hand-writing both is an invitation
+    for them to drift — the model gains a field, the schema does not,
+    and the constrained decoder cheerfully never emits it. Passing the
+    model makes the constraint a projection of the type instead of a
+    copy of it.
+
+    A model meant for constrained output should declare
+    ``model_config = ConfigDict(extra="forbid")``: strict modes require
+    ``additionalProperties: false`` on every object, and pydantic emits
+    that only for models that forbid extras. We deliberately do NOT
+    inject it here — silently tightening someone's contract is how a
+    library starts lying about what it was given.
+    """
+    if schema is None:
+        return None, None
+    if isinstance(schema, dict):
+        return schema, None
+
+    from pydantic import BaseModel
+
+    if isinstance(schema, type) and issubclass(schema, BaseModel):
+        return schema.model_json_schema(), schema
+
+    raise TypeError(
+        "schema must be a JSON Schema dict or a pydantic model class, "
+        f"got {type(schema).__name__}"
+    )
+
+
 def complete(
     prompt: str,
     model_size: str,
@@ -111,6 +147,8 @@ def complete(
     models = agent_settings.MODELS or {}
     if model_size not in models:
         return {"status": "failure", "reason": f"Unknown model size '{model_size}'"}
+
+    schema, _model = _resolve_schema(schema)
 
     # Resolve the provider/model BEFORE the cache lookup: the cache key
     # now includes the resolved provider + model + size, so we need them
@@ -264,13 +302,18 @@ def complete_json(
     function: prepend the JSON-API system prompt (unless the caller brings
     their own), complete, then parse JSON out of the raw text.
 
-    Pass *schema* (a JSON Schema dict) to constrain the decoder instead of
-    asking for JSON in prose. The injected JSON-API system prompt is then
-    dropped — it exists to coax an unconstrained model into JSON, and
+    Pass *schema* — a JSON Schema dict **or a pydantic model class** — to
+    constrain the decoder instead of asking for JSON in prose. Given a
+    model, the constraint is derived from it and the answer is validated
+    back into it, so ``result`` is a typed instance rather than a dict:
+    one declaration drives both ends instead of two that can drift.
+    The injected JSON-API system prompt is then dropped — it exists to coax an unconstrained model into JSON, and
     with a constraint in force it only spends tokens restating what the
     decoder already enforces. A provider that cannot constrain output
     fails the call rather than silently answering the prose way.
     """
+    schema, model = _resolve_schema(schema)
+
     if schema is not None and system_prompt is None:
         effective_system_prompt = None
     else:
@@ -303,6 +346,23 @@ def complete_json(
                 "usage": raw.get("usage"),
             }
         )
+    if model is not None:
+        from pydantic import ValidationError
+
+        try:
+            result = model.model_validate(result)
+        except ValidationError as exc:
+            # The decoder was constrained and the answer still does not fit
+            # the type. That is worth surfacing rather than handing back a
+            # dict the caller will index into and trust.
+            return _drop_none(
+                {
+                    "status": "failure",
+                    "reason": f"Response did not validate against {model.__name__}: {exc}",
+                    "usage": raw.get("usage"),
+                }
+            )
+
     return _drop_none(
         {"status": "ok", "result": result, "comment": comment, "usage": raw.get("usage")}
     )

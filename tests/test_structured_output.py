@@ -10,6 +10,7 @@ the call instead of answering the prose way.
 import json
 
 import pytest
+from pydantic import BaseModel, ConfigDict
 
 from stapel_agent import services
 from stapel_agent.providers.base import ProviderResult
@@ -200,3 +201,62 @@ def test_result_of_a_constrained_call_parses(fake_provider, db):
     FakeProvider.result = ProviderResult(text='{"answer": 42}')
     out = services.complete_json("p", "small", schema=SCHEMA)
     assert out["result"] == {"answer": 42}
+
+
+class Answer(BaseModel):
+    """A model whose shape IS the constraint (see _resolve_schema)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    answer: int
+
+
+@pytest.mark.django_db
+class TestPydanticModelAsSchema:
+    """The schema and the type that reads the answer back must not be two
+    hand-written copies of one truth."""
+
+    def test_constraint_is_derived_from_the_model(self, fake_provider):
+        services.complete_json("p", "small", schema=Answer)
+        sent = fake_provider.calls[0]["schema"]
+        assert sent == Answer.model_json_schema()
+        # extra="forbid" is what puts this in the schema, and strict modes
+        # require it — proving it survives the derivation.
+        assert sent["additionalProperties"] is False
+
+    def test_result_is_a_validated_instance(self, fake_provider):
+        FakeProvider.result = ProviderResult(text='{"answer": 42}')
+        out = services.complete_json("p", "small", schema=Answer)
+        assert out["status"] == "ok"
+        assert isinstance(out["result"], Answer)
+        assert out["result"].answer == 42
+
+    def test_answer_that_does_not_fit_the_model_is_a_failure(self, fake_provider):
+        FakeProvider.result = ProviderResult(text='{"answer": "not a number"}')
+        out = services.complete_json("p", "small", schema=Answer)
+        assert out["status"] == "failure"
+        assert "Answer" in out["reason"]
+
+    def test_extra_field_is_a_failure_not_a_silent_drop(self, fake_provider):
+        FakeProvider.result = ProviderResult(text='{"answer": 1, "smuggled": "x"}')
+        out = services.complete_json("p", "small", schema=Answer)
+        assert out["status"] == "failure"
+        assert "smuggled" in out["reason"]
+
+    def test_a_dict_schema_still_returns_a_dict(self, fake_provider):
+        FakeProvider.result = ProviderResult(text='{"answer": 42}')
+        out = services.complete_json("p", "small", schema=SCHEMA)
+        assert out["result"] == {"answer": 42}
+        assert not isinstance(out["result"], BaseModel)
+
+    def test_a_model_works_through_complete_too(self, fake_provider):
+        """complete() constrains but returns raw text — the model is used
+        for the schema only, not to parse."""
+        out = services.complete("p", "small", schema=Answer)
+        assert out["status"] == "ok"
+        assert out["result"] == '{"answer": 42}'
+        assert fake_provider.calls[0]["schema"] == Answer.model_json_schema()
+
+    def test_something_that_is_neither_is_rejected_loudly(self, fake_provider):
+        with pytest.raises(TypeError, match="JSON Schema dict or a pydantic"):
+            services.complete_json("p", "small", schema="just a string")

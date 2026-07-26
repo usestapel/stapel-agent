@@ -5,6 +5,33 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.5] — 2026-07-26
+
+### Added
+- **Provider pricing** — `stapel_agent.stt.pricing` (assemblyai, deepgram,
+  elevenlabs, gladia, soniox, speechmatics, xai_stt) and
+  `stapel_agent.diarization.pricing` (pyannote). Published rate cards with the
+  date each rate was last checked against the vendor's page, and an
+  `estimate_cost()` that returns **None** for an unpriced model rather than a
+  fabricated `$0.00` — a made-up zero is worse than an admitted unknown,
+  because it adds up silently. Ported byte-for-byte with their tests.
+- `complete_json(..., schema=<pydantic model class>)` — the constraint is
+  derived from the model and the answer is validated back into it, so
+  `result` is a typed instance. A schema hand-written next to a type is two
+  statements of one truth; this makes it a projection of the type instead.
+  A response that does not fit is a **failure**, and an extra field the model
+  forbids is a failure naming the field — not a silent drop.
+
+### Notes
+- The library deliberately does not inject `additionalProperties: false` into
+  a supplied schema. Strict modes require it and pydantic emits it only for
+  models declaring `extra="forbid"` — but quietly tightening a contract the
+  caller handed us is how a library starts lying about its inputs. The
+  docstring says to declare it; a test proves it survives the derivation.
+- Some of the upstream pricing tests could not travel with these modules yet:
+  they need a model registry and adapter registry that have not been ported.
+  Recorded as debt in the port ledger rather than dropped.
+
 ## [0.6.4] — 2026-07-26
 
 ### Added
