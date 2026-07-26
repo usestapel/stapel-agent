@@ -15,6 +15,7 @@ class AnthropicProvider(LlmProvider):
     name = "anthropic"
     supports_images = True
     supports_max_tokens = True
+    supports_schema = True
 
     @classmethod
     def configuration_error(cls) -> str | None:
@@ -38,6 +39,7 @@ class AnthropicProvider(LlmProvider):
         system_prompt: str | None = None,
         images: list | None = None,
         max_tokens: int | None = None,
+        schema: dict | None = None,
     ) -> ProviderResult:
         api_key = agent_settings.ANTHROPIC_API_KEY
         if not api_key:
@@ -69,6 +71,14 @@ class AnthropicProvider(LlmProvider):
         }
         if system_prompt:
             kwargs["system"] = system_prompt
+        if schema:
+            # Constrained decoding: the model cannot emit anything the
+            # schema forbids. `output_config.format` is the current
+            # parameter — the older top-level `output_format` is
+            # deprecated API-wide.
+            kwargs["output_config"] = {
+                "format": {"type": "json_schema", "schema": schema}
+            }
         try:
             message = client.messages.create(**kwargs)
         except Exception as exc:

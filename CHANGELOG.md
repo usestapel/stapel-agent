@@ -5,6 +5,32 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-07-26
+
+### Added
+- **Schema-constrained output** — `complete(..., schema=<JSON Schema>)` and
+  `complete_json(..., schema=...)` constrain the decoder instead of asking for
+  JSON in prose. `AnthropicProvider` sends `output_config.format`
+  (`{"type": "json_schema", ...}`); `OpenAICompatProvider` sends
+  `response_format.json_schema` with `strict: true`. Backends advertise the
+  capability with the new `LlmProvider.supports_schema` flag, and the kwarg
+  travels only to backends that set it — pre-schema subclasses are untouched.
+- `complete_json` drops the injected JSON-API system prompt when a schema is in
+  force: that prompt exists to coax an unconstrained model into JSON, and with
+  a constraint it only spends tokens restating what the decoder enforces.
+
+### Changed
+- A `schema=` request to a provider without `supports_schema` is a **failure**,
+  not a warning-and-continue. "Ask nicely for JSON and parse whatever comes
+  back" is a different capability and must not stand in for a constraint:
+  measured on the iron-benchmark harness (2026-07-03), the prompt-only path
+  returned valid JSON whose single `summary` field held the whole answer as
+  pseudo-XML while every structured field came back empty. It parsed. It was
+  wrong. The caller could not tell — so the call now fails instead.
+- Schema calls bypass the prompt cache (lookup **and** store), like image
+  calls: the cache key is text, and it can see neither the pixels nor the
+  requested shape.
+
 ## [0.6.2] — 2026-07-26
 
 ### Added

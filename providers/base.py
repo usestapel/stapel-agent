@@ -59,6 +59,20 @@ class LlmProvider(ABC):
     # old signature keep working untouched.
     supports_max_tokens: bool = False
 
+    # Backends that can CONSTRAIN the decoder to a JSON Schema set this
+    # True AND accept the optional ``schema`` kwarg in complete().
+    #
+    # "Ask for JSON in the system prompt and parse whatever comes back"
+    # is not the same capability and must not stand in for it. Measured
+    # on the iron-benchmark harness (2026-07-03): under the prompt-only
+    # path a model emitted its entire answer as pseudo-XML inside one
+    # string field while every other field came back empty — valid JSON,
+    # parsed fine, meant nothing. A caller that asked for a constrained
+    # schema and silently got the prompt-only path would never learn
+    # that. The service therefore fails such a request outright rather
+    # than degrading it.
+    supports_schema: bool = False
+
     @classmethod
     def configuration_error(cls) -> str | None:
         """Why this backend cannot serve a call yet, or None if it can.

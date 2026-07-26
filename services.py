@@ -74,6 +74,7 @@ def complete(
     skip_cache: bool = False,
     images: list | None = None,
     max_tokens: int | None = None,
+    schema: dict | None = None,
 ) -> dict:
     """Raw completion: ``{"status": "ok", "result": <text>, "usage": ...}``
     or ``{"status": "failure", "reason": ...}``.
@@ -97,6 +98,15 @@ def complete(
     configured default). The prompt cache is text-keyed and does not see
     the cap — hosts that enable ``CACHE_LOOKUP`` for a source should keep
     that source's budget stable (the default policy caches translate only).
+
+    *schema* (a JSON Schema dict) constrains the decoder: the backend
+    cannot emit anything the schema forbids, so the result parses by
+    construction. A provider without ``supports_schema`` fails the call
+    outright instead of quietly answering from an unconstrained decoder
+    — see ``LlmProvider.supports_schema`` for the measured reason. Like
+    images, a schema changes the shape of the answer while the prompt
+    cache is keyed on text alone, so schema calls bypass both lookup and
+    store.
     """
     models = agent_settings.MODELS or {}
     if model_size not in models:
@@ -123,10 +133,23 @@ def complete(
             "reason": f"Provider '{provider_name}' does not support image input",
         }
 
+    if schema and not backend.supports_schema:
+        # Deliberately a failure, not a warning-and-continue: the caller
+        # asked for an answer that parses by construction, and answering
+        # from an unconstrained decoder returns something that may parse
+        # and still be structurally wrong (see supports_schema).
+        return {
+            "status": "failure",
+            "reason": (
+                f"Provider '{provider_name}' cannot constrain output to a "
+                f"JSON schema — pick a provider that can, or drop the schema"
+            ),
+        }
+
     model = backend.resolve_model(model_size, models[model_size])
 
     policy = _cache_policy()
-    if not skip_cache and not images and policy.should_cache(source):
+    if not skip_cache and not images and not schema and policy.should_cache(source):
         cached = policy.lookup(
             prompt,
             system_prompt,
@@ -164,6 +187,10 @@ def complete(
     # The kwargs travel only when non-empty/requested, so pre-existing
     # provider subclasses with older signatures keep working.
     call_kwargs = {"images": list(images)} if images else {}
+    if schema:
+        # Guarded above: a provider without supports_schema never reaches
+        # here, so no pre-schema subclass ever sees the kwarg.
+        call_kwargs["schema"] = schema
     if max_tokens:
         if backend.supports_max_tokens:
             call_kwargs["max_tokens"] = int(max_tokens)
@@ -205,8 +232,9 @@ def complete(
 
     # No-op for the default policy (the ledger row above IS its storage);
     # external-store policies (Redis, ...) hook in here. Never store
-    # multimodal results — the text key can't see the pixels.
-    if not images:
+    # multimodal or schema-constrained results — the text key sees
+    # neither the pixels nor the requested shape.
+    if not images and not schema:
         policy.store(
             prompt,
             system_prompt,
@@ -230,21 +258,35 @@ def complete_json(
     metadata: dict | None = None,
     images: list | None = None,
     max_tokens: int | None = None,
+    schema: dict | None = None,
 ) -> dict:
     """The ``llm.complete`` surface shared by the HTTP view and the comm
     function: prepend the JSON-API system prompt (unless the caller brings
     their own), complete, then parse JSON out of the raw text.
+
+    Pass *schema* (a JSON Schema dict) to constrain the decoder instead of
+    asking for JSON in prose. The injected JSON-API system prompt is then
+    dropped — it exists to coax an unconstrained model into JSON, and
+    with a constraint in force it only spends tokens restating what the
+    decoder already enforces. A provider that cannot constrain output
+    fails the call rather than silently answering the prose way.
     """
+    if schema is not None and system_prompt is None:
+        effective_system_prompt = None
+    else:
+        effective_system_prompt = system_prompt or JSON_API_SYSTEM_PROMPT
+
     raw = complete(
         prompt,
         model_size,
-        system_prompt=system_prompt or JSON_API_SYSTEM_PROMPT,
+        system_prompt=effective_system_prompt,
         provider=provider,
         source=PromptSource.LLM_FACADE,
         user_id=user_id,
         metadata=metadata,
         images=images,
         max_tokens=max_tokens,
+        schema=schema,
     )
     if raw["status"] == "failure":
         return _drop_none(

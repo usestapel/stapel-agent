@@ -17,6 +17,7 @@ class OpenAICompatProvider(LlmProvider):
     name = "openai-compat"
     supports_images = True
     supports_max_tokens = True
+    supports_schema = True
 
     @classmethod
     def configuration_error(cls) -> str | None:
@@ -43,6 +44,7 @@ class OpenAICompatProvider(LlmProvider):
         system_prompt: str | None = None,
         images: list | None = None,
         max_tokens: int | None = None,
+        schema: dict | None = None,
     ) -> ProviderResult:
         base_url = (agent_settings.OPENAI_COMPAT_BASE_URL or "").rstrip("/")
         if not base_url:
@@ -67,14 +69,28 @@ class OpenAICompatProvider(LlmProvider):
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
+        payload = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": int(max_tokens or agent_settings.MAX_TOKENS),
+        }
+        if schema:
+            # The OpenAI-flavoured spelling of constrained decoding.
+            # `strict` is what makes it a decoder constraint rather than
+            # a hint — without it the endpoint is free to return prose.
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "result",
+                    "schema": schema,
+                    "strict": True,
+                },
+            }
+
         try:
             response = requests.post(
                 f"{base_url}/chat/completions",
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "max_tokens": int(max_tokens or agent_settings.MAX_TOKENS),
-                },
+                json=payload,
                 headers=headers,
                 timeout=int(agent_settings.CLI_TIMEOUT),
             )
