@@ -5,6 +5,38 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-07-26
+
+### Added
+- **Provider-response validation** — `stapel_agent.stt.validation` (assemblyai,
+  deepgram, elevenlabs, gladia, soniox, speechmatics, xai_stt) and
+  `stapel_agent.diarization.validation` (pyannote). Each checks the structure
+  and timestamps of a raw provider payload BEFORE it is mapped into a
+  `NormalizedTranscript`, and **returns** issues (`error` | `warning`) instead
+  of raising, so a caller can gate on errors while merely surfacing warnings.
+  Ported byte-for-byte from the iron-benchmark harness together with the tests
+  that pin them: the eight files differ from each other because the providers
+  differ, and unifying them would erase measurements, not duplication.
+- **`stapel_agent.safety`** — injection-marker detection and the two
+  context-specific sanitizers (`redact_markers` for auto-escaping template
+  engines, `sanitize_for_rag` for text about to re-enter a prompt). Also
+  ported byte-for-byte, including the record of why pre-template HTML
+  encoding was removed (it double-escaped).
+- `tests/test_packaging.py` — the hand-written `[tool.setuptools] packages`
+  list must cover every subpackage in the tree, in both directions. A
+  forgotten entry breaks nothing locally and ships a wheel with the module
+  absent; the first symptom is an ImportError in someone else's deployment.
+
+### Changed
+- **pydantic is now a dependency.** The validators declare their issue types
+  as pydantic v2 models, and the contracts arriving next use `extra="forbid"`
+  plus field/model validators whose exact behaviour IS the contract — an
+  unknown field must fail loudly rather than be dropped. Re-expressing them as
+  dataclasses or DRF serializers would be a rewrite that silently changes what
+  "valid" means. Internal DTOs stay dataclasses and the HTTP edge stays DRF:
+  pydantic is for untrusted structured text (LLM output, provider payloads,
+  on-disk artifacts), which is a boundary neither of the other two covered.
+
 ## [0.6.3] — 2026-07-26
 
 ### Added
