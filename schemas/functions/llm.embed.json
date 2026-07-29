@@ -6,7 +6,9 @@
   "properties": {
     "texts": {
       "type": "array",
-      "items": {"type": "string"},
+      "items": {
+        "type": "string"
+      },
       "minItems": 1,
       "description": "Batch of texts to embed. Output vectors preserve this order. Empty batches and empty strings are rejected."
     },
@@ -28,6 +30,8 @@
       "description": "Free-form per-provider passthrough, applied AFTER the adapter's own request params — pin provider specifics without a core release. Unknown keys go to the provider as-is."
     }
   },
-  "required": ["texts"],
+  "required": [
+    "texts"
+  ],
   "additionalProperties": false
 }

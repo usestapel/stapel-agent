@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-agent"
-version = "0.6.6"
+version = "0.6.7"
 description = "LLM facade Django app for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -24,7 +24,9 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "stapel-core>=0.10,<1.0",
+    # >=0.15.11 for stapel_core.schema_strict (the strict-subset transform the
+    # OpenAI-compatible transport applies before every constrained call).
+    "stapel-core>=0.15.11,<1.0",
     # Provider-response validation and LLM-authored contracts are declared
     # as pydantic models. This is deliberate rather than incidental: the
     # models being ported in carry `extra="forbid"` plus field/model

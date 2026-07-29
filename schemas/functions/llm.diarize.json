@@ -6,7 +6,7 @@
   "properties": {
     "audio_url": {
       "type": "string",
-      "description": "Fetchable audio URL (presigned S3/MinIO GET)."
+      "description": "Fetchable audio URL (presigned S3/MinIO GET). comm carries URLs only, never raw bytes."
     },
     "num_speakers": {
       "type": "integer",
@@ -27,6 +27,8 @@
       "description": "Free-form per-provider passthrough, applied AFTER the adapter's own request params — pin provider specifics without a core release. Unknown keys go to the provider as-is."
     }
   },
-  "required": ["audio_url"],
+  "required": [
+    "audio_url"
+  ],
   "additionalProperties": false
 }

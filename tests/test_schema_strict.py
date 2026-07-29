@@ -9,7 +9,7 @@ already there.
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
-from stapel_agent.schema_strict import DROPPED_KEYS, to_strict_subset
+from stapel_core.schema_strict import DROPPED_KEYS, to_strict_subset
 
 
 class Inner(BaseModel):

@@ -49,13 +49,15 @@ COMPLETE_SCHEMA = {
         },
         "provider": {
             "type": "string",
-            "description": "Provider name from STAPEL_AGENT['PROVIDERS'].",
+            "description": "Provider name from STAPEL_AGENT['PROVIDERS']; "
+            "defaults to DEFAULT_PROVIDER.",
         },
         "images": {
             "type": "array",
             "items": IMAGE_ITEM_SCHEMA,
             "description": "Vision input — the provider must support "
-            "image content blocks.",
+            "image content blocks. Each entry carries a URL or base64 "
+            "payload; raw bytes never travel over comm.",
         },
         "role": {
             "type": "string",
@@ -71,6 +73,17 @@ COMPLETE_SCHEMA = {
             "configured STAPEL_AGENT['MAX_TOKENS'] — long structured "
             "outputs raise it, short ones bound cost. Ignored (with a "
             "logged warning) by providers without supports_max_tokens.",
+        },
+        "schema": {
+            "type": "object",
+            "description": "JSON Schema that CONSTRAINS the decoder, rather "
+            "than asking for JSON in prose. Without this, a caller in another "
+            "service could only ask nicely — structured output existed "
+            "in-process and stopped at the service boundary, which is the one "
+            "place a malformed answer is hardest to recover from. A provider "
+            "that cannot constrain output fails the call instead of quietly "
+            "answering the prose way. Pass the schema as pydantic emits it: "
+            "the transport applies the strict-subset transform itself.",
         },
     },
     "required": ["prompt", "model"],
@@ -126,6 +139,7 @@ def llm_complete(payload: dict) -> dict:
         provider=payload.get("provider"),
         images=images or None,
         max_tokens=payload.get("max_tokens"),
+        schema=payload.get("schema"),
     )
 
 
@@ -521,7 +535,8 @@ GENERATE_IMAGE_SCHEMA = {
         "provider": {
             "type": "string",
             "description": "Image provider name from "
-            "STAPEL_AGENT['IMAGE_PROVIDERS'].",
+            "STAPEL_AGENT['IMAGE_PROVIDERS']; defaults to "
+            "DEFAULT_IMAGE_PROVIDER.",
         },
         "timeout_seconds": {
             "type": "integer",

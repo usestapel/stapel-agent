@@ -66,6 +66,53 @@ class TestLlmComplete:
         # the tag never leaks into the provider call
         assert "role" not in fake_provider.calls[0]
 
+    def test_schema_crosses_the_service_boundary(self, fake_provider):
+        """The point of admitting `schema` here at all.
+
+        Constrained decoding used to exist in-process and stop at the comm
+        boundary: a caller in another service could only ask for JSON in prose
+        and hope. That is the worst place for a malformed answer — the caller
+        has no access to the provider, no way to retry with a tighter
+        constraint, and nothing but text to inspect. So this asserts the
+        schema actually reaches the provider, not merely that the call is
+        accepted.
+        """
+        schema = {
+            "type": "object",
+            "properties": {"answer": {"type": "integer"}},
+            "required": ["answer"],
+            "additionalProperties": False,
+        }
+        result = call(
+            "llm.complete",
+            {"prompt": "give json", "model": "small", "schema": schema},
+        )
+        assert result["status"] == "ok"
+        assert fake_provider.calls[0]["schema"] == schema
+
+    def test_schema_suppresses_the_prose_coaxing_prompt(self, fake_provider):
+        """With a constraint in force the JSON-API preamble only spends tokens.
+
+        It exists to talk an unconstrained model into emitting JSON; repeating
+        it to a constrained decoder restates what the decoder already enforces.
+        """
+        call("llm.complete", {"prompt": "p", "model": "small"})
+        without_schema = fake_provider.calls[0]["system_prompt"]
+        fake_provider.reset()
+        call(
+            "llm.complete",
+            {"prompt": "p", "model": "small", "schema": {"type": "object"}},
+        )
+        assert without_schema
+        assert fake_provider.calls[0]["system_prompt"] is None
+
+    def test_schema_must_be_an_object(self, fake_provider):
+        with pytest.raises(SchemaValidationError):
+            call(
+                "llm.complete",
+                {"prompt": "p", "model": "small", "schema": "MySchema"},
+            )
+
     def test_role_tag_must_be_a_string(self, fake_provider):
         with pytest.raises(SchemaValidationError):
             call("llm.complete", {"prompt": "p", "model": "small", "role": 7})

@@ -14,10 +14,16 @@
     },
     "entries": {
       "type": "object",
-      "additionalProperties": { "type": "string" },
+      "additionalProperties": {
+        "type": "string"
+      },
       "description": "Mapping of keys to source-language strings."
     }
   },
-  "required": ["from_lang", "to", "entries"],
+  "required": [
+    "from_lang",
+    "to",
+    "entries"
+  ],
   "additionalProperties": false
 }

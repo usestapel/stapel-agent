@@ -87,7 +87,7 @@ class OpenAICompatProvider(LlmProvider):
             # lives here rather than at the caller because it is a demand
             # of this transport — the Anthropic path derives its own format
             # from the raw schema and must not see it.
-            from stapel_agent.schema_strict import to_strict_subset
+            from stapel_core.schema_strict import to_strict_subset
 
             payload["response_format"] = {
                 "type": "json_schema",

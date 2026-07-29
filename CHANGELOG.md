@@ -5,6 +5,43 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.7] — 2026-07-29
+
+### Added
+- **`llm.complete` accepts a `schema`.** Constrained decoding existed in-process
+  and stopped at the service boundary: a caller in another service could only
+  ask for JSON in prose and hope. That is the one place a malformed answer is
+  hardest to recover from — the caller has no access to the provider, no way to
+  retry with a tighter constraint, and nothing but text to inspect. Pass the
+  schema as pydantic emits it; the transport applies the strict-subset
+  transform itself, so callers do not each carry a copy of that rule.
+
+### Fixed
+- **The committed function contracts had drifted from the code, and the file
+  wins.** `schemas/functions/*.json` are not documentation: `autoload_schemas()`
+  registers them at startup and they *override* the in-code schema. So the file
+  is what validates a caller's payload while `functions.py` is what a reader
+  believes — and when they part, the failure is quiet and actively misleading.
+  Adding `schema` to `llm.complete` in Python changed nothing on the wire;
+  every call was rejected for a property visible in the source. Four contracts
+  were already drifted this way (descriptions on `llm.complete`, `llm.diarize`,
+  `llm.generate_image`, `llm.transcribe`), in both directions — some richer in
+  the file, some in the code. The richer text won in each case; nobody's
+  wording was dropped.
+- The files are now generated (`make contract`) and gated
+  (`make contract-check`, plus `tests/test_function_contracts.py`, which checks
+  both directions: a contract with no function, and a function with no
+  contract). Two copies of one truth were the defect; one source and a
+  generated copy is the fix.
+
+### Changed
+- `to_strict_subset` now lives in `stapel_core.schema_strict` (added in
+  `stapel-core` 0.15.11). `stapel_agent.schema_strict` re-exports it, so
+  nothing breaks. It moved because it is a pure JSON Schema transform and a
+  caller that wants to inspect what will really go on the wire — before paying
+  for the call — should not have to import the LLM library to do it.
+- Requires `stapel-core>=0.15.11`.
+
 ## [0.6.6] — 2026-07-29
 
 ### Fixed

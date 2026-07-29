@@ -28,6 +28,8 @@
       "description": "Hard cap on the generation request."
     }
   },
-  "required": ["prompt"],
+  "required": [
+    "prompt"
+  ],
   "additionalProperties": false
 }
