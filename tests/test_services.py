@@ -26,7 +26,18 @@ class TestPromptLog:
         )
         assert result["status"] == "ok"
         assert result["result"] == '{"answer": 42}'
-        assert result["usage"] == {"input_tokens": 10, "output_tokens": 5}
+        # The full breakdown travels, not just input/output: reasoning tokens
+        # are billed, and a caller that only sees completion tokens reads a
+        # smaller number than the invoice.
+        assert result["usage"]["input_tokens"] == 10
+        assert result["usage"]["output_tokens"] == 5
+        assert result["usage"]["thinking_tokens"] == 2
+        assert result["usage"]["cache_read_tokens"] == 1
+        assert result["usage"]["cache_write_tokens"] == 3
+        assert "cost_usd" in result["usage"]
+        assert result["usage"]["cost_basis"] in {
+            "provider_ticks", "pricing_estimate", "unpriced"
+        }
 
         log = PromptLog.objects.get()
         assert log.source == PromptSource.LLM_FACADE

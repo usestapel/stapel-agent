@@ -55,10 +55,36 @@ def _cache_policy() -> CachePolicy:
     return agent_settings.CACHE_POLICY()
 
 
-def _usage(row_or_result) -> dict:
-    return {
+def _usage(row_or_result, *, model: str = "", provider: str = "") -> dict:
+    """What the call consumed, and what it cost.
+
+    Used to return input/output only, while the provider had already measured
+    reasoning and cache tokens and the ledger row stored them. A caller reading
+    this dict therefore saw a smaller number than the one on the invoice — and
+    reasoning tokens are billed. The breakdown now travels, and so does
+    ``cost_usd`` with the ``cost_basis`` that says whether it is the provider's
+    own figure, our price table, or unknown.
+    """
+    from .pricing import cost_fields
+
+    tokens = {
         "input_tokens": getattr(row_or_result, "input_tokens", 0) or 0,
         "output_tokens": getattr(row_or_result, "output_tokens", 0) or 0,
+        "thinking_tokens": getattr(row_or_result, "thinking_tokens", 0) or 0,
+        "cache_read_tokens": getattr(row_or_result, "cache_read_tokens", 0) or 0,
+        "cache_write_tokens": getattr(row_or_result, "cache_write_tokens", 0) or 0,
+    }
+    if not model:
+        return tokens
+    return {
+        **tokens,
+        **cost_fields(
+            model=model,
+            provider=provider,
+            input_tokens=tokens["input_tokens"],
+            output_tokens=tokens["output_tokens"],
+            thinking_tokens=tokens["thinking_tokens"],
+        ),
     }
 
 
@@ -283,7 +309,11 @@ def complete(
             model_size=model_size,
         )
 
-    return {"status": "ok", "result": result.text, "usage": _usage(result)}
+    return {
+        "status": "ok",
+        "result": result.text,
+        "usage": _usage(result, model=model, provider=provider_name),
+    }
 
 
 def complete_json(

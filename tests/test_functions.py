@@ -24,7 +24,18 @@ class TestLlmComplete:
         result = call("llm.complete", {"prompt": "give json", "model": "small"})
         assert result["status"] == "ok"
         assert result["result"] == {"answer": 42}
-        assert result["usage"] == {"input_tokens": 10, "output_tokens": 5}
+        # The full breakdown travels, not just input/output: reasoning tokens
+        # are billed, and a caller that only sees completion tokens reads a
+        # smaller number than the invoice.
+        assert result["usage"]["input_tokens"] == 10
+        assert result["usage"]["output_tokens"] == 5
+        assert result["usage"]["thinking_tokens"] == 2
+        assert result["usage"]["cache_read_tokens"] == 1
+        assert result["usage"]["cache_write_tokens"] == 3
+        assert "cost_usd" in result["usage"]
+        assert result["usage"]["cost_basis"] in {
+            "provider_ticks", "pricing_estimate", "unpriced"
+        }
 
     def test_provider_and_system_prompt_forwarded(self, fake_provider):
         call(

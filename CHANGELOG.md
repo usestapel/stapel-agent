@@ -5,6 +5,37 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-07-29
+
+### Added
+- **`stapel_agent.pricing`** — what a completion cost, with the provenance of
+  every price. Each entry carries the source it was read from and the date it
+  was read, because a price without a provenance line is a number someone
+  remembered, and model prices move. An unknown model returns `0.0` with a
+  warning and `cost_basis: "unpriced"` — never a guess, and never
+  indistinguishable from free, since a fabricated cost does not stay isolated:
+  it gets summed into a total someone acts on.
+- **The reasoning-token trap, measured.** Providers disagree about whether
+  reasoning tokens are already inside the completion count: xAI's *excludes*
+  them, OpenAI-style providers *include* them. Estimating from completion
+  alone under-counts every xAI run; adding reasoning unconditionally
+  over-counts everywhere else by the same amount. `billed_output_tokens()` is
+  the single place that knows which, and the finding is carried over verbatim
+  from the harness that measured it.
+- A charge the provider reported (xAI ships an exact bill in ticks) wins over
+  our estimate, and `cost_basis` says which was used. An estimate that silently
+  replaces a known figure is how a ledger drifts from an invoice.
+
+### Changed
+- **BREAKING** — the `usage` dict returned by `llm.complete` (and by
+  `services.complete`) gained fields. It used to carry `input_tokens` and
+  `output_tokens` only, while the provider had already measured reasoning and
+  cache tokens and the ledger row was storing them. Callers therefore saw a
+  smaller number than the invoice, and reasoning tokens are billed. It now
+  carries the full breakdown plus `cost_usd`, `billed_output_tokens` and
+  `cost_basis`. Code that compared the whole dict for equality needs updating;
+  code that reads keys does not.
+
 ## [0.6.7] — 2026-07-29
 
 ### Added

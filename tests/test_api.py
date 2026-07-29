@@ -57,7 +57,10 @@ class TestComplete:
         assert data["status"] == "ok"
         assert data["result"] == {"answer": 42}
         assert "comment" not in data
-        assert data["usage"] == {"input_tokens": 10, "output_tokens": 5}
+        assert data["usage"]["input_tokens"] == 10
+        assert data["usage"]["output_tokens"] == 5
+        assert data["usage"]["thinking_tokens"] == 2
+        assert "cost_usd" in data["usage"]
 
     def test_json_block_with_comment(self, api_client, fake_provider):
         fake_provider.result = ProviderResult(
