@@ -67,6 +67,15 @@ agent_settings = AppSettings(
         "STT_LANGUAGE_ROUTES": {},
         # Hard cap (seconds) on one provider's submit+poll cycle.
         "STT_TIMEOUT": 1800,
+        # Overlay merged OVER stt.pricing.BUILTIN_STT_PRICING_MODULES —
+        # {provider name: dotted path to a module exposing estimate_cost()}.
+        # A host that registered its own STT adapter registers its rate card
+        # here, under the SAME name; None/"" declares a provider unpriced.
+        "STT_PRICING_MODULES": {},
+        # Overlay merged OVER stt.model_configs.BUILTIN_STT_MODEL_CONFIGS —
+        # {config id: ModelConfig}. Same merge semantics as STT_PROVIDERS:
+        # add one profile without restating the shipped ones, None/"" removes.
+        "STT_MODEL_CONFIGS": {},
         # OpenAI-compatible Whisper endpoint (OpenAI API or self-hosted
         # faster-whisper). Key optional — self-hosted often has none.
         "WHISPER_BASE_URL": "",

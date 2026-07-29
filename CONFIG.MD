@@ -40,6 +40,8 @@ consuming project.
 | STT_FALLBACK_CHAIN | env | providers tried in order after the default on retryable failure. | no | [] |
 | STT_LANGUAGE_ROUTES | env | {iso-639-1: [provider names]} language routing matrix. | no | {} |
 | STT_TIMEOUT | env | hard cap (seconds) on one provider's submit+poll cycle. | no | 1800 |
+| STT_PRICING_MODULES | env | overlay merged OVER built-in STT rate cards ({provider name: dotted path to a module exposing `estimate_cost()`}); None/"" declares a provider unpriced. | no | {} |
+| STT_MODEL_CONFIGS | env | overlay merged OVER the built-in STT model-config catalog ({config id: `ModelConfig`}); None/"" removes a shipped config. | no | {} |
 | WHISPER_BASE_URL | env | OpenAI-compatible Whisper endpoint. | no | (empty) |
 | WHISPER_API_KEY | vault | Whisper endpoint key (optional for self-hosted). | no | (empty) |
 | WHISPER_MODEL | env | Whisper model name. | no | whisper-1 |

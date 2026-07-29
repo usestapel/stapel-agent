@@ -5,6 +5,71 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-07-30
+
+### Added
+- **`stapel_agent.safety.redaction`** — refuse to persist an artifact that
+  contains a secret. The guard was sitting in one product's recordings app,
+  where it had nothing to do with recordings: an artifact is assembled from a
+  prompt, a model response and the provenance of the call, and every one of
+  those has been observed to carry a key at some point — a prompt echoing an
+  environment dump, a provider error string quoting the request, a debugging
+  field someone added and forgot. Once written the secret is in a database
+  row, in every backup of it, and in whatever the staff-facing view renders.
+  So it belongs next to `detect_pwned_markers` / `sanitize_for_rag`: any
+  library that persists a model's output needs it. The check is deliberately
+  dumb — does the serialized text contain the VALUE of an environment variable
+  that looks like a credential — because a clever detector that misses is
+  worse than a blunt one that does not. `RedactionError` names the offending
+  variable and never its value, since an exception message is itself a thing
+  that gets logged. The three knobs (`KEY_ENV_SUFFIXES`, `KEY_PREFIXES`,
+  `MIN_SECRET_LEN`) are module-level and public: a host whose secrets are not
+  named `*_API_KEY` has to be able to say so, and reading a settings block
+  would make the cheapest guard in the library depend on Django.
+- **`stapel_agent.stt.model_configs`** — a provider name does not identify a
+  run and therefore cannot price one. Deepgram bills $0.408/hr monolingual and
+  $0.468/hr multilingual over the *same* wire model `nova-3`; AssemblyAI is
+  $0.17/hr on Universal-2 and $0.23/hr on Universal-3.5 Pro. A `ModelConfig`
+  names the combination that is actually billed and actually reproducible:
+  provider + model + the params the adapter really sends + `adapter_kwargs`
+  (how two configs of one provider differ by *model*) + `pricing_kwargs` (the
+  price variant for configs that share a wire model). `resolve_config()`
+  attributes a run that named only a provider — which is what every
+  pre-catalog caller does. Eleven shipped configs across the seven priced
+  providers, plus three hybrids whose speaker turns come from pyannoteAI
+  instead of the STT response. Merge semantics as everywhere else
+  (`BUILTIN_STT_MODEL_CONFIGS` ← `STT_MODEL_CONFIGS` ←
+  `register_stt_model_config`).
+- **A config carries no price.** The obvious shape — a `pricing_per_hour`
+  field copied from the rate card — is two copies of one truth, and the copy
+  drifts silently: the card moves, the catalog keeps quoting last quarter, and
+  nobody finds out until an invoice disagrees with a dashboard.
+  `hourly_rate(config)` and `estimate_cost(config, duration_ms)` ask the
+  rate-card module instead, so the card and the estimate are one computation
+  by construction. Which module prices which provider is its own registry
+  (`stt.pricing.pricing_module()`, `BUILTIN_STT_PRICING_MODULES` ←
+  `STT_PRICING_MODULES` ← `register_stt_pricing_module`), keyed by the STT
+  provider registry name so a config, its adapter and its rate card can never
+  name different providers. `whisper-http` is deliberately unpriced and
+  resolves to `None`: a self-hosted endpoint costs something, we just do not
+  know what, and a $0 stub would report someone's GPU bill as free. A host
+  with negotiated rates registers a module rather than editing numbers into
+  config objects.
+- The pricing tests that could not travel with the 0.6.5 port arrived with the
+  registry they were waiting for (`tests/test_stt_model_configs.py`), plus
+  direct coverage for two functions the upstream harness never covered: the
+  Deepgram `RATE_CARD_VERSION` provenance stamp and pyannote's 20-second
+  minimum charge. Three upstream assertions are not reproduced and the module
+  docstring says why — measured WER has no home without the corpus it was
+  measured on.
+
+### Notes
+- `SttProvider.cost_per_hour` still carries the older hand-written
+  per-provider ballparks that `llm.stt_catalog` surfaces (ElevenLabs 0.40,
+  Soniox 0.36) where the rate-card modules say 0.22 and 0.10. Nothing changed
+  there in this release; where the two disagree, the module is the one with a
+  dated source line.
+
 ## [0.7.0] — 2026-07-29
 
 ### Added

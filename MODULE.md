@@ -266,6 +266,74 @@ non-`SttProvider` `STT_PROVIDERS` entry) and `W004` (`DEFAULT_STT_PROVIDER`,
 the effective registry). All STT checks are warnings — STT is an optional
 surface and a broken entry degrades to `status: "failure"` per request.
 
+### STT model configs + rate cards — two more open registries
+
+A provider name does not identify a run, and therefore cannot price one.
+Deepgram bills $0.408/hr monolingual and $0.468/hr multilingual over the *same*
+wire model `nova-3`; AssemblyAI is $0.17/hr on Universal-2 and $0.23/hr on
+Universal-3.5 Pro. `stt/model_configs.py` names those combinations:
+
+```python
+from stapel_agent.stt.model_configs import (
+    ModelConfig, estimate_cost, get_config, hourly_rate,
+    register_stt_model_config, resolve_config,
+)
+
+hourly_rate(get_config("deepgram_nova3_multi"))        # 0.468
+estimate_cost(get_config("deepgram_nova3_multi"), 5000)  # USD for 5 s
+resolve_config("deepgram", "multi").model_config_id    # attribute a legacy
+                                                       # provider-only run
+```
+
+A `ModelConfig` carries `provider_id` (the **STT registry key**, so config,
+adapter and rate card share one name), `model_id`, the `provider_params` the
+adapter really sends, `adapter_kwargs` (constructor kwargs — how two configs of
+one provider differ by *model*), `pricing_kwargs` (the price-variant channel for
+configs that share a wire model but bill differently), an optional `diarization`
+stage spec (hybrid: STT text + an external diarization provider's speakers), and
+`warnings` — provider-contract facts, not quality opinions.
+
+It carries **no price field**. `hourly_rate()` / `estimate_cost()` ask the
+provider's rate-card module, so the card and the estimate are one computation
+and cannot drift apart. Which module prices which provider is the second
+registry, same merge semantics:
+
+1. `stt.pricing.BUILTIN_STT_PRICING_MODULES` (the seven priced providers;
+   `whisper-http` is deliberately absent — a self-hosted endpoint has no
+   published card, and a $0 stub would report someone's GPU bill as free);
+2. `STAPEL_AGENT["STT_PRICING_MODULES"]` — `{provider name: dotted path}`;
+3. runtime `register_stt_pricing_module(name, module_or_path)`.
+
+`pricing_module(provider)` returns the module or `None` — never a zero. A rate
+card is duck-typed (`estimate_cost(duration_ms, *, model=..., **kwargs) ->
+float | None`), so a host points at its own `pricing.py` rather than
+subclassing, and a negotiated rate is a registered module rather than numbers
+edited into config objects.
+
+The catalog itself merges the same way (`BUILTIN_STT_MODEL_CONFIGS` ←
+`STAPEL_AGENT["STT_MODEL_CONFIGS"]` ← `register_stt_model_config(config)`):
+
+```python
+# AppConfig.ready() — the Growth tier we actually signed, priced not copied
+register_stt_model_config(ModelConfig(
+    model_config_id="house_dg_growth", display_name="Deepgram Nova-3 (Growth)",
+    provider_id="deepgram", model_id="nova-3", default_language="en",
+    pricing_kwargs={"tier": "growth"},
+))
+```
+
+Not here, on purpose: **measured quality**. The research harness this came from
+carries per-config WER measured on a referenced corpus; a framework has no
+corpus, and a quality number without one is a rumour. For the same reason
+`get_default_config(provider_id)` requires a provider — ranking configs across
+providers needs a measurement. Language and capability questions are answered
+by `SttProvider.supported_languages` / `supports_diarization`, from the adapter
+that has to honour them.
+
+> `SttProvider.cost_per_hour` is an older, coarser answer to the same question —
+> a hand-written per-provider ballpark surfaced by `llm.stt_catalog`. Where the
+> two disagree the rate-card module is the one with a dated source line.
+
 ### Image generation — a third open registry, same merge semantics
 
 `images/__init__.py` is the third instance of the house registry pattern:
