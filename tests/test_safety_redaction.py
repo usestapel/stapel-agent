@@ -1,9 +1,15 @@
 """Unit tests for stapel_agent.safety.redaction.
 
-The guard arrived from the recordings product with no tests of its own (its
-only caller was covered indirectly, through the artifact write path). These
-are written against the contract stated in the module docstring: refuse the
-write, name the variable, never echo the value.
+The guard arrived from the recordings product with no tests of its own. Its
+original home, the research harness, covered it in three assertions
+(``iron-benchmark/pipeline/tests/test_mic_runtime_p87.py``), and two of those
+reach the gate through a file writer — ``write_meeting_facts`` — that does not
+come across: what they actually assert about the gate (the message names the
+variable, the message does not contain the value) is asserted directly below.
+The third is reproduced verbatim.
+
+The rest are written against the contract stated in the module docstring:
+refuse the write, name the variable, never echo the value.
 
 Every test that needs a secret in the environment sets it with monkeypatch —
 the gate reads ``os.environ`` live on each call, so there is nothing to reset
@@ -27,6 +33,10 @@ from stapel_agent.safety.redaction import (
 class TestPassesCleanText:
     def test_plain_text_is_allowed(self):
         redaction_gate("a summary of the meeting, no secrets here")
+
+    def test_redaction_gate_passes_clean_text(self):
+        """Verbatim from ``test_mic_runtime_p87.py``."""
+        redaction_gate('{"clean": "payload"}')  # must not raise
 
     def test_empty_text_is_allowed(self):
         redaction_gate("")
