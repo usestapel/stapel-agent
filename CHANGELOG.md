@@ -5,6 +5,38 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.6] — 2026-07-29
+
+### Fixed
+- **`strict: true` was going out with a schema strict mode rejects.** The flag
+  is what turns structured output into a decoder *constraint* rather than a
+  hint, but the endpoints that honour it accept only a narrow subset of JSON
+  Schema — and one rule of that subset is that every object lists every
+  property in `required`. Pydantic omits any field that has a default, which is
+  correct JSON Schema and wrong on this wire. So a single defaulted field meant
+  the request was rejected before a token was generated.
+- The trap is that the schema *looks* ready. `extra="forbid"` supplies
+  `additionalProperties: false`, which is the rule everyone remembers, while
+  `required` quietly stays short and nothing local complains. It surfaces only
+  as an HTTP error from the provider, on the model that finally has a default.
+- `stapel_agent.schema_strict.to_strict_subset()` performs the transform:
+  all-required and `additionalProperties: false` on every object node,
+  recursing through `$defs`, `items` and the combinators, and dropping the
+  constraint keywords the subset does not accept (`minLength`, `pattern`,
+  `maxItems`, …). Dropping those loses no safety — the wire schema shapes the
+  decoder, the response is re-validated client-side against the real model, and
+  only the first has to fit the subset.
+- Applied at the OpenAI-compatible transport, not at the caller's model. The
+  all-required rule genuinely changes what is asked for — an optional field
+  becomes one the model must emit — so it belongs to the transport that demands
+  it. The Anthropic path derives its own format from the raw schema and never
+  sees the transform. The caller's schema is deep-copied, because the same
+  model is reused across calls and transforming in place would hand the second
+  call a schema with its constraints already stripped.
+- Ported from the harness, where it was written after live calls failed on
+  exactly the schema pydantic emits by default, and measured against four
+  provider families.
+
 ## [0.6.5] — 2026-07-26
 
 ### Added

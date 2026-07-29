@@ -78,11 +78,22 @@ class OpenAICompatProvider(LlmProvider):
             # The OpenAI-flavoured spelling of constrained decoding.
             # `strict` is what makes it a decoder constraint rather than
             # a hint — without it the endpoint is free to return prose.
+            #
+            # And `strict` is exactly why the schema cannot go out as
+            # pydantic emits it: the strict subset requires every property
+            # to be listed in `required`, while pydantic omits anything
+            # that has a default. One defaulted field and the endpoint
+            # rejects the request before generating a token. The transform
+            # lives here rather than at the caller because it is a demand
+            # of this transport — the Anthropic path derives its own format
+            # from the raw schema and must not see it.
+            from stapel_agent.schema_strict import to_strict_subset
+
             payload["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {
                     "name": "result",
-                    "schema": schema,
+                    "schema": to_strict_subset(schema),
                     "strict": True,
                 },
             }
