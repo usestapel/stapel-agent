@@ -15,6 +15,12 @@ the official docs via the iron-benchmark port, 2026-07-09):
 Auth: header ``x-gladia-key: <raw key>``. The ``model`` param is always
 sent explicitly (omission = solaria-1 TODAY, but an unpinned run can
 silently change server-side — the AssemblyAI 'best'-alias lesson).
+
+``solaria-3`` is SINGLE-language and async-only: it documents exactly
+five languages (EN/FR/DE/ES/IT) and no auto-detect. That combination is
+checked BEFORE the upload — step 2 is the billing event, so a request
+the docs already refuse must never reach it (ported from the research
+harness's ``build_transcription_params``).
 Diarization is a plain ``diarization`` bool (included in the async
 price). Response times are SECONDS; the utterance ``speaker`` is an
 INTEGER by order of appearance (0 is valid and falsy); words carry no
@@ -53,6 +59,9 @@ from ..base import (
 logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT_S = 120  # per-request cap (the upload can be slow)
+#: solaria-3 is single-language only; the documented native five
+#: (docs verified 2026-07-09 via the iron-benchmark port).
+SOLARIA3_LANGUAGES = frozenset({"en", "fr", "de", "es", "it"})
 INITIAL_POLL_INTERVAL_S = 5.0
 MAX_POLL_INTERVAL_S = 30.0
 POLL_INTERVAL_GROWTH = 1.5
@@ -87,16 +96,22 @@ class GladiaProvider(SttProvider):
             if timeout_seconds is None
             else int(timeout_seconds)
         )
+        model = self.effective_model()
+        lang = normalize_language(language) if language else None
+        # BEFORE the upload: the create call is the billing event, and a
+        # combination the docs already refuse must not be paid for.
+        self._check_language(model, lang)
+
         payload = audio.read_bytes(provider=self.name, timeout=min(timeout, 600))
 
         body: dict = {
             # Explicit model — omission means solaria-1 TODAY, but an
             # unpinned run can silently change under us.
-            "model": self.effective_model(),
+            "model": model,
             "diarization": bool(diarization),
         }
-        if language:
-            body["language_config"] = {"languages": [normalize_language(language)]}
+        if lang:
+            body["language_config"] = {"languages": [lang]}
         if provider_options:
             # The passthrough seam: applied AFTER the adapter's own params
             # so a caller can pin provider specifics (e.g. a vocabulary
@@ -109,6 +124,33 @@ class GladiaProvider(SttProvider):
         transcript = _normalize(done, provider=self.name)
         transcript.biasing = unsupported_biasing(keyterms)
         return transcript
+
+    def _check_language(self, model: Optional[str], lang: Optional[str]) -> None:
+        """Refuse a solaria-3 run the docs already refuse — before billing.
+
+        solaria-3 is single-language (EN/FR/DE/ES/IT) and documents no
+        auto-detect: ``language=None`` (auto), ``multi`` and any other
+        code would be discovered as a billable 4xx, so they are fatal
+        here. Ported verbatim from the research harness; solaria-1 (and
+        any other model) is untouched.
+        """
+        if model != "solaria-3":
+            return
+        if not lang:
+            raise TranscriptionError(
+                "gladia solaria-3 requires exactly one language "
+                f"({'/'.join(sorted(SOLARIA3_LANGUAGES))}); auto-detect is "
+                "not documented for it — pass a language or use the "
+                "solaria-1 model",
+                provider=self.name,
+            )
+        if lang not in SOLARIA3_LANGUAGES:
+            raise TranscriptionError(
+                f"gladia solaria-3 does not document language {lang!r}; "
+                f"documented: {sorted(SOLARIA3_LANGUAGES)} — use the "
+                "solaria-1 model for other languages",
+                provider=self.name,
+            )
 
     # ── HTTP helpers ──────────────────────────────────────────
 

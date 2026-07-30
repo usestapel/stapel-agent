@@ -5,6 +5,62 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-07-30
+
+### Fixed
+- **The transcript is verbatim again (xAI, Deepgram).** `model_configs`
+  advertised `filler_words: True` on the xAI and Deepgram profiles and neither
+  adapter ever sent it. Both providers default that knob to *false*, and false
+  does not merely tidy the text — it **removes** um/uh from the transcript
+  **and from `words[]`**, with nothing in the response to say it happened. So
+  0.7.1 promised evidence of what was said and delivered an edited version of
+  it, undetectably. Both adapters now send `filler_words=true` on every
+  request; a caller who wants the provider's editing asks for it explicitly
+  through `provider_options`.
+- **ElevenLabs: a word with no timing is dropped, not stamped `t=0`.** The
+  mapper turned a null `start` into `0.0`, which invents a measurement, moves
+  the word to the opening second of the meeting and folds it into the first
+  speaker's turn. The research harness this adapter was ported from drops such
+  a token and lets the validator report it — and `validation.elevenlabs` has
+  always said `UNTIMED_WORD ... (dropped by mapper)`. Now it is true.
+- **Gladia solaria-3 refuses an impossible run before the billable call.** The
+  catalog's solaria-3 entry warned that "RU/UK/auto/multi are refused before
+  any billable call" while the adapter had no such check: the run was uploaded,
+  created (the billing event) and only then rejected by the provider. The
+  single-language gate (EN/FR/DE/ES/IT, no auto-detect) is now in the adapter,
+  ahead of the upload — ported verbatim from the harness.
+- **Soniox reports a language.** `enable_language_identification` was declared
+  in the catalog and never sent, so `NormalizedTranscript.language` was
+  structurally always `None` for this provider. It is now always requested (it
+  is bundled in the async price, and it is the only language signal Soniox
+  emits — per token, never globally): the transcript language is the majority
+  language of its words, and a token language switch is a word boundary, as
+  the adapter's own docstring already claimed.
+- **Catalog entries that no adapter could honour.** `adapter_kwargs` said
+  "constructor kwargs" and named `model=`, which none of these adapters accept
+  — so `gladia_solaria3` and `speechmatics_batch_standard` would have run
+  solaria-1 and melia-1. It now names the real seam (`speech_model`, the
+  registration pin), and every config that has a model pins it instead of
+  inheriting whatever a host's `*_MODEL` setting says. The AssemblyAI profiles
+  advertised the plural `speech_models` array of a newer docs generation while
+  the adapter sends the singular `speech_model`; the catalog now documents this
+  adapter (`punctuate` / `format_text` included). Deepgram's `paragraphs` is
+  gone from the catalog rather than added to the request: its only effect is a
+  response block this library drops.
+
+### Added
+- **A conformance gate for the catalog** (`tests/test_stt_registry_conformance
+  .py`). Every defect above is one defect: `provider_params` claims "what the
+  adapter actually sends" and nothing checked it, so five entries drifted at
+  once and the drift shipped. The gate drives each config's own adapter over a
+  stub transport, collects every parameter that reached a request — query,
+  JSON body, multipart fields, nested config objects, even Speechmatics'
+  JSON-in-a-form-field — and compares it with `provider_params` in both
+  directions. A new entry cannot pass quietly: its provider needs a stub, and
+  every key it declares has to appear on the wire. Its limit is stated in the
+  module docstring: it proves what we ASK for, never what the provider does
+  with it — that still needs a live call.
+
 ## [0.7.1] — 2026-07-30
 
 ### Added

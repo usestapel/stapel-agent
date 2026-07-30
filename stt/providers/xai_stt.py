@@ -16,6 +16,12 @@ Facts verified against the official docs via the iron-benchmark port
   ``data=`` fields before ``files=`` parts, satisfying it structurally;
 - ``diarize`` "true"/"false": each word gains an integer 0-based
   ``speaker``;
+- ``filler_words`` "true"/"false", provider default FALSE — and false
+  actively REMOVES um/uh from ``text`` AND from ``words[]``. A
+  transcript is evidence of what was said, so this adapter always sends
+  ``filler_words=true``: an edited transcript that looks verbatim is
+  worse than a verbose one. A caller who wants the provider's editing
+  passes ``provider_options={"filler_words": "false"}``;
 - ``format=true`` (Inverse Text Normalization) REQUIRES ``language`` (a
   documented 400 otherwise) and is defined for a 25-language list —
   outside it only ``language`` is sent;
@@ -113,7 +119,13 @@ class XaiSttProvider(SttProvider):
         )
         payload = audio.read_bytes(provider=self.name, timeout=min(timeout, 600))
 
-        data: dict = {"diarize": "true" if diarization else "false"}
+        data: dict = {
+            "diarize": "true" if diarization else "false",
+            # Verbatim by default: the provider default (false) deletes
+            # um/uh from the text AND from words[], and nothing in the
+            # response says it happened.
+            "filler_words": "true",
+        }
         lang = normalize_language(language)
         if lang:
             data["language"] = lang

@@ -16,7 +16,17 @@ iron-benchmark port, 2026-07-04 / 2026-07-18):
   omits ``diarize_model`` entirely when diarization is off;
 - ``smart_format=true`` enables formatting + punctuation
   (``punctuated_word`` on every word; no separate ``punctuate`` needed);
-- ``utterances=true`` returns ``results.utterances[]`` (semantic turns).
+- ``utterances=true`` returns ``results.utterances[]`` (semantic turns);
+- ``filler_words=true`` KEEPS um/uh; the provider default (false) drops
+  them from the transcript and from the word list, silently. A
+  transcript is evidence of what was said, so this adapter always asks
+  for the verbatim form — ``provider_options={"filler_words": "false"}``
+  buys the edited one back.
+
+``paragraphs`` is deliberately NOT sent: its only effect is an extra
+``alternatives[0].paragraphs`` block, and this adapter's turn units come
+from ``results.utterances`` — asking for a block we drop would put a
+parameter on the wire that changes nothing we return.
 
 Vocabulary biasing (``keyterms``) — Nova-3 keyterm prompting (verified
 2026-07-18, live-proven): ``keyterm`` is a REPEATED query param
@@ -143,6 +153,9 @@ class DeepgramProvider(SttProvider):
             "model": self.effective_model(),
             "smart_format": "true",
             "utterances": "true",
+            # Verbatim by default — the provider default (false) removes
+            # um/uh from the transcript and the word list.
+            "filler_words": "true",
         }
         if diarization:
             # Enables diarization AND selects the batch diarizer (v2);

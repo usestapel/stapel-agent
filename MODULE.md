@@ -287,11 +287,22 @@ resolve_config("deepgram", "multi").model_config_id    # attribute a legacy
 
 A `ModelConfig` carries `provider_id` (the **STT registry key**, so config,
 adapter and rate card share one name), `model_id`, the `provider_params` the
-adapter really sends, `adapter_kwargs` (constructor kwargs — how two configs of
-one provider differ by *model*), `pricing_kwargs` (the price-variant channel for
-configs that share a wire model but bill differently), an optional `diarization`
-stage spec (hybrid: STT text + an external diarization provider's speakers), and
-`warnings` — provider-contract facts, not quality opinions.
+adapter really sends, `adapter_kwargs` (the per-registration pin — the
+`speech_model` class attribute of the adapter subclass a host registers, which
+is how two configs of one provider differ by *model*), `pricing_kwargs` (the
+price-variant channel for configs that share a wire model but bill
+differently), an optional `diarization` stage spec (hybrid: STT text + an
+external diarization provider's speakers), and `warnings` — provider-contract
+facts, not quality opinions.
+
+"The params the adapter really sends" is a checked claim, not a comment:
+`tests/test_stt_registry_conformance.py` drives every shipped config's own
+adapter — pinned through its `adapter_kwargs`, resolved through the provider
+registry — against a stub transport and compares `provider_params` with the
+parameters that actually reached the request, in both directions. A catalog
+entry that advertises a knob no adapter sends fails the build. What that gate
+cannot see is what the *provider* does with the request: only a live call
+proves that `filler_words=true` really preserves fillers.
 
 It carries **no price field**. `hourly_rate()` / `estimate_cost()` ask the
 provider's rate-card module, so the card and the estimate are one computation

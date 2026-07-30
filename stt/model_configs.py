@@ -75,10 +75,17 @@ class ModelConfig:
             ``multi`` run reaches the multilingual profile.
         provider_params: What the adapter actually sends, in semantic Python
             types — documentation of the wire form, read from the adapter code,
-            never a sketch of what it might send.
-        adapter_kwargs: Constructor kwargs for the adapter class. This is what
-            lets two configs of ONE provider differ by MODEL rather than by
-            language.
+            never a sketch of what it might send. Not a promise on trust:
+            ``tests/test_stt_registry_conformance.py`` drives every config's
+            adapter against a stub transport and compares this dict with the
+            parameters that actually reached the request, so an entry the
+            adapter does not send fails the build.
+        adapter_kwargs: The per-registration pin this config needs — class
+            attributes for the adapter subclass a host would register
+            (``SttProvider.speech_model``), which is how two configs of ONE
+            provider differ by MODEL rather than by language. The conformance
+            test builds the adapter through exactly these attributes, so a
+            name no adapter honours fails there too.
         pricing_kwargs: Extra kwargs for the rate card's ``estimate_cost`` —
             the price-variant channel for configs that share a wire model but
             bill differently.
@@ -187,6 +194,10 @@ _elevenlabs_scribe_v2 = ModelConfig(
     default_language="en",
     provider_params={"model_id": "scribe_v2", "diarize": True,
                      "timestamps_granularity": "word"},
+    # Pinned, not inherited: without the pin the config would run whatever
+    # ``ELEVENLABS_STT_MODEL`` happens to say, and "the same id always means
+    # the same model" would be a host setting away from false.
+    adapter_kwargs={"speech_model": "scribe_v2"},
     is_default=True,
     doc_url="https://elevenlabs.io/docs/api-reference/speech-to-text/convert",
 )
@@ -197,9 +208,14 @@ _deepgram_nova3 = ModelConfig(
     provider_id="deepgram",
     model_id="nova-3",
     default_language="en",
+    # ``paragraphs`` is NOT here: the adapter does not ask for it, because
+    # the block it would add is one this library drops (turns come from
+    # ``results.utterances``). ``filler_words`` IS here and IS sent — the
+    # provider default deletes um/uh from the transcript.
     provider_params={"model": "nova-3", "diarize_model": "latest",
                      "utterances": True, "smart_format": True,
-                     "paragraphs": True, "filler_words": True},
+                     "filler_words": True},
+    adapter_kwargs={"speech_model": "nova-3"},
     is_default=True,
     doc_url="https://developers.deepgram.com/docs/models-languages-overview",
 )
@@ -212,8 +228,8 @@ _deepgram_nova3_multi = ModelConfig(
     default_language="multi",
     provider_params={"model": "nova-3", "language": "multi",
                      "diarize_model": "latest", "utterances": True,
-                     "smart_format": True, "paragraphs": True,
-                     "filler_words": True},
+                     "smart_format": True, "filler_words": True},
+    adapter_kwargs={"speech_model": "nova-3"},
     # Same wire model as the mono default, a different price. Without this the
     # multilingual profile would be estimated at the monolingual rate and the
     # error would be invisible: both numbers are plausible.
@@ -227,7 +243,13 @@ _assemblyai_universal2 = ModelConfig(
     provider_id="assemblyai",
     model_id="universal-2",
     default_language="en",
-    provider_params={"speech_models": ["universal-2"], "speaker_labels": True},
+    # ``speech_model`` (SINGULAR) is this adapter's wire field; the
+    # research harness this catalog came from used the plural
+    # ``speech_models`` array of a later docs generation. The catalog
+    # documents THIS adapter, never the harness's.
+    provider_params={"speech_model": "universal-2", "speaker_labels": True,
+                     "punctuate": True, "format_text": True},
+    adapter_kwargs={"speech_model": "universal-2"},
     is_default=True,
     doc_url=("https://www.assemblyai.com/docs/speech-to-text/"
              "pre-recorded-audio/supported-languages"),
@@ -239,10 +261,11 @@ _assemblyai_u35pro = ModelConfig(
     provider_id="assemblyai",
     model_id="universal-3-5-pro",
     default_language="en",
-    # ONE model in the list: a two-model list is a provider-side fallback
-    # chain, and a run that may have used either model is not attributable.
-    provider_params={"speech_models": ["universal-3-5-pro"],
-                     "speaker_labels": True},
+    # ONE model, pinned: a fallback chain over two models is a run that may
+    # have used either, and such a run is not attributable.
+    provider_params={"speech_model": "universal-3-5-pro",
+                     "speaker_labels": True, "punctuate": True,
+                     "format_text": True},
     adapter_kwargs={"speech_model": "universal-3-5-pro"},
     warnings=("RU/UK are not Universal-3.5 Pro native languages; the "
               "behaviour of a single-model pin there is unverified",),
@@ -258,7 +281,7 @@ _gladia_solaria1 = ModelConfig(
     provider_params={"model": "solaria-1", "diarization": True},
     # Pinned even though it is also the API default: omitting the parameter
     # would run solaria-1 today and something else after a provider release.
-    adapter_kwargs={"model": "solaria-1"},
+    adapter_kwargs={"speech_model": "solaria-1"},
     is_default=True,
     doc_url="https://docs.gladia.io/chapters/pre-recorded-stt/quickstart",
 )
@@ -270,7 +293,7 @@ _gladia_solaria3 = ModelConfig(
     model_id="solaria-3",
     default_language="en",
     provider_params={"model": "solaria-3", "diarization": True},
-    adapter_kwargs={"model": "solaria-3"},
+    adapter_kwargs={"speech_model": "solaria-3"},
     warnings=("solaria-3 is single-language (EN/FR/DE/ES/IT) and async-only; "
               "RU/UK/auto/multi are refused before any billable call — use "
               "the Solaria-1 config for those",),
@@ -283,9 +306,9 @@ _speechmatics_melia1 = ModelConfig(
     provider_id="speechmatics",
     model_id="melia-1",
     default_language="en",
-    provider_params={"model": "melia-1", "language": "multi",
-                     "diarization": "speaker"},
-    adapter_kwargs={"model": "melia-1"},
+    provider_params={"type": "transcription", "model": "melia-1",
+                     "language": "multi", "diarization": "speaker"},
+    adapter_kwargs={"speech_model": "melia-1"},
     warnings=("Early-access model: no confidence scores, custom dictionary or "
               "speaker ID yet — confidence values in the output are "
               "placeholders",
@@ -301,8 +324,9 @@ _speechmatics_standard = ModelConfig(
     provider_id="speechmatics",
     model_id="standard",
     default_language="en",
-    provider_params={"model": "standard", "diarization": "speaker"},
-    adapter_kwargs={"model": "standard"},
+    provider_params={"type": "transcription", "model": "standard",
+                     "diarization": "speaker"},
+    adapter_kwargs={"speech_model": "standard"},
     warnings=("One language pack per run; multilingual audio needs the "
               "melia-1 config",
               "This is the API default when 'model' is omitted — pinned "
@@ -342,8 +366,9 @@ _soniox_async_v5 = ModelConfig(
                      "enable_speaker_diarization": True,
                      "enable_language_identification": True},
     # The wire pin lives in the create body, where model is a REQUIRED field
-    # the adapter already sends — no constructor kwargs needed.
-    adapter_kwargs={},
+    # the adapter already sends — pinned here so the id cannot be moved by
+    # the ``SONIOX_MODEL`` setting.
+    adapter_kwargs={"speech_model": "stt-async-v5"},
     warnings=("Tokens are SUB-WORD and millisecond-timed — the mapper merges "
               "them into words",
               "Uploaded files are NOT auto-deleted by Soniox (fixed quotas: "

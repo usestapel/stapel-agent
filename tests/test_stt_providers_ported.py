@@ -156,6 +156,32 @@ class TestDeepgram:
         assert "diarize_model" not in posted[0]["params"]
         assert "diarize" not in posted[0]["params"]
 
+    def test_filler_words_are_kept_on_every_request(self, configured, monkeypatch):
+        # The provider default (filler_words=false) DELETES um/uh from the
+        # transcript and the word list, and the response never says so. A
+        # transcript is evidence of what was said, so the verbatim form is
+        # asked for on every call — with or without diarization/language.
+        _, posted = self._run(monkeypatch, [FakeResponse(DEEPGRAM_BODY)])
+        assert posted[0]["params"]["filler_words"] == "true"
+        _, posted = self._run(
+            monkeypatch, [FakeResponse(DEEPGRAM_BODY)],
+            diarization=True, language="en",
+        )
+        assert posted[0]["params"]["filler_words"] == "true"
+
+    def test_paragraphs_is_not_requested(self, configured, monkeypatch):
+        # Its only effect is an alternatives[0].paragraphs block this
+        # library drops — turns come from results.utterances.
+        _, posted = self._run(monkeypatch, [FakeResponse(DEEPGRAM_BODY)])
+        assert "paragraphs" not in posted[0]["params"]
+
+    def test_caller_can_buy_back_the_edited_transcript(self, configured, monkeypatch):
+        _, posted = self._run(
+            monkeypatch, [FakeResponse(DEEPGRAM_BODY)],
+            provider_options={"filler_words": "false"},
+        )
+        assert posted[0]["params"]["filler_words"] == "false"
+
     def test_keyterms_repeated_param_and_biasing(self, configured, monkeypatch):
         transcript, posted = self._run(
             monkeypatch,
@@ -341,6 +367,71 @@ class TestGladia:
         assert transcript.language == "en"
         assert transcript.biasing is None
 
+    def test_solaria3_refuses_an_undocumented_language_before_billing(
+        self, configured, monkeypatch
+    ):
+        # The catalog's solaria-3 warning promises RU/UK/auto/multi are
+        # "refused before any billable call". The create call IS the billing
+        # event, so the refusal must land before the upload — no HTTP at all.
+        class Solaria3(GladiaProvider):
+            speech_model = "solaria-3"
+
+        posted, gotten, _, _ = mock_http(monkeypatch, "gladia")
+        for language in ("ru", "uk", "multi"):
+            with pytest.raises(TranscriptionError, match="solaria-3") as e:
+                Solaria3().transcribe(
+                    audio=AudioRef(data=b"OGG", mime="audio/ogg"),
+                    language=language,
+                )
+            assert not isinstance(e.value, RetryableTranscriptionError)
+        assert posted == [] and gotten == []
+
+    def test_solaria3_refuses_auto_detect_before_billing(
+        self, configured, monkeypatch
+    ):
+        class Solaria3(GladiaProvider):
+            speech_model = "solaria-3"
+
+        posted, gotten, _, _ = mock_http(monkeypatch, "gladia")
+        with pytest.raises(TranscriptionError, match="requires exactly one"):
+            Solaria3().transcribe(audio=AudioRef(data=b"OGG", mime="audio/ogg"))
+        assert posted == [] and gotten == []
+
+    def test_solaria3_runs_its_five_documented_languages(
+        self, configured, monkeypatch
+    ):
+        class Solaria3(GladiaProvider):
+            speech_model = "solaria-3"
+
+        for language in ("en", "fr", "de", "es", "it"):
+            posted, _, _, _ = mock_http(
+                monkeypatch,
+                "gladia",
+                post=[
+                    FakeResponse({"audio_url": "https://gladia.cdn/a"}),
+                    FakeResponse({"id": "job_1"}),
+                ],
+                get=[FakeResponse(GLADIA_DONE)],
+            )
+            Solaria3().transcribe(
+                audio=AudioRef(data=b"OGG", mime="audio/ogg"), language=language
+            )
+            assert posted[1]["json"]["model"] == "solaria-3"
+            assert posted[1]["json"]["language_config"] == {"languages": [language]}
+
+    def test_solaria1_takes_any_language_and_auto(self, configured, monkeypatch):
+        # The gate is solaria-3's alone — the generalist model is untouched.
+        _, posted, _ = self._run(
+            monkeypatch,
+            post=[
+                FakeResponse({"audio_url": "https://gladia.cdn/a"}),
+                FakeResponse({"id": "job_1"}),
+            ],
+            get=[FakeResponse(GLADIA_DONE)],
+            language="ru",
+        )
+        assert posted[1]["json"]["language_config"] == {"languages": ["ru"]}
+
     def test_keyterms_report_not_applied(self, configured, monkeypatch):
         # No Gladia biasing param is covered by the pinned sources —
         # requested terms are reported, never silently dropped or fatal.
@@ -516,6 +607,93 @@ class TestSoniox:
             get=[FakeResponse({"status": "completed"})],
         )
         assert "language_hints" not in requested[1]["json"]
+
+    def test_language_identification_is_always_requested(
+        self, configured, monkeypatch
+    ):
+        # LID is bundled in the async price and is the ONLY language signal
+        # Soniox emits (per token, never globally) — without it a Soniox
+        # transcript's language could only ever be None.
+        _, requested, _, _ = self._run(
+            monkeypatch,
+            request=[
+                FakeResponse({"id": "file_1"}),
+                FakeResponse({"id": "tr_1"}),
+                FakeResponse(SONIOX_TRANSCRIPT),
+            ],
+            get=[FakeResponse({"status": "completed"})],
+        )
+        assert requested[1]["json"]["enable_language_identification"] is True
+
+    def test_token_languages_become_the_transcript_language(
+        self, configured, monkeypatch
+    ):
+        # The majority of the merged words wins; a token language switch is
+        # also a word boundary (gluing across it would build a word that
+        # belongs to neither language).
+        payload = {
+            "id": "tr_1",
+            "text": "Hi привет мир",
+            "tokens": [
+                {"text": "Hi", "start_ms": 0, "end_ms": 100, "speaker": "1",
+                 "language": "en"},
+                {"text": " при", "start_ms": 100, "end_ms": 200, "speaker": "1",
+                 "language": "ru"},
+                {"text": "вет", "start_ms": 200, "end_ms": 300, "speaker": "1",
+                 "language": "ru"},
+                {"text": " мир", "start_ms": 300, "end_ms": 400, "speaker": "1",
+                 "language": "ru"},
+            ],
+        }
+        transcript, _, _, _ = self._run(
+            monkeypatch,
+            request=[
+                FakeResponse({"id": "file_1"}),
+                FakeResponse({"id": "tr_1"}),
+                FakeResponse(payload),
+            ],
+            get=[FakeResponse({"status": "completed"})],
+        )
+        assert [w.text for w in transcript.words] == ["Hi", "привет", "мир"]
+        assert transcript.language == "ru"
+
+    def test_language_split_does_not_glue_a_code_switch(
+        self, configured, monkeypatch
+    ):
+        payload = {
+            "id": "tr_1",
+            "text": "dataдата",
+            "tokens": [
+                {"text": "data", "start_ms": 0, "end_ms": 100, "speaker": "1",
+                 "language": "en"},
+                {"text": "дата", "start_ms": 100, "end_ms": 200, "speaker": "1",
+                 "language": "ru"},
+            ],
+        }
+        transcript, _, _, _ = self._run(
+            monkeypatch,
+            request=[
+                FakeResponse({"id": "file_1"}),
+                FakeResponse({"id": "tr_1"}),
+                FakeResponse(payload),
+            ],
+            get=[FakeResponse({"status": "completed"})],
+        )
+        assert [w.text for w in transcript.words] == ["data", "дата"]
+
+    def test_no_token_languages_leaves_the_language_unknown(
+        self, configured, monkeypatch
+    ):
+        transcript, _, _, _ = self._run(
+            monkeypatch,
+            request=[
+                FakeResponse({"id": "file_1"}),
+                FakeResponse({"id": "tr_1"}),
+                FakeResponse(SONIOX_TRANSCRIPT),  # no per-token language
+            ],
+            get=[FakeResponse({"status": "completed"})],
+        )
+        assert transcript.language is None
 
     def test_keyterms_report_not_applied(self, configured, monkeypatch):
         transcript, _, _, _ = self._run(
@@ -806,6 +984,26 @@ class TestXaiStt:
         assert transcript.language is None
         assert transcript.duration_seconds == 2.0
         assert transcript.biasing is None
+
+    def test_filler_words_are_kept_on_every_request(self, configured, monkeypatch):
+        # xAI's default (filler_words=false) does not merely tidy the text:
+        # it removes um/uh from words[] too, so nothing downstream can tell
+        # an edited transcript from a verbatim one. The adapter always asks
+        # for verbatim — with a language, without one, with keyterms.
+        for kwargs in ({}, {"language": "ru-RU", "diarization": True},
+                       {"keyterms": ["IronMemo"]}):
+            _, posted = self._run(monkeypatch, [FakeResponse(XAI_BODY)], **kwargs)
+            assert posted[0]["data"]["filler_words"] == "true", kwargs
+
+    def test_caller_can_buy_back_the_edited_transcript(self, configured, monkeypatch):
+        # provider_options is applied after the adapter's own fields, so a
+        # caller who WANTS the provider's editing can still have it.
+        _, posted = self._run(
+            monkeypatch,
+            [FakeResponse(XAI_BODY)],
+            provider_options={"filler_words": "false"},
+        )
+        assert posted[0]["data"]["filler_words"] == "false"
 
     def test_unformattable_language_sends_no_format(self, configured, monkeypatch):
         # uk is NOT in the documented formatting list — sending

@@ -175,8 +175,17 @@ class ElevenLabsProvider(SttProvider):
 
 
 def _normalize(payload: dict, *, provider: str) -> NormalizedTranscript:
-    """Ported verbatim in behaviour: skip non-word tokens, group
-    consecutive same-speaker words into utterances."""
+    """Ported verbatim in behaviour: skip non-word tokens, DROP word
+    tokens with no timing, group consecutive same-speaker words into
+    utterances.
+
+    A word whose ``start``/``end`` is null cannot be placed on the
+    timeline. It is dropped, never parked at ``t=0`` — an invented
+    timestamp is indistinguishable from a measured one, and it would
+    move a word to the start of the meeting and into the first speaker's
+    turn. The loss is not silent: ``validation.elevenlabs`` reports it as
+    ``UNTIMED_WORD`` (whose message has always said "dropped by mapper")
+    """
     words_in = payload.get("words") or []
     words: list[NormalizedWord] = []
     speakers: list[str] = []
@@ -208,8 +217,12 @@ def _normalize(payload: dict, *, provider: str) -> NormalizedTranscript:
         text = raw.get("text", "")
         if not text:
             continue
-        start = float(raw.get("start") or 0.0)
-        end = float(raw.get("end") or start)
+        if raw.get("start") is None or raw.get("end") is None:
+            # Untimed word — dropped, not stamped t=0 (see the docstring);
+            # the validator's UNTIMED_WORD warning is the report.
+            continue
+        start = float(raw["start"])
+        end = float(raw["end"])
         speaker = raw.get("speaker_id")
         if speaker and speaker not in speakers:
             speakers.append(speaker)

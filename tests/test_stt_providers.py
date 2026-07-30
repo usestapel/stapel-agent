@@ -368,6 +368,44 @@ class TestElevenLabs:
         assert transcript.speakers_detected == []
         assert transcript.utterances[0].speaker is None
 
+    def test_untimed_word_is_dropped_not_stamped_at_zero(
+        self, configured, monkeypatch
+    ):
+        # Scribe may return a word token with null start/end. Parking it at
+        # t=0.0 would invent a measurement AND move the word to the front of
+        # the meeting, into the first speaker's turn. The harness this was
+        # ported from drops it and lets the validator report it — verbatim
+        # here (validation.elevenlabs UNTIMED_WORD says "dropped by mapper").
+        body = {
+            "language_code": "en",
+            "words": [
+                {"text": "Hi", "start": 10.0, "end": 10.4, "type": "word",
+                 "speaker_id": "speaker_0"},
+                {"text": "ghost", "start": None, "end": None, "type": "word",
+                 "speaker_id": "speaker_1"},
+                {"text": "there", "start": 10.5, "end": 10.9, "type": "word",
+                 "speaker_id": "speaker_0"},
+            ],
+        }
+        transcript, _ = self._run(monkeypatch, [FakeResponse(body)])
+        assert [w.text for w in transcript.words] == ["Hi", "there"]
+        assert [w.start for w in transcript.words] == [10.0, 10.5]
+        # ...and the dropped word did not split the speaker's turn either.
+        assert [(u.speaker, u.text) for u in transcript.utterances] == [
+            ("speaker_0", "Hi there")
+        ]
+
+    def test_word_missing_only_its_end_is_dropped_too(self, configured, monkeypatch):
+        body = {
+            "language_code": "en",
+            "words": [
+                {"text": "half", "start": 3.0, "end": None, "type": "word"},
+                {"text": "ok", "start": 4.0, "end": 4.2, "type": "word"},
+            ],
+        }
+        transcript, _ = self._run(monkeypatch, [FakeResponse(body)])
+        assert [w.text for w in transcript.words] == ["ok"]
+
 
 ASSEMBLY_DONE = {
     "status": "completed",

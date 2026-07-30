@@ -6,8 +6,9 @@ iron-benchmark port, 2026-07-10):
 1. ``POST /v1/files`` — multipart field ``file`` → ``{id}``.
    Upload-capable: any AudioRef kind via ``read_bytes()``;
 2. ``POST /v1/transcriptions`` — JSON ``{model, file_id,
-   enable_speaker_diarization, language_hints?}`` → ``{id}``.
-   Each successful create is a BILLING event;
+   enable_speaker_diarization, enable_language_identification,
+   language_hints?}`` → ``{id}``. Each successful create is a BILLING
+   event;
 3. ``GET /v1/transcriptions/{id}`` — poll until ``completed``
    (``error`` OR ``failed`` is terminal-fatal — the docs use both);
 4. ``GET /v1/transcriptions/{id}/transcript`` → ``{id, text, tokens[]}``;
@@ -18,12 +19,17 @@ iron-benchmark port, 2026-07-10):
 
 Auth: ``Authorization: Bearer <key>``. ``language_hints`` BIAS language
 detection, they do not restrict it — omitted entirely with no language
-(the model's native full-auto multilingual mode). Tokens are SUB-WORD
-("Beau"/"ti"/"ful") with native MILLISECOND times and a STRING speaker
-("1".."15"); this adapter merges them into words (a token starts a new
-word when it is first, its text begins with whitespace, or its
-speaker/language changed — punctuation glues onto the word it follows)
-and converts ms → s.
+(the model's native full-auto multilingual mode).
+``enable_language_identification`` is always sent TRUE: it is bundled in
+the async price and it is the ONLY language signal this provider gives —
+Soniox reports language per TOKEN and never globally, so without it a
+Soniox transcript's ``language`` could only ever be None. Tokens are
+SUB-WORD ("Beau"/"ti"/"ful") with native MILLISECOND times, a STRING
+speaker ("1".."15") and (under LID) a per-token ``language``; this
+adapter merges them into words (a token starts a new word when it is
+first, its text begins with whitespace, or its speaker/language changed
+— punctuation glues onto the word it follows) and converts ms → s. The
+transcript ``language`` is the most common word language.
 
 No vocabulary biasing is wired: the OpenAPI documents an optional
 ``context`` (general/text/terms) but its terms shape is not covered by
@@ -38,6 +44,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import Counter
 from typing import Optional
 
 import requests
@@ -99,6 +106,9 @@ class SonioxProvider(SttProvider):
             # silently routes to v5 server-side; pin the real id).
             "model": self.effective_model(),
             "enable_speaker_diarization": bool(diarization),
+            # Bundled in the async price and the only language signal
+            # this provider emits (per token, never globally).
+            "enable_language_identification": True,
         }
         if language:
             # One hint biases detection without restricting it; no
@@ -282,7 +292,8 @@ def _grow(interval: float) -> float:
 class _WordAccumulator:
     """A word being assembled from consecutive sub-word tokens."""
 
-    __slots__ = ("text", "start_ms", "end_ms", "confidences", "speaker")
+    __slots__ = ("text", "start_ms", "end_ms", "confidences", "speaker",
+                 "language")
 
     def __init__(self, tok: dict):
         self.text = (tok.get("text") or "").lstrip()
@@ -291,6 +302,7 @@ class _WordAccumulator:
         conf = tok.get("confidence")
         self.confidences = [conf] if conf is not None else []
         self.speaker = tok.get("speaker")
+        self.language = tok.get("language")
 
     def absorb(self, tok: dict) -> None:
         self.text += tok.get("text") or ""
@@ -306,8 +318,10 @@ def _merge_tokens(tokens: list) -> list[_WordAccumulator]:
     """Merge Soniox sub-word tokens into words. Documented behaviour:
     "Beau|ti|ful" carries no leading spaces, " are" does, "?" attaches
     space-less — so a token starts a NEW word when it is the first one,
-    its text begins with whitespace, or its speaker changed; otherwise it
-    glues onto the current word."""
+    its text begins with whitespace, or its speaker OR language changed;
+    otherwise it glues onto the current word. A language switch mid-word
+    is a code-switch boundary, and gluing across it would invent a word
+    that belongs to neither language."""
     words: list[_WordAccumulator] = []
     for tok in tokens:
         if not isinstance(tok, dict):
@@ -319,6 +333,7 @@ def _merge_tokens(tokens: list) -> list[_WordAccumulator]:
             not words
             or text[:1].isspace()
             or tok.get("speaker") != words[-1].speaker
+            or tok.get("language") != words[-1].language
         )
         if starts_new:
             words.append(_WordAccumulator(tok))
@@ -337,7 +352,8 @@ def _normalize(
     """Map a ``GET .../transcript`` body → NormalizedTranscript.
     Times: native ms → s; STRING speaker "1" → ``speaker_1``. The final
     job object contributes ``audio_duration_ms`` (the provider-billed
-    duration) when available."""
+    duration) when available. The transcript language is the most common
+    per-word language (LID reports it per token, never globally)."""
     merged = _merge_tokens(payload.get("tokens") or [])
 
     words: list[NormalizedWord] = []
@@ -368,9 +384,13 @@ def _normalize(
     elif words:
         duration = max(w.end for w in words)
 
+    # LID is per token; the transcript-level answer is the majority of the
+    # merged words (ties broken by first appearance — Counter is stable).
+    lang_counts = Counter(w.language for w in merged if w.language)
+
     return NormalizedTranscript(
         provider=provider,
-        language=None,  # Soniox reports language per token, not globally
+        language=lang_counts.most_common(1)[0][0] if lang_counts else None,
         duration_seconds=duration,
         words=words,
         utterances=utterances_from_words(words),
