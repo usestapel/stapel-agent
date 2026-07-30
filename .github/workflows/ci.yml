@@ -44,7 +44,10 @@ jobs:
         run: python -c "import stapel_agent; print('import OK')"
 
       - name: Install test dependencies
-        run: pip install pytest pytest-django pytest-cov
+        # stapel-tools (dependency-free) carries the capabilities emitter that
+        # tests/test_capabilities_surface.py drift-gates — without it that gate
+        # would skip, and a silently skipped gate is how the document rots.
+        run: pip install pytest pytest-django pytest-cov "stapel-tools>=0.22.0,<1"
 
       - name: Tests with coverage
         run: |
