@@ -1,8 +1,11 @@
 # stapel-agent
 
-[![CI](https://github.com/usestapel/stapel-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/usestapel/stapel-agent/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/usestapel/stapel-agent/graph/badge.svg)](https://codecov.io/gh/usestapel/stapel-agent)
-[![PyPI](https://img.shields.io/pypi/v/stapel-agent.svg)](https://pypi.org/project/stapel-agent/)
+[![CI](https://img.shields.io/github/actions/workflow/status/usestapel/stapel-agent/ci.yml?branch=main&logo=github&label=CI)](https://github.com/usestapel/stapel-agent/actions/workflows/ci.yml?query=branch%3Amain)
+[![coverage](https://img.shields.io/codecov/c/github/usestapel/stapel-agent?branch=main&logo=codecov&label=coverage)](https://app.codecov.io/gh/usestapel/stapel-agent)
+[![pypi](https://img.shields.io/pypi/v/stapel-agent?logo=pypi&logoColor=white&label=pypi)](https://pypi.org/project/stapel-agent/)
+[![downloads](https://static.pepy.tech/badge/stapel-agent/month)](https://pepy.tech/project/stapel-agent)
+[![python](https://img.shields.io/pypi/pyversions/stapel-agent?logo=python&logoColor=white)](https://pypi.org/project/stapel-agent/)
+[![license](https://img.shields.io/github/license/usestapel/stapel-agent)](https://github.com/usestapel/stapel-agent/blob/main/LICENSE)
 
 > LLM facade — JSON completion, translation, transcription and summarization in front of swappable model/STT providers, with a prompt cache and a token ledger
 
