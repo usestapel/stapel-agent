@@ -5,6 +5,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-08-02
+
+### Packaging / contract
+
+- `surface` section of `docs/capabilities.json` now names all four `safety/`
+  gate functions (`detect_pwned_markers`, `redact_markers`, `sanitize_for_rag`,
+  `redaction_gate`) with a curated "when to reach for this" line, derived by
+  AST walk from `surface_roots` and drift-gated by `tests/test_capabilities_surface.py`
+  (requires `stapel-tools>=0.22.0`). The rest of `docs/capabilities.json`
+  remains hand-written — this module has no gate registry or `docs/schema.json`.
+- `docs/llms.txt` — the fifth contract artifact — is now emitted, drift-gated
+  by `make contract`/`contract-check`, badged in the README, and listed in
+  `package-data` so it ships in the wheel.
+- `package-data` also now carries `docs/capabilities.json`, `docs/flows.json`,
+  `docs/errors.json` and `CONFIG.MD` so `stapel-catalog --from-installed` can
+  see them.
+- Badge canon + Python 3.14 classifier + migration-lint enabled in CI.
+
 ## [0.8.0] — 2026-07-30
 
 ### Fixed
