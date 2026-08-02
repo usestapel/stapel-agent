@@ -1,0 +1,42 @@
+# stapel-agent 0.8.0
+
+LLM facade: JSON completion, translation, transcription and summarization in front of swappable model / speech-to-text / image-generation providers (Anthropic, OpenAI-compatible, Claude Code CLI, whisper-http, ElevenLabs, AssemblyAI, openai-images), with a prompt cache and a per-call token ledger. Python port of a prior NestJS service — same HTTP paths/contracts, plus an in-process comm surface for monolith deployments.
+
+Contract: axes 4 · surface 4 · extension points 4.
+Generated from docs/capabilities.json by `stapel-llms-txt` — do not edit; drift-gated by `make contract-check`.
+
+## Configuration axes — what a product switches on
+Settings keys; `default` is what you get by saying nothing. Turning an axis off unmounts the operations it gates.
+- CACHE_POLICY [enum, default "stapel_agent.cache.PromptLogCachePolicy"] — Prompt cache policy
+  Per-source cache-by-prompt policy; the default answers from the latest matching success row within CACHE_TTL (conf.py, MODULE.md Settings table).
+- DEFAULT_IMAGE_PROVIDER [enum, default "openai-images"] — Default image-generation provider
+  Image-generation provider used when a request pins none, resolved against the merged IMAGE_PROVIDERS registry (conf.py, MODULE.md).
+- DEFAULT_PROVIDER [enum, default "anthropic"] — Default LLM provider
+  LLM provider used when a completion request names none, resolved against the merged PROVIDERS registry (conf.py, MODULE.md 'LLM providers').
+- DEFAULT_STT_PROVIDER [enum, default "whisper-http"] — Default transcription provider
+  Speech-to-text provider used when a transcription request pins none and no language route matches (conf.py, MODULE.md).
+
+## Usage surface — call these before writing your own
+This is the answer to "does Stapel already have something for X?". `instead of` names the outside symbol this one displaces.
+### gate_function
+- detect_pwned_markers — stapel_agent.safety.markers.detect_pwned_markers
+  The FLAG half of the flag/escape split: report which known prompt-injection markers a piece of untrusted text carries, without deciding any encoding. Run it on every LLM output and every retrieved chunk before that text reaches a consumer; the SafetyReport is what a caller branches on.
+- redact_markers — stapel_agent.safety.markers.redact_markers
+  The ESCAPE half for auto-escaping template engines (Jinja2): strips injection markers and does NO entity encoding, because the template engine already encodes and pre-encoding here double-escapes. Use this — not a hand-rolled replace — for any text rendered into a template.
+- redaction_gate — stapel_agent.safety.redaction.redaction_gate
+  Call before writing ANY model-produced text to a durable artifact (prompt log, cache row, transcript, report): raises RedactionError when the payload carries a provider key or the value of a *_API_KEY/_SECRET/_PASSWORD env var. It is a gate, not a filter — there is nothing to inspect afterwards, so an import without a call is the whole failure mode (that is exactly how it was lost once during a port: the import survived, the call did not).
+- sanitize_for_rag — stapel_agent.safety.markers.sanitize_for_rag
+  The ESCAPE half for text fed BACK into a model: strips markers and collapses whitespace. Mandatory for every retrieval chunk — an unfiltered marker inside a RAG chunk lands in the follow-up model's context and re-triggers the same attack, so 'the reader already flagged it' is not a reason to skip this.
+
+## Extension points — what a product replaces, fork-free
+- CACHE_POLICY [dotted_path]
+  Dotted path to a CachePolicy subclass, in import_strings, instantiated per call (conf.py, MODULE.md 'Cache policy').
+- IMAGE_PROVIDERS [merge_registry]
+  MERGE over images.BUILTIN_IMAGE_PROVIDERS (openai-images); same merge semantics as PROVIDERS (conf.py, MODULE.md Settings table).
+- PROVIDERS [merge_registry]
+  Flagship seam: MERGE over providers.BUILTIN_PROVIDERS (anthropic/openai-compat/claude-code); None/'' removes a name; also extendable at runtime via register_provider(name, cls_or_path). ABC contract: complete()/resolve_model()/supports_images (MODULE.md 'LLM providers — open registry').
+- STT_PROVIDERS [merge_registry]
+  MERGE over stt.BUILTIN_STT_PROVIDERS (whisper-http/elevenlabs/assemblyai); same merge semantics as PROVIDERS (conf.py, MODULE.md Settings table).
+
+## Fits with — fleet dependencies
+- stapel-core (required) — the only stapel-* dependency: AppSettings, comm bus for in-process calls (pyproject.toml dependency)

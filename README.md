@@ -6,6 +6,7 @@
 [![downloads](https://static.pepy.tech/badge/stapel-agent/month)](https://pepy.tech/project/stapel-agent)
 [![python](https://img.shields.io/pypi/pyversions/stapel-agent?logo=python&logoColor=white)](https://pypi.org/project/stapel-agent/)
 [![license](https://img.shields.io/github/license/usestapel/stapel-agent)](https://github.com/usestapel/stapel-agent/blob/main/LICENSE)
+[![llms.txt](https://img.shields.io/badge/llms.txt-blue)](https://github.com/usestapel/stapel-agent/blob/main/docs/llms.txt)
 
 > LLM facade — JSON completion, translation, transcription and summarization in front of swappable model/STT providers, with a prompt cache and a token ledger
 

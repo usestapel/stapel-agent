@@ -26,10 +26,14 @@ migration-lint:
 # NOTE the rest of docs/capabilities.json is still hand-written (this module
 # has no gate registry and no docs/schema.json) — `--patch` refreshes only the
 # derivable parts: module/version and `surface`.
+# Third: docs/llms.txt, the fifth contract artifact (stapel_tools.llms_txt) —
+# rendered straight from the docs/capabilities.json the two steps above produce.
 contract:
 	$(PYTHON) -m stapel_agent._contracts
 	$(PYTHON) -m stapel_tools.surface . --patch
+	$(PYTHON) -m stapel_tools.llms_txt .
 
 contract-check:
 	$(PYTHON) -m stapel_agent._contracts --check
 	$(PYTHON) -m stapel_tools.surface . --patch --check
+	$(PYTHON) -m stapel_tools.llms_txt . --check
