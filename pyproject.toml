@@ -57,7 +57,7 @@ package-dir = {"stapel_agent" = "."}
 packages = ["stapel_agent", "stapel_agent.diarization", "stapel_agent.diarization.pricing", "stapel_agent.diarization.providers", "stapel_agent.diarization.validation", "stapel_agent.embeddings", "stapel_agent.embeddings.providers", "stapel_agent.images", "stapel_agent.images.providers", "stapel_agent.migrations", "stapel_agent.providers", "stapel_agent.rerank", "stapel_agent.rerank.providers", "stapel_agent.safety", "stapel_agent.stt", "stapel_agent.stt.pricing", "stapel_agent.stt.providers", "stapel_agent.stt.validation"]
 
 [tool.setuptools.package-data]
-stapel_agent = ["py.typed", "migrations/*.py", "schemas/**/*.json", "migrations/**/*.py", "docs/capabilities.json", "docs/flows.json", "docs/errors.json", "CONFIG.MD"]
+stapel_agent = ["py.typed", "migrations/*.py", "schemas/**/*.json", "migrations/**/*.py", "docs/capabilities.json", "docs/llms.txt", "docs/flows.json", "docs/errors.json", "CONFIG.MD"]
 
 [tool.ruff]
 target-version = "py311"
