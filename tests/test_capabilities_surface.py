@@ -22,10 +22,21 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip(
-    "stapel_tools",
-    reason="stapel-tools carries the capabilities emitter this gate runs.",
-)
+try:
+    import stapel_tools  # noqa: F401  (probe: the emitter must be importable)
+except ImportError as exc:  # pragma: no cover - environment failure, not a branch
+    # NOT pytest.importorskip. A drift gate that skips when its emitter is
+    # missing reports `1 skipped`, exits 0, and disappears among a hundred
+    # green tests — exactly how `redaction_gate` and `detect_pwned_markers`
+    # could go unwired with nothing red anywhere to say so. A gate that
+    # cannot run has FAILED; it has not passed.
+    raise RuntimeError(
+        "capabilities surface drift gate cannot run: stapel-tools is not "
+        "importable, and it carries the capabilities emitter this gate "
+        "measures drift against. Install it (workspace venv, or `pip install "
+        "stapel-tools`) and re-run. This is a hard failure on purpose — a "
+        "skipped drift gate is silently no gate."
+    ) from exc
 
 from stapel_tools.surface import _stable_json, load_meta, patch_capabilities  # noqa: E402
 
