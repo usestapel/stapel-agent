@@ -572,23 +572,22 @@ def llm_generate_image(payload: dict) -> dict:
     )
 
 
-# ─── Те же операции, но как ЗАДАЧИ ─────────────────────────────────────
+# ─── Same operations, exposed as TASKS ─────────────────────────────────
 #
-# Расшифровка, сводка и диаризация идут минутами, а при занятых
-# исполнителях — сколько угодно. Синхронный Function для них структурно
-# негоден: вызывающий обязан назвать срок ожидания заранее, а он
-# неугадываем — очередь его не знает. Замер 08.08.2026: расшифровка
-# пятнадцатиминутной встречи 14 секунд, сводка 36, при дефолте ожидания в
-# ПЯТЬ секунд. Каждая настоящая запись уходила в error.
+# Transcription/summary/diarization take minutes, or longer under load — a
+# synchronous Function is a bad fit, since the caller must declare a wait
+# timeout upfront that the queue has no way to predict. Measured 2026-08-08:
+# a 15-minute meeting took 14s to transcribe, 36s to summarize, against a
+# 5s default wait — every real recording errored out.
 #
-# Регистрируем ОБОИМИ примитивами намеренно и на время перехода:
-# развёртывания, которые ещё зовут `call(...)`, продолжают работать, а
-# перешедшие на `start(...)` получают очередь, наблюдаемое состояние и
-# ретраи из коробки. Снимать Function-регистрацию — отдельным решением,
-# когда потребителей у синхронного пути не останется.
+# Registered under BOTH primitives deliberately, for the transition:
+# deployments still calling `call(...)` keep working, while callers on
+# `start(...)` get a queue, observable state, and retries for free. Drop the
+# Function registration as a separate decision once nothing calls the sync
+# path anymore.
 #
-# Имена совпадают с функциями сознательно: одна операция — одно имя, в
-# каком бы примитиве её ни звали.
+# Names match the functions on purpose: one operation, one name, regardless
+# of which primitive invokes it.
 
 _LONG_RUNNING = {
     "llm.transcribe": llm_transcribe,
@@ -604,8 +603,8 @@ def _register_long_running_as_tasks() -> None:
         try:
             register_task(kind, handler)
         except ValueError:
-            # Уже зарегистрирован (повторный импорт модуля) — это не
-            # ошибка конфигурации, а идемпотентность.
+            # Already registered (module re-imported) — idempotency, not
+            # a config error.
             pass
 
 

@@ -312,11 +312,11 @@ class TestHttpServerEmbeddings:
 
     def test_happy_path_exact_request_shape(self, configured, monkeypatch):
         result, captured = self._run(
-            monkeypatch, [FakeResponse(HTTP_BODY)], texts=["раз", "два"]
+            monkeypatch, [FakeResponse(HTTP_BODY)], texts=["one", "two"]
         )
         req = captured[0]
         assert req["url"] == "http://bge-m3:9000/embed"
-        assert req["json"] == {"texts": ["раз", "два"]}
+        assert req["json"] == {"texts": ["one", "two"]}
         # no key configured → no Authorization header
         assert req["headers"] == {"Content-Type": "application/json"}
         assert req["timeout"] == 120  # EMBEDDINGS_TIMEOUT default

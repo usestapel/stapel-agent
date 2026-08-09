@@ -211,7 +211,7 @@ class TestDeepInfraRerank:
         return result, captured
 
     def test_builder_is_paired_arrays(self):
-        # The [НЕ ВЕРИФИЦИРОВАНО live] wire shape lives in ONE pure
+        # The [NOT VERIFIED live] wire shape lives in ONE pure
         # function — this is the assertion to revisit after a live check.
         body = build_rerank_request("q", ["d0", "d1", "d2"])
         assert body == {
@@ -437,14 +437,14 @@ class TestHttpServerRerank:
         result, captured = self._run(
             monkeypatch,
             [FakeResponse(TEI_BODY)],
-            query="что важнее?",
-            documents=["раз", "два", "три"],
+            query="which matters more?",
+            documents=["one", "two", "three"],
         )
         req = captured[0]
         assert req["url"] == "http://reranker:8080/rerank"
         assert req["json"] == {
-            "query": "что важнее?",
-            "texts": ["раз", "два", "три"],
+            "query": "which matters more?",
+            "texts": ["one", "two", "three"],
         }
         # the keyless self-host fallback — never an Authorization header
         assert req["headers"] == {"Content-Type": "application/json"}
