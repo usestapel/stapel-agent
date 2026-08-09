@@ -28,12 +28,21 @@ migration-lint:
 # derivable parts: module/version and `surface`.
 # Third: docs/llms.txt, the fifth contract artifact (stapel_tools.llms_txt) —
 # rendered straight from the docs/capabilities.json the two steps above produce.
+#
+# Fourth: README.md, the sixth artifact (stapel_tools.readme). The page is
+# ASSEMBLED, not written: docs/readme.md carries the human half (what this
+# module is, how to think about it) and everything a hand-written README used
+# to restate — title, badges, version, surface counts, doc links, the licence
+# footer — is generated from pyproject.toml plus the artifacts above. Edit
+# docs/readme.md; never README.md.
 contract:
 	$(PYTHON) -m stapel_agent._contracts
 	$(PYTHON) -m stapel_tools.surface . --patch
 	$(PYTHON) -m stapel_tools.llms_txt .
+	$(PYTHON) -m stapel_tools.readme .
 
 contract-check:
 	$(PYTHON) -m stapel_agent._contracts --check
 	$(PYTHON) -m stapel_tools.surface . --patch --check
 	$(PYTHON) -m stapel_tools.llms_txt . --check
+	$(PYTHON) -m stapel_tools.readme . --check
