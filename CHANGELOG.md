@@ -5,6 +5,37 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-08-14
+
+The 2026-08-11 security audit: AGENT-01, AGENT-02 and AI-01, plus the
+settings-hardening follow-up. Minor rather than patch — pre-1.0 semver reads
+minor as breaking, and three of the notes below refuse configurations that
+used to work.
+
+### Changed — BREAKING: requires stapel-core >= 0.24.0 (was `>=0.15.11`)
+
+`stt/base.py` imports `fetch_bytes` / `SafeFetchError` from
+`stapel_core.net` on the `AudioRef.read_bytes` path — the AGENT-01 fix below
+— so on an older core this package does not import at all.
+
+**The floor this replaces was knowingly wrong**, and the commit that
+introduced the import said so: `stapel_core.net` existed only on core's
+`sec/audit-2026-08-11` branch, no released core contained it, and no honest
+number could be written at the time. Core **0.24.0 is the release that ships
+it** — the first, and so far only, tag containing that module — so this is
+the first version of stapel-agent whose declared floor is true.
+
+0.24.0 also covers a second dependency this audit created: `CACHE_POLICY` is
+an `import_strings` key, and core 0.24.0 makes such keys implicitly
+`no_env`, so an environment variable cannot pick the class mediating the now
+tenant-scoped prompt cache. The `NO_ENV` list below closes the same door for
+the keys core cannot know about, and core's new `stapel_core.conf.W001`
+check names any environment variable a namespace is now refusing to read.
+
+The superseded `>=0.15.11` floor (`stapel_core.schema_strict`, the
+strict-subset transform the OpenAI-compatible transport applies before every
+constrained call) remains satisfied.
+
 ### Security — UPGRADE NOTE: the settings namespace stopped taking orders from the environment
 
 `AppSettings` falls back to `os.environ[KEY]` for every key a namespace does
