@@ -67,6 +67,23 @@ agent_settings = AppSettings(
         "STT_LANGUAGE_ROUTES": {},
         # Hard cap (seconds) on one provider's submit+poll cycle.
         "STT_TIMEOUT": 1800,
+        # Audio-download guards (AudioRef.read_bytes → stapel_core.net).
+        # The URL in an AudioRef comes from the request payload, so this is
+        # an SSRF sink and a memory sink: a caller must not be able to make
+        # a worker hold an arbitrary body for an arbitrary time. Both are
+        # ceilings — a per-call timeout argument may lower them, never raise
+        # them.
+        "STT_DOWNLOAD_MAX_BYTES": 128 * 1024 * 1024,
+        # Per-socket connect/read timeout for one hop.
+        "STT_DOWNLOAD_TIMEOUT": 30.0,
+        # Whole download, redirects included. A per-socket timeout alone
+        # bounds nothing against a server that trickles one byte per window.
+        "STT_DOWNLOAD_TOTAL_DEADLINE": 300.0,
+        # Optional exact-host allowlist for audio URLs ([] = any public
+        # host). Deployments that only ever pass presigned URLs from their
+        # own object store should list that store here: it turns the
+        # SSRF-shaped surface into a fetch of one known origin.
+        "STT_DOWNLOAD_ALLOWED_HOSTS": [],
         # Overlay merged OVER stt.pricing.BUILTIN_STT_PRICING_MODULES —
         # {provider name: dotted path to a module exposing estimate_cost()}.
         # A host that registered its own STT adapter registers its rate card
@@ -188,6 +205,18 @@ agent_settings = AppSettings(
         "CACHE_LOOKUP": {"llm_facade": False, "translate": True, "summarize": False},
         # Seconds; cached rows older than this are ignored (7 days).
         "CACHE_TTL": 604800,
+        # Sources whose content is declared NON-personal and may therefore
+        # use the shared, tenant-less cache when a call supplies no
+        # user_id. Empty = fail closed: an unscoped call skips the cache
+        # rather than risk serving one tenant's answer to another
+        # (AGENT-02). Add "translate" here only if the strings translated
+        # in that deployment are UI copy, never user content.
+        "CACHE_ALLOW_UNSCOPED": [],
+        # Days after which a PromptLog row's TEXT (prompt, system prompt,
+        # response, error) is scrubbed by ``purge_prompt_logs`` — the row
+        # and its token counters stay for accounting. None = no retention
+        # limit, and the host owes the regulator an explanation.
+        "PROMPT_LOG_RETENTION_DAYS": 90,
         # Dotted path to a stapel_agent.cache.CachePolicy subclass — the
         # cache seam. The default implements the PromptLog+TTL behaviour;
         # swap for Redis/no-op without forking.

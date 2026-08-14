@@ -134,9 +134,9 @@ class TestMaxTokensCap:
 
 @pytest.mark.django_db
 class TestCache:
-    def _translate(self, fake_provider):
+    def _translate(self, fake_provider, user_id="u1"):
         fake_provider.result = ProviderResult(text='{"k": "Hallo"}')
-        return services.translate("en", "de", {"k": "Hello"})
+        return services.translate("en", "de", {"k": "Hello"}, user_id=user_id)
 
     def test_translate_second_call_hits_cache(self, fake_provider):
         first = self._translate(fake_provider)
@@ -202,8 +202,12 @@ class TestCache:
             **settings.STAPEL_AGENT,
             "CACHE_LOOKUP": {"llm_facade": True, "translate": True},
         }
-        first = services.complete("p", "small", source=PromptSource.LLM_FACADE)
-        second = services.complete("p", "small", source=PromptSource.LLM_FACADE)
+        first = services.complete(
+            "p", "small", source=PromptSource.LLM_FACADE, user_id="u1"
+        )
+        second = services.complete(
+            "p", "small", source=PromptSource.LLM_FACADE, user_id="u1"
+        )
         assert first["status"] == second["status"] == "ok"
         assert second["result"] == '{"answer": 42}'
         # A cache hit spends no tokens (CachePolicy.lookup returns text only).
@@ -245,16 +249,18 @@ class TestCacheKeyProviderModel:
         FakeProvider.reset()
 
     def test_same_size_same_provider_hits(self, cached_facade):
-        services.complete("p", "small", source=PromptSource.LLM_FACADE)
-        second = services.complete("p", "small", source=PromptSource.LLM_FACADE)
+        services.complete("p", "small", source=PromptSource.LLM_FACADE, user_id="u1")
+        second = services.complete(
+            "p", "small", source=PromptSource.LLM_FACADE, user_id="u1"
+        )
         assert second["usage"] == {"input_tokens": 0, "output_tokens": 0}
         assert PromptLog.objects.count() == 1  # second answered from cache
 
     def test_model_size_change_is_a_miss(self, cached_facade):
         # The repro from review §2a: "small" then "large" must NOT reuse
         # the small answer.
-        services.complete("p", "small", source=PromptSource.LLM_FACADE)
-        services.complete("p", "large", source=PromptSource.LLM_FACADE)
+        services.complete("p", "small", source=PromptSource.LLM_FACADE, user_id="u1")
+        services.complete("p", "large", source=PromptSource.LLM_FACADE, user_id="u1")
         assert PromptLog.objects.count() == 2  # both misses
         assert set(PromptLog.objects.values_list("model", flat=True)) == {
             "claude-haiku-4-5-20251001",
@@ -263,15 +269,17 @@ class TestCacheKeyProviderModel:
 
     def test_provider_change_is_a_miss(self, cached_facade):
         services.complete(
-            "p", "small", provider="fake", source=PromptSource.LLM_FACADE
+            "p", "small", provider="fake", source=PromptSource.LLM_FACADE,
+            user_id="u1",
         )
         services.complete(
-            "p", "small", provider="fake2", source=PromptSource.LLM_FACADE
+            "p", "small", provider="fake2", source=PromptSource.LLM_FACADE,
+            user_id="u1",
         )
         assert PromptLog.objects.count() == 2  # explicit provider not collided
 
     def test_model_version_bump_invalidates(self, cached_facade, settings):
-        services.complete("p", "small", source=PromptSource.LLM_FACADE)
+        services.complete("p", "small", source=PromptSource.LLM_FACADE, user_id="u1")
         # Bump the "small" model — the old cached row must not be served.
         settings.STAPEL_AGENT = {
             **settings.STAPEL_AGENT,
@@ -281,7 +289,7 @@ class TestCacheKeyProviderModel:
                 "large": "claude-opus-4-8",
             },
         }
-        services.complete("p", "small", source=PromptSource.LLM_FACADE)
+        services.complete("p", "small", source=PromptSource.LLM_FACADE, user_id="u1")
         assert PromptLog.objects.count() == 2  # version bump = miss
 
 

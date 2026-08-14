@@ -249,7 +249,13 @@ class AudioRef:
         return self.url
 
     def read_bytes(self, *, provider: str, timeout: int = 600) -> bytes:
-        """Materialize the audio bytes from any ref kind (upload adapters)."""
+        """Materialize the audio bytes from any ref kind (upload adapters).
+
+        *timeout* bounds the whole download (redirects included) but is a
+        request, not an authority: it is clamped to
+        ``STT_DOWNLOAD_TOTAL_DEADLINE`` so a caller cannot buy itself a
+        longer hold on a worker than the deployment allows.
+        """
         if self.data is not None:
             return self.data
         if self.path:
@@ -277,32 +283,114 @@ class AudioRef:
         return f"data:{len(self.data or b'')}b"
 
 
-def _download(url: str, *, provider: str, timeout: int) -> bytes:
-    """Fetch audio bytes once; multipart upload needs a buffer anyway.
-    4xx on the audio URL is fatal (the ref itself is bad); network/5xx
-    are retryable — ported from the source's ``_stream_audio``."""
-    import requests
+def _limit(key: str):
+    """Read one download cap from ``STAPEL_AGENT``.
+
+    Falls back to the shipped default when Django settings are not
+    configured, so this module keeps working outside a Django process —
+    and so an unconfigured process still fetches under a cap rather than
+    under none.
+    """
+    from ..conf import agent_settings
 
     try:
-        resp = requests.get(url, timeout=timeout, stream=True)
-        resp.raise_for_status()
-        return resp.content
-    except requests.Timeout as exc:
-        raise RetryableTranscriptionError(
-            f"audio download timed out: {exc}", provider=provider
-        ) from exc
-    except requests.HTTPError as exc:
-        status = exc.response.status_code if exc.response is not None else None
-        if status is not None and status < 500:
-            raise TranscriptionError(
-                f"audio URL not retrievable: {status}",
+        return getattr(agent_settings, key)
+    except Exception:  # Django absent or settings not configured
+        return agent_settings.defaults[key]
+
+
+#: ``SafeFetchError`` codes that mean "this ref will never work" — a bad
+#: scheme, an address this deployment refuses to touch, an oversize body.
+#: Retrying them, or falling back to the next provider with the same ref,
+#: burns money on a request that is already decided.
+_FATAL_FETCH_CODES = frozenset(
+    {
+        "scheme_not_https",
+        "no_host",
+        "blocked_ip",
+        "host_not_allowed",
+        "too_large",
+        "too_many_redirects",
+        "redirect_no_location",
+        "content_type_not_allowed",
+    }
+)
+
+
+def _bad_status_code(exc) -> int | None:
+    """Recover the upstream HTTP status from a ``bad_status`` failure.
+
+    ``SafeFetchError`` carries only its own code, so the number is read
+    back out of the message. Unrecognised shape → ``None``, which the
+    caller treats as retryable: guessing "fatal" would silently stop the
+    provider fallback chain on a transient 503.
+    """
+    import re
+
+    match = re.search(r"\b(\d{3})\b", str(exc))
+    return int(match.group(1)) if match else None
+
+
+def _download(url: str, *, provider: str, timeout: int) -> bytes:
+    """Fetch audio bytes once; multipart upload needs a buffer anyway.
+
+    The URL arrives in the request payload, so this is an SSRF sink: it
+    goes through ``stapel_core.net.fetch_bytes``, the fleet's single
+    guarded fetcher (https-only, DNS/IP allowlist re-validated per
+    redirect hop, IP-pinned connect, byte cap, total deadline). The error
+    taxonomy is preserved: a refusal or a 4xx is fatal (the ref itself is
+    bad — the next provider would fail on it identically); transport,
+    deadline and 5xx are retryable.
+    """
+    from stapel_core.net import SafeFetchError, fetch_bytes
+
+    # The caller's timeout may only lower the configured ceiling.
+    deadline = min(float(timeout), float(_limit("STT_DOWNLOAD_TOTAL_DEADLINE")))
+    allowed_hosts = list(_limit("STT_DOWNLOAD_ALLOWED_HOSTS") or []) or None
+
+    try:
+        return fetch_bytes(
+            url,
+            max_bytes=int(_limit("STT_DOWNLOAD_MAX_BYTES")),
+            timeout=min(float(_limit("STT_DOWNLOAD_TIMEOUT")), deadline),
+            total_deadline=deadline,
+            accept="audio/*,*/*",
+            allowed_hosts=allowed_hosts,
+        ).content
+    except SafeFetchError as exc:
+        if exc.code == "deadline_exceeded":
+            raise RetryableTranscriptionError(
+                f"audio download timed out: {exc}", provider=provider
+            ) from exc
+        if exc.code == "bad_status":
+            status = _bad_status_code(exc)
+            if status is not None and status < 500:
+                raise TranscriptionError(
+                    f"audio URL not retrievable: {status}",
+                    provider=provider,
+                    status_code=status,
+                ) from exc
+            raise RetryableTranscriptionError(
+                f"audio download failed: {exc}",
                 provider=provider,
                 status_code=status,
             ) from exc
+        if exc.code in _FATAL_FETCH_CODES:
+            raise TranscriptionError(
+                f"audio URL refused ({exc.code}): {exc}", provider=provider
+            ) from exc
+        # dns_resolution_failed and anything a future core release adds:
+        # transport-shaped, so the fallback chain gets its turn.
         raise RetryableTranscriptionError(
-            f"audio download failed: {exc}", provider=provider, status_code=status
+            f"audio download error ({exc.code}): {exc}", provider=provider
         ) from exc
-    except requests.RequestException as exc:
+    except TimeoutError as exc:
+        # socket.timeout — a hop stalled inside the per-socket budget.
+        raise RetryableTranscriptionError(
+            f"audio download timed out: {exc}", provider=provider
+        ) from exc
+    except OSError as exc:
+        # Socket/TLS failures below the guard layer are transport, not verdict.
         raise RetryableTranscriptionError(
             f"audio download error: {exc}", provider=provider
         ) from exc

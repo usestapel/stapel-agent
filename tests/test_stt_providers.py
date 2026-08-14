@@ -17,6 +17,7 @@ from stapel_agent.stt.base import (
 from stapel_agent.stt.providers.assemblyai import AssemblyAIProvider
 from stapel_agent.stt.providers.elevenlabs import ElevenLabsProvider
 from stapel_agent.stt.providers.whisper_http import WhisperHttpProvider
+from stapel_agent.tests.fakes import serve_audio
 
 
 class FakeResponse:
@@ -129,13 +130,7 @@ class TestWhisperHttp:
         assert captured[0]["files"]["file"][2] == "application/octet-stream"
 
     def test_multipart_from_url_downloads_first(self, configured, monkeypatch):
-        class DownloadResp:
-            content = b"downloaded-audio"
-
-            def raise_for_status(self):
-                pass
-
-        monkeypatch.setattr("requests.get", lambda *a, **kw: DownloadResp())
+        serve_audio(monkeypatch, b"downloaded-audio")
         _, captured = self._run(
             monkeypatch,
             [FakeResponse(WHISPER_BODY)],
@@ -264,13 +259,7 @@ class TestElevenLabs:
     def configured(self, settings, monkeypatch):
         settings.STAPEL_AGENT = {"ELEVENLABS_API_KEY": "xi-test"}
 
-        class DownloadResp:
-            content = b"mp3-bytes"
-
-            def raise_for_status(self):
-                pass
-
-        monkeypatch.setattr("requests.get", lambda *a, **kw: DownloadResp())
+        serve_audio(monkeypatch, b"mp3-bytes")
         return settings
 
     def _run(self, monkeypatch, responses, *, audio=None, **kwargs):

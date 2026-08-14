@@ -90,6 +90,12 @@
       "intent": "The FLAG half of the flag/escape split: report which known prompt-injection markers a piece of untrusted text carries, without deciding any encoding. Run it on every LLM output and every retrieved chunk before that text reaches a consumer; the SafetyReport is what a caller branches on."
     },
     {
+      "name": "detect_structured_output_leak",
+      "kind": "gate_function",
+      "path": "stapel_agent.safety.markers.detect_structured_output_leak",
+      "intent": "Run on any plain-text model answer before a consumer stores or renders it: returns the names of structured-output scaffolds (tool-call envelopes, parameter tags, chat-template tokens, schema echoes) that leaked into prose. The schema-constrained path proves its shape by construction and needs no canary; the prose path has no such proof, so this is the detector that says the answer is degraded and the text is markup nobody asked for (audit AI-01)."
+    },
+    {
       "name": "redact_markers",
       "kind": "gate_function",
       "path": "stapel_agent.safety.markers.redact_markers",

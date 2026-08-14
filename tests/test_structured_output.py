@@ -97,7 +97,7 @@ class TestCacheInteraction:
         assert len(FakeProvider.calls) == 2
 
     def test_the_same_prompt_without_a_schema_still_caches(self, caching):
-        services.complete("p", "small", source="llm_facade")
+        services.complete("p", "small", source="llm_facade", user_id="u1")
         assert len(caching.stores) == 1
 
 

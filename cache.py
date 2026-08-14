@@ -4,8 +4,8 @@
 subclass (resolved via ``import_strings``, instantiated per call). The
 default, ``PromptLogCachePolicy``, implements the stock behaviour: the
 latest successful ``PromptLog`` row with an identical
-prompt+system_prompt+source within ``CACHE_TTL``, gated per source by
-``CACHE_LOOKUP``.
+scope+prompt+system_prompt+source within ``CACHE_TTL``, gated per source
+by ``CACHE_LOOKUP``.
 
 Hosts can point the setting at a Redis-backed policy, a no-op policy,
 or anything else::
@@ -16,9 +16,9 @@ or anything else::
     class RedisCachePolicy(CachePolicy):
         def should_cache(self, source): ...
         def lookup(self, prompt, system_prompt, source, *,
-                   provider, model, model_size): ...
+                   provider, model, model_size, user_id=None): ...
         def store(self, prompt, system_prompt, source, response, *,
-                  provider, model, model_size): ...
+                  provider, model, model_size, user_id=None): ...
 
     # settings.py
     STAPEL_AGENT = {"CACHE_POLICY": "myproject.llm_cache.RedisCachePolicy"}
@@ -51,6 +51,7 @@ class CachePolicy(ABC):
         provider: str,
         model: str,
         model_size: str,
+        user_id: str | None = None,
     ) -> str | None:
         """Return the cached raw response text, or None on a miss.
 
@@ -60,6 +61,13 @@ class CachePolicy(ABC):
         never be served to a "large" request, an explicit ``provider=``
         must not collide with the default, and bumping a model version in
         ``MODELS`` must invalidate its cached rows.
+
+        *user_id* is the caller's scope and is part of the key too: a
+        prompt is content, and two tenants sending the same words are not
+        entitled to each other's answers (AGENT-02). An implementation
+        that cannot honour it must return None rather than serve a
+        cross-tenant hit — ``services`` refuses to call a policy whose
+        signature predates this argument.
         """
 
     def store(
@@ -72,18 +80,24 @@ class CachePolicy(ABC):
         provider: str,
         model: str,
         model_size: str,
+        user_id: str | None = None,
     ) -> None:
         """Persist a successful response for future lookups.
 
         No-op by default: the default policy reads the PromptLog ledger
         row that ``services.complete`` writes anyway. Policies with
         external storage (Redis, ...) override this. See ``lookup`` for
-        why *provider*/*model*/*model_size* belong in the key.
+        why *provider*/*model*/*model_size*/*user_id* belong in the key.
         """
 
 
 class PromptLogCachePolicy(CachePolicy):
-    """Stock policy: PromptLog rows + CACHE_LOOKUP/CACHE_TTL settings."""
+    """Stock policy: PromptLog rows + CACHE_LOOKUP/CACHE_TTL settings.
+
+    Keyed on scope + prompt + system prompt + source + provider + model +
+    size — every axis that changes what a correct answer is, plus the one
+    that says whose answer it is.
+    """
 
     def should_cache(self, source: str) -> bool:
         from .conf import agent_settings
@@ -99,6 +113,7 @@ class PromptLogCachePolicy(CachePolicy):
         provider: str,
         model: str,
         model_size: str,
+        user_id: str | None = None,
     ) -> str | None:
         from django.utils import timezone
 
@@ -107,6 +122,12 @@ class PromptLogCachePolicy(CachePolicy):
 
         ttl = int(agent_settings.CACHE_TTL)
         qs = PromptLog.objects.filter(
+            # Scope first: the ledger row records who asked, and a hit is
+            # only a hit for that same scope. Rows written without one
+            # (user_id NULL) are readable only by another unscoped call,
+            # which ``services`` allows solely for sources the host has
+            # declared non-personal.
+            user_id=user_id,
             prompt=prompt,
             source=source,
             status=PromptStatus.SUCCESS,

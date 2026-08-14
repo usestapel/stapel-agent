@@ -5,6 +5,70 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security — the audio download is no longer a way into the private network
+
+`AudioRef.read_bytes()` handed a caller-supplied URL to
+`requests.get(url, timeout=600, stream=True)` and returned `resp.content`: any
+scheme, any address, any redirect, any size. A producer that could put a URL in
+a transcribe request could therefore reach cloud metadata, an internal admin
+port or a link-local service, and could hold a worker for ten minutes while
+filling its memory with an unbounded body (audit AGENT-01).
+
+The fetch now goes through `stapel_core.net.fetch_bytes` — the fleet's single
+guarded fetcher, https-only, every resolved address validated against the
+private/loopback/link-local/CGNAT/metadata ranges, the socket pinned to the
+validated IP, every redirect re-validated from scratch, the body capped
+mid-stream and the whole operation bounded by a deadline. Writing a second
+implementation here is what created the gap in the first place, so this
+package consumes core's rather than growing its own.
+
+Four new ceilings (`STT_DOWNLOAD_MAX_BYTES`, `STT_DOWNLOAD_TIMEOUT`,
+`STT_DOWNLOAD_TOTAL_DEADLINE`, `STT_DOWNLOAD_ALLOWED_HOSTS`) configure it. The
+per-call `timeout=` argument is now a request, not an authority: it may lower
+the configured deadline and never raise it. The error taxonomy is unchanged
+where it matters — a refusal or a 4xx is fatal (the next provider would fail on
+the same ref), transport/deadline/5xx stay retryable.
+
+### Security — a cached answer belongs to whoever asked for it
+
+The prompt cache was keyed on content alone (prompt + system prompt + source),
+so two tenants sending the same sensitive prompt shared one stored response and
+its metadata (audit AGENT-02). `CachePolicy.lookup`/`store` now take the
+caller's `user_id`, the default policy filters ledger rows on it, and a call
+that carries no scope does not use the cache at all unless its source is listed
+in the new `CACHE_ALLOW_UNSCOPED` — fail closed, because there is no version of
+this where the sharing is the safe outcome. A host policy whose signature
+predates the argument cannot tell tenants apart, so it is switched off with a
+warning instead of trusted.
+
+### Security — the prompt ledger answers subject requests, and its text expires
+
+`PromptLog` holds prompts, system prompts and full responses in plaintext, and
+appeared in no export, no erasure path and no retention job (audit AGENT-02).
+
+- `stapel_agent.gdpr.AgentGDPRProvider` (section `agent`) is registered into
+  `stapel_core.gdpr.gdpr_registry` from `AgentConfig.ready()`, like every other
+  package's provider.
+- `stapel_agent.retention.purge_prompt_logs()` and the `purge_prompt_logs`
+  management command scrub row text older than the new
+  `PROMPT_LOG_RETENTION_DAYS` (default 90).
+
+Both scrub rather than delete: the text is customer content, the token counters
+are the finance ledger, and a row without its text holds no personal data.
+
+### Security — a plain summary now carries the structured-output canary
+
+A schema-constrained answer proves its shape by construction; a prose summary
+cannot, and the plain path had no equivalent check (audit AI-01). New
+`safety.markers.detect_structured_output_leak()` names the scaffolding a model
+can spill into prose — tool-call envelopes, parameter tags, chat-template
+tokens, schema echoes — and `services.summarize()` runs it on both the
+single-shot and the merge path. A hit adds
+`safety: {"structured_output_leak": [...], "untrusted": True}` to the envelope
+so a consumer can refuse to render it. It is a flag, not a filter: the text is
+returned unchanged.
+
+
 ## [0.8.1] — 2026-08-02
 
 ### Packaging / contract

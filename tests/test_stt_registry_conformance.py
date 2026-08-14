@@ -40,6 +40,7 @@ import requests
 from django.utils.module_loading import import_string
 
 from stapel_agent.stt import registered_stt_providers
+from stapel_agent.tests.fakes import serve_audio
 from stapel_agent.stt.base import AudioRef
 from stapel_agent.stt.model_configs import (
     BUILTIN_STT_MODEL_CONFIGS,
@@ -164,10 +165,12 @@ def _install(monkeypatch, respond):
     """Patch the ``requests`` verbs every adapter reaches for; capture calls.
 
     Patched on the ``requests`` module itself, not per adapter module: the
-    adapters all hold the same module object, and so does ``base._download``
-    (the audio fetch). One patch therefore covers every request a run makes —
-    including ones a per-module patch would miss.
+    adapters all hold the same module object, so one patch covers every
+    provider request a run makes. The audio fetch is a separate seam — it
+    goes through ``stapel_core.net.fetch_bytes`` — and is faked by
+    ``serve_audio`` below so no run resolves or dials anything.
     """
+    serve_audio(monkeypatch, b"WAVDATA")
     calls = []
 
     def _handler(fixed_method):

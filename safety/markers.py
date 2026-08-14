@@ -87,6 +87,40 @@ def detect_pwned_markers(text: str, *, treat_as_untrusted: bool = True
     )
 
 
+#: Scaffolding a model emits when its structured-output mode leaks into a
+#: plain-text answer: tool-call envelopes, schema echoes, chat-template
+#: fragments. Anchored to concrete strings actually observed, same rule as
+#: INJECTION_MARKERS above — this is a canary, not a parser.
+STRUCTURED_OUTPUT_MARKERS: dict[str, re.Pattern[str]] = {
+    "TOOL_CALL_ENVELOPE": re.compile(
+        r"</?(function_calls|invoke|antml:invoke|tool_use|tool_call)\b", re.IGNORECASE
+    ),
+    "PARAMETER_TAG": re.compile(r"</?parameter\b", re.IGNORECASE),
+    "CHAT_TEMPLATE_TOKEN": re.compile(
+        r"<\|(im_start|im_end|start_header_id|eot_id)\|>", re.IGNORECASE
+    ),
+    "SCHEMA_ECHO": re.compile(
+        r'"(\$schema|additionalProperties|json_schema)"\s*:', re.IGNORECASE
+    ),
+}
+
+
+def detect_structured_output_leak(text: str) -> list[str]:
+    """Names of structured-output scaffolds found in a plain-text answer.
+
+    AI-01: the schema-constrained path can prove its output by construction,
+    the plain-summary path cannot — so it gets a canary instead. A hit means
+    the model spilled its own machinery into prose: the answer is degraded,
+    and whatever renders it is holding markup it never asked for. Empty list
+    = nothing seen, which is evidence of absence only for these shapes.
+    """
+    if not isinstance(text, str) or not text:
+        return []
+    return sorted(
+        name for name, pat in STRUCTURED_OUTPUT_MARKERS.items() if pat.search(text)
+    )
+
+
 def _apply_marker_redaction(text: str) -> str:
     """Replace all INJECTION_MARKERS hits with ``_REDACTED_STUB``.
 
@@ -136,8 +170,10 @@ def sanitize_for_rag(text: str) -> str:
 
 
 __all__ = [
+    "STRUCTURED_OUTPUT_MARKERS",
     "SafetyReport",
     "detect_pwned_markers",
+    "detect_structured_output_leak",
     "redact_markers",
     "sanitize_for_rag",
     "INJECTION_MARKERS",

@@ -1,7 +1,9 @@
 """STT seam unit tests — AudioRef matrix, normalized-transcript schema
 helpers and the shared audio download. Django-free module, no db."""
+import socket
+
 import pytest
-import requests
+from stapel_core.net import safe_fetch
 
 from stapel_agent.stt.base import (
     AudioRef,
@@ -13,6 +15,7 @@ from stapel_agent.stt.base import (
     transcript_from_dict,
     utterances_from_words,
 )
+from stapel_agent.tests.fakes import FakeHttpResponse, addrinfo, serve_audio
 
 
 class TestAudioRefValidation:
@@ -85,62 +88,170 @@ class TestAudioRefAccessors:
         assert not isinstance(e.value, RetryableTranscriptionError)
 
     def test_read_bytes_from_url_downloads(self, monkeypatch):
-        captured = {}
-
-        class Resp:
-            content = b"audio-bytes"
-
-            def raise_for_status(self):
-                pass
-
-        def fake_get(url, timeout=None, stream=None):
-            captured.update(url=url, timeout=timeout)
-            return Resp()
-
-        monkeypatch.setattr("requests.get", fake_get)
+        seen = serve_audio(monkeypatch, b"audio-bytes")
         ref = AudioRef(url="https://cdn.test/a.mp3?X-Sig=s3cr3t")
         assert ref.read_bytes(provider="p", timeout=33) == b"audio-bytes"
-        assert captured["url"] == "https://cdn.test/a.mp3?X-Sig=s3cr3t"
-        assert captured["timeout"] == 33
+        assert seen == [("cdn.test", "93.184.216.34", "/a.mp3?X-Sig=s3cr3t")]
 
-    def _mock_get(self, monkeypatch, *, status=None, exc=None):
-        class Resp:
-            status_code = status
-            content = b""
-
-            def raise_for_status(self):
-                error = requests.HTTPError(f"{status}")
-                error.response = self
-                raise error
-
-        def fake_get(url, timeout=None, stream=None):
-            if exc is not None:
-                raise exc
-            return Resp()
-
-        monkeypatch.setattr("requests.get", fake_get)
+    def _serve_status(self, monkeypatch, status):
+        serve_audio(monkeypatch, lambda: FakeHttpResponse(status, {}, b""))
 
     def test_download_404_is_fatal(self, monkeypatch):
-        self._mock_get(monkeypatch, status=404)
+        self._serve_status(monkeypatch, 404)
         with pytest.raises(TranscriptionError, match="not retrievable: 404") as e:
-            AudioRef(url="https://x/a").read_bytes(provider="p")
+            AudioRef(url="https://x.test/a").read_bytes(provider="p")
         assert not isinstance(e.value, RetryableTranscriptionError)
         assert e.value.status_code == 404
 
     def test_download_500_is_retryable(self, monkeypatch):
-        self._mock_get(monkeypatch, status=503)
+        self._serve_status(monkeypatch, 503)
         with pytest.raises(RetryableTranscriptionError):
-            AudioRef(url="https://x/a").read_bytes(provider="p")
+            AudioRef(url="https://x.test/a").read_bytes(provider="p")
 
     def test_download_timeout_is_retryable(self, monkeypatch):
-        self._mock_get(monkeypatch, exc=requests.Timeout("slow"))
+        def stall():
+            raise TimeoutError("slow")
+
+        serve_audio(monkeypatch, stall)
         with pytest.raises(RetryableTranscriptionError, match="timed out"):
-            AudioRef(url="https://x/a").read_bytes(provider="p")
+            AudioRef(url="https://x.test/a").read_bytes(provider="p")
 
     def test_download_connection_error_is_retryable(self, monkeypatch):
-        self._mock_get(monkeypatch, exc=requests.ConnectionError("refused"))
+        def refused():
+            raise ConnectionRefusedError("refused")
+
+        serve_audio(monkeypatch, refused)
         with pytest.raises(RetryableTranscriptionError):
-            AudioRef(url="https://x/a").read_bytes(provider="p")
+            AudioRef(url="https://x.test/a").read_bytes(provider="p")
+
+
+class TestAudioDownloadGuards:
+    """AGENT-01: the audio URL is caller-supplied, so the download is an
+    SSRF and memory sink. Every guard below belongs to
+    ``stapel_core.net.fetch_bytes``; these tests prove this package
+    actually routes through it instead of hand-rolling ``requests.get``.
+    """
+
+    def test_non_https_url_is_refused_without_touching_the_network(
+        self, monkeypatch
+    ):
+        def no_dns(*a, **kw):
+            raise AssertionError("resolution attempted for a rejected scheme")
+
+        monkeypatch.setattr(socket, "getaddrinfo", no_dns)
+        with pytest.raises(TranscriptionError, match="scheme_not_https") as e:
+            AudioRef(url="http://cdn.test/a.mp3").read_bytes(provider="p")
+        assert not isinstance(e.value, RetryableTranscriptionError)
+
+    @pytest.mark.parametrize(
+        "ip", ["127.0.0.1", "10.0.0.9", "169.254.169.254", "::1"]
+    )
+    def test_private_and_metadata_addresses_are_refused(self, monkeypatch, ip):
+        def open_should_not_run(*a, **kw):
+            raise AssertionError("connected to a forbidden address")
+
+        serve_audio(monkeypatch, ip=ip)
+        monkeypatch.setattr(safe_fetch, "_open", open_should_not_run)
+        with pytest.raises(TranscriptionError, match="blocked_ip") as e:
+            AudioRef(url="https://internal.test/a.mp3").read_bytes(provider="p")
+        assert not isinstance(e.value, RetryableTranscriptionError)
+
+    def test_oversize_body_is_refused(self, monkeypatch, settings):
+        settings.STAPEL_AGENT = {"STT_DOWNLOAD_MAX_BYTES": 1024}
+        serve_audio(monkeypatch, b"A" * 5000)
+        with pytest.raises(TranscriptionError, match="too_large") as e:
+            AudioRef(url="https://cdn.test/big.mp3").read_bytes(provider="p")
+        assert not isinstance(e.value, RetryableTranscriptionError)
+
+    def test_redirect_into_private_space_is_refused(self, monkeypatch):
+        import socket as _socket
+
+        hops = iter(["93.184.216.34", "10.0.0.9"])
+        monkeypatch.setattr(
+            _socket,
+            "getaddrinfo",
+            lambda host, port, **kw: addrinfo(next(hops), port),
+        )
+        monkeypatch.setattr(
+            safe_fetch,
+            "_open",
+            lambda *a, **kw: FakeHttpResponse(
+                302, {"Location": "https://internal.test/a.mp3"}, b""
+            ),
+        )
+        with pytest.raises(TranscriptionError, match="blocked_ip"):
+            AudioRef(url="https://cdn.test/a.mp3").read_bytes(provider="p")
+
+    def test_caller_timeout_cannot_raise_the_configured_deadline(
+        self, monkeypatch, settings
+    ):
+        settings.STAPEL_AGENT = {"STT_DOWNLOAD_TOTAL_DEADLINE": 12.0}
+        captured = {}
+        real_fetch = safe_fetch.fetch_bytes
+
+        def spy(url, **kwargs):
+            captured.update(kwargs)
+            return real_fetch(url, **kwargs)
+
+        monkeypatch.setattr("stapel_core.net.fetch_bytes", spy)
+        serve_audio(monkeypatch, b"ok")
+        # 600s is what the pre-audit adapters asked for.
+        AudioRef(url="https://cdn.test/a.mp3").read_bytes(provider="p", timeout=600)
+        assert captured["total_deadline"] == 12.0
+        assert captured["timeout"] <= 12.0
+        assert captured["max_bytes"] > 0
+
+    def test_allowed_hosts_setting_pins_the_origin(self, monkeypatch, settings):
+        settings.STAPEL_AGENT = {"STT_DOWNLOAD_ALLOWED_HOSTS": ["store.test"]}
+        serve_audio(monkeypatch, b"ok")
+        assert (
+            AudioRef(url="https://store.test/a.mp3").read_bytes(provider="p") == b"ok"
+        )
+        with pytest.raises(TranscriptionError, match="host_not_allowed"):
+            AudioRef(url="https://elsewhere.test/a.mp3").read_bytes(provider="p")
+
+    def test_total_deadline_breach_is_retryable(self, monkeypatch):
+        """A worker held past the deadline is released, not condemned: the
+        ref may be fine and the next provider deserves its turn."""
+        from stapel_core.net import SafeFetchError
+
+        def too_slow(*a, **kw):
+            raise SafeFetchError("deadline_exceeded", "exceeded 1.0s total deadline")
+
+        serve_audio(monkeypatch)
+        monkeypatch.setattr(safe_fetch, "_open", too_slow)
+        with pytest.raises(RetryableTranscriptionError, match="timed out"):
+            AudioRef(url="https://cdn.test/a.mp3").read_bytes(provider="p")
+
+    def test_unresolvable_host_is_retryable_not_a_refusal(self, monkeypatch):
+        """Only a refusal by the guard is a verdict on the ref. DNS failure is
+        transport — treating it as fatal would stop the fallback chain on a
+        resolver hiccup."""
+        def no_such_host(*a, **kw):
+            raise socket.gaierror("nodename nor servname provided")
+
+        monkeypatch.setattr(socket, "getaddrinfo", no_such_host)
+        with pytest.raises(
+            RetryableTranscriptionError, match="dns_resolution_failed"
+        ):
+            AudioRef(url="https://gone.test/a.mp3").read_bytes(provider="p")
+
+    def test_caps_still_apply_when_settings_are_unavailable(self, monkeypatch):
+        """Outside a configured Django process the caps fall back to the
+        shipped defaults — an unconfigured process fetches under a cap rather
+        than under none."""
+        from stapel_agent import conf
+        from stapel_agent.stt.base import _limit
+
+        class Unconfigured:
+            defaults = conf.agent_settings.defaults
+
+            def __getattr__(self, name):
+                raise RuntimeError("settings are not configured")
+
+        monkeypatch.setattr(conf, "agent_settings", Unconfigured())
+        assert _limit("STT_DOWNLOAD_MAX_BYTES") == 128 * 1024 * 1024
+        assert _limit("STT_DOWNLOAD_TOTAL_DEADLINE") == 300.0
 
 
 class TestAudioRefDescribe:

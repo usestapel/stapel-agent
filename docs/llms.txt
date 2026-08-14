@@ -2,7 +2,7 @@
 
 LLM facade: JSON completion, translation, transcription and summarization in front of swappable model / speech-to-text / image-generation providers (Anthropic, OpenAI-compatible, Claude Code CLI, whisper-http, ElevenLabs, AssemblyAI, openai-images), with a prompt cache and a per-call token ledger. Python port of a prior NestJS service — same HTTP paths/contracts, plus an in-process comm surface for monolith deployments.
 
-Contract: axes 4 · surface 4 · extension points 4.
+Contract: axes 4 · surface 5 · extension points 4.
 Generated from docs/capabilities.json by `stapel-llms-txt` — do not edit; drift-gated by `make contract-check`.
 
 ## Configuration axes — what a product switches on
@@ -21,6 +21,8 @@ This is the answer to "does Stapel already have something for X?". `instead of` 
 ### gate_function
 - detect_pwned_markers — stapel_agent.safety.markers.detect_pwned_markers
   The FLAG half of the flag/escape split: report which known prompt-injection markers a piece of untrusted text carries, without deciding any encoding. Run it on every LLM output and every retrieved chunk before that text reaches a consumer; the SafetyReport is what a caller branches on.
+- detect_structured_output_leak — stapel_agent.safety.markers.detect_structured_output_leak
+  Run on any plain-text model answer before a consumer stores or renders it: returns the names of structured-output scaffolds (tool-call envelopes, parameter tags, chat-template tokens, schema echoes) that leaked into prose. The schema-constrained path proves its shape by construction and needs no canary; the prose path has no such proof, so this is the detector that says the answer is degraded and the text is markup nobody asked for (audit AI-01).
 - redact_markers — stapel_agent.safety.markers.redact_markers
   The ESCAPE half for auto-escaping template engines (Jinja2): strips injection markers and does NO entity encoding, because the template engine already encodes and pre-encoding here double-escapes. Use this — not a hand-rolled replace — for any text rendered into a template.
 - redaction_gate — stapel_agent.safety.redaction.redaction_gate

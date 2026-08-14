@@ -171,17 +171,22 @@ class RecordingCachePolicy(CachePolicy):
     def should_cache(self, source):
         return type(self).cache_all
 
-    def lookup(self, prompt, system_prompt, source, *, provider, model, model_size):
+    def lookup(self, prompt, system_prompt, source, *, provider, model,
+               model_size, user_id=None):
         cls = type(self)
-        cls.lookups.append((prompt, system_prompt, source, provider, model, model_size))
-        return cls.entries.get((prompt, system_prompt, source))
+        cls.lookups.append(
+            (prompt, system_prompt, source, provider, model, model_size, user_id)
+        )
+        return cls.entries.get((user_id, prompt, system_prompt, source))
 
-    def store(self, prompt, system_prompt, source, response, *, provider, model, model_size):
+    def store(self, prompt, system_prompt, source, response, *, provider, model,
+              model_size, user_id=None):
         cls = type(self)
         cls.stores.append(
-            (prompt, system_prompt, source, response, provider, model, model_size)
+            (prompt, system_prompt, source, response, provider, model, model_size,
+             user_id)
         )
-        cls.entries[(prompt, system_prompt, source)] = response
+        cls.entries[(user_id, prompt, system_prompt, source)] = response
 
 
 class FakeSttProvider(SttProvider):
@@ -481,3 +486,88 @@ class FatalRerankProvider(FakeRerankProvider):
 
 class NotARerankProvider:
     """Deliberately not a RerankProvider subclass — for W011."""
+
+
+class LegacyCachePolicy(CachePolicy):
+    """A policy written against the pre-AGENT-02 signature — it has no way
+    to tell two tenants apart. ``services`` must refuse to use it rather
+    than let it answer one tenant with another's response."""
+
+    lookups: list = []
+
+    @classmethod
+    def reset(cls):
+        cls.lookups = []
+
+    def should_cache(self, source):
+        return True
+
+    def lookup(self, prompt, system_prompt, source, *, provider, model, model_size):
+        type(self).lookups.append(prompt)
+        return "answer from another tenant"
+
+
+# --------------------------------------------------------------------------- #
+# Guarded audio download (AudioRef.read_bytes → stapel_core.net.fetch_bytes)
+# --------------------------------------------------------------------------- #
+def addrinfo(ip: str, port: int = 443):
+    import socket
+
+    family = socket.AF_INET6 if ":" in ip else socket.AF_INET
+    return [(family, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (ip, port))]
+
+
+class FakeHttpResponse:
+    """Minimal stand-in for ``http.client.HTTPResponse``."""
+
+    def __init__(self, status=200, headers=None, body=b""):
+        import io
+
+        self.status = status
+        self._headers = {k.lower(): v for k, v in (headers or {}).items()}
+        self._buf = io.BytesIO(body)
+
+    def getheader(self, name, default=None):
+        return self._headers.get(name.lower(), default)
+
+    def read(self, n=-1):
+        return self._buf.read(n)
+
+    def close(self):
+        pass
+
+
+def serve_audio(monkeypatch, *responses, ip="93.184.216.34"):
+    """Fake the network under the guarded fetcher — one response per hop.
+
+    Patches the two seams the fetcher owns (``socket.getaddrinfo`` and
+    ``stapel_core.net.safe_fetch._open``) rather than the download function
+    itself, so provider tests keep exercising the real guard chain instead
+    of a stub that would hide a hole in it. Never egresses. Returns the
+    list of ``(host, ip, path)`` tuples actually connected to.
+    """
+    import socket
+
+    from stapel_core.net import safe_fetch
+
+    specs = list(responses) or [b"audio-bytes"]
+    seen: list[tuple] = []
+
+    def _build(spec):
+        # Bytes are shorthand for "200 with this audio body". A fresh
+        # response object per hop: a body is a stream, and the last spec
+        # repeats for callers that download more than once.
+        if isinstance(spec, bytes):
+            return FakeHttpResponse(200, {"Content-Type": "audio/mpeg"}, spec)
+        return spec()
+
+    def fake_open(host, ip_, port, path, **kwargs):
+        seen.append((host, str(ip_), path))
+        spec = specs.pop(0) if len(specs) > 1 else specs[0]
+        return _build(spec)
+
+    monkeypatch.setattr(
+        socket, "getaddrinfo", lambda host, port, **kw: addrinfo(ip, port)
+    )
+    monkeypatch.setattr(safe_fetch, "_open", fake_open)
+    return seen

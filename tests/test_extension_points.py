@@ -239,12 +239,13 @@ class TestCachePolicySeam:
         FakeProvider.reset()
 
     def test_custom_policy_is_used_for_lookup_and_store(self, custom_cache):
-        services.complete("p", "small", source="llm_facade")
+        services.complete("p", "small", source="llm_facade", user_id="u1")
         # llm_facade is cached because the custom policy says so —
         # CACHE_LOOKUP no longer applies once the policy is swapped. The
         # key now carries provider + resolved model + size.
         assert custom_cache.lookups == [
-            ("p", None, "llm_facade", "fake", "claude-haiku-4-5-20251001", "small")
+            ("p", None, "llm_facade", "fake", "claude-haiku-4-5-20251001", "small",
+             "u1")
         ]
         assert custom_cache.stores == [
             (
@@ -255,12 +256,13 @@ class TestCachePolicySeam:
                 "fake",
                 "claude-haiku-4-5-20251001",
                 "small",
+                "u1",
             )
         ]
 
     def test_custom_policy_hit_skips_provider(self, custom_cache):
-        custom_cache.entries[("p", None, "llm_facade")] = '{"cached": true}'
-        result = services.complete("p", "small", source="llm_facade")
+        custom_cache.entries[("u1", "p", None, "llm_facade")] = '{"cached": true}'
+        result = services.complete("p", "small", source="llm_facade", user_id="u1")
         assert result["status"] == "ok"
         assert result["result"] == '{"cached": true}'
         assert FakeProvider.calls == []
@@ -274,8 +276,8 @@ class TestCachePolicySeam:
 
     def test_custom_policy_serves_translate(self, custom_cache):
         FakeProvider.result = ProviderResult(text='{"k": "Hallo"}')
-        first = services.translate("en", "de", {"k": "Hello"})
-        second = services.translate("en", "de", {"k": "Hello"})
+        first = services.translate("en", "de", {"k": "Hello"}, user_id="u1")
+        second = services.translate("en", "de", {"k": "Hello"}, user_id="u1")
         assert first == second == {"status": "ok", "result": {"k": "Hallo"}}
         # second call answered by the recording policy, not the provider
         assert len(FakeProvider.calls) == 1
