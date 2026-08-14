@@ -341,12 +341,30 @@ def _download(url: str, *, provider: str, timeout: int) -> bytes:
     taxonomy is preserved: a refusal or a 4xx is fatal (the ref itself is
     bad — the next provider would fail on it identically); transport,
     deadline and 5xx are retryable.
+
+    An empty ``STT_DOWNLOAD_ALLOWED_HOSTS`` is a refusal, not a wildcard:
+    the un-configured deployment is the one that must not fetch whatever
+    host a request names.
     """
     from stapel_core.net import SafeFetchError, fetch_bytes
+
+    from ..conf import stt_download_allow_any_host
 
     # The caller's timeout may only lower the configured ceiling.
     deadline = min(float(timeout), float(_limit("STT_DOWNLOAD_TOTAL_DEADLINE")))
     allowed_hosts = list(_limit("STT_DOWNLOAD_ALLOWED_HOSTS") or []) or None
+
+    # Fatal, not retryable: no other provider would fetch this ref either —
+    # the refusal is about this deployment's configuration, not the URL.
+    if allowed_hosts is None and not stt_download_allow_any_host():
+        raise TranscriptionError(
+            "audio URL refused (no_allowed_hosts): "
+            "STAPEL_AGENT['STT_DOWNLOAD_ALLOWED_HOSTS'] is empty. List the "
+            "host(s) audio may be fetched from, or set "
+            "STAPEL_AGENT['STT_DOWNLOAD_ALLOW_ANY_HOST'] = True to accept "
+            "any public host.",
+            provider=provider,
+        )
 
     try:
         return fetch_bytes(

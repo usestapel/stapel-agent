@@ -15,7 +15,12 @@ from stapel_agent.stt.base import (
     transcript_from_dict,
     utterances_from_words,
 )
-from stapel_agent.tests.fakes import FakeHttpResponse, addrinfo, serve_audio
+from stapel_agent.tests.fakes import (
+    FakeHttpResponse,
+    addrinfo,
+    allow_any_audio_host,
+    serve_audio,
+)
 
 
 class TestAudioRefValidation:
@@ -138,6 +143,7 @@ class TestAudioDownloadGuards:
         def no_dns(*a, **kw):
             raise AssertionError("resolution attempted for a rejected scheme")
 
+        allow_any_audio_host(monkeypatch)  # the scheme is the subject here
         monkeypatch.setattr(socket, "getaddrinfo", no_dns)
         with pytest.raises(TranscriptionError, match="scheme_not_https") as e:
             AudioRef(url="http://cdn.test/a.mp3").read_bytes(provider="p")
@@ -167,6 +173,7 @@ class TestAudioDownloadGuards:
         import socket as _socket
 
         hops = iter(["93.184.216.34", "10.0.0.9"])
+        allow_any_audio_host(monkeypatch)  # the redirect hop is the subject
         monkeypatch.setattr(
             _socket,
             "getaddrinfo",
@@ -230,6 +237,7 @@ class TestAudioDownloadGuards:
         def no_such_host(*a, **kw):
             raise socket.gaierror("nodename nor servname provided")
 
+        allow_any_audio_host(monkeypatch)  # DNS is the subject here
         monkeypatch.setattr(socket, "getaddrinfo", no_such_host)
         with pytest.raises(
             RetryableTranscriptionError, match="dns_resolution_failed"

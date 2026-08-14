@@ -145,7 +145,8 @@ retry on another provider.
 | `STT_DOWNLOAD_MAX_BYTES` | `134217728` | Byte cap on an audio-URL download (128 MiB), enforced mid-stream |
 | `STT_DOWNLOAD_TIMEOUT` | `30.0` | Per-socket connect/read timeout for one hop of that download |
 | `STT_DOWNLOAD_TOTAL_DEADLINE` | `300.0` | Ceiling on the whole download incl. redirects; a per-call `timeout=` may only lower it |
-| `STT_DOWNLOAD_ALLOWED_HOSTS` | `[]` | Exact-host allowlist for audio URLs, applied to every hop (`[]` = any public host) |
+| `STT_DOWNLOAD_ALLOWED_HOSTS` | `[]` | Exact-host allowlist for audio URLs, applied to every hop. Empty = the download is REFUSED (empty is not a wildcard) |
+| `STT_DOWNLOAD_ALLOW_ANY_HOST` | `False` | Opt-out: accept audio from any public host when the allowlist is empty. The other fetch guards still apply |
 | `WHISPER_BASE_URL` / `WHISPER_API_KEY` / `WHISPER_MODEL` | `""` / `""` / `"whisper-1"` | OpenAI-compatible Whisper endpoint — the OpenAI API or self-hosted faster-whisper (key optional) |
 | `ELEVENLABS_API_KEY` / `ELEVENLABS_STT_URL` / `ELEVENLABS_STT_MODEL` | `""` / Scribe URL / `"scribe_v2"` | ElevenLabs Scribe |
 | `ASSEMBLYAI_API_KEY` / `ASSEMBLYAI_BASE_URL` / `ASSEMBLYAI_MODEL` | `""` / `"https://api.assemblyai.com"` / `"universal"` | AssemblyAI (async submit+poll) |
@@ -157,6 +158,7 @@ retry on another provider.
 | `CACHE_TTL` | `604800` | Cache window in seconds (7 days); older rows are ignored (default policy) |
 | `CACHE_ALLOW_UNSCOPED` | `[]` | Sources whose content the host declares non-personal; a call without `user_id` otherwise skips the cache |
 | `PROMPT_LOG_RETENTION_DAYS` | `90` | Age after which `purge_prompt_logs` scrubs a ledger row's text, keeping its token counters |
+| `PROMPT_LOG_RETENTION_SCHEDULED` | `False` | Declares that the host's scheduler runs `purge_prompt_logs`; otherwise a system check (`W014`) says the window is unenforced |
 | `CACHE_POLICY` | `"stapel_agent.cache.PromptLogCachePolicy"` | Dotted path to a `CachePolicy` subclass — swap the prompt cache (Redis, no-op, ...) without forking |
 
 ## Provider matrix

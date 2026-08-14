@@ -22,6 +22,76 @@ to a ``status: failure`` response, never an import-time crash).
 """
 from stapel_core.conf import AppSettings
 
+#: Keys that must never resolve from an environment variable.
+#:
+#: ``AppSettings`` falls back to ``os.environ[KEY]`` for every key not listed
+#: here, and these names are generic enough (``CLI_BINARY``, ``CACHE_POLICY``,
+#: ``MAX_TOKENS``, ``DEFAULT_PROVIDER``) that a same-named variable in a shared
+#: pod, a compose file or a CI image would land on them by accident. What they
+#: decide is not configuration-shaped:
+#:
+#: * ``CLI_BINARY`` is argv[0] of a ``subprocess.run`` (providers/claude_cli),
+#:   so an env var would pick the EXECUTABLE this process spawns;
+#: * ``CACHE_POLICY`` is an ``import_strings`` key — an env var becomes an
+#:   ``import_string()`` call, i.e. arbitrary in-process code selection;
+#: * the ``*_PROVIDERS`` overlays, the ``DEFAULT_*`` names and the STT routes
+#:   choose which adapter class serves a call;
+#: * the ``STT_DOWNLOAD_*`` keys are the SSRF/DoS ceilings on a caller-supplied
+#:   URL, and the ``CACHE_*``/``PROMPT_LOG_*`` keys are the tenancy and
+#:   retention gates. A ceiling an outsider can raise is not a ceiling.
+#:
+#: They still resolve through ``settings.STAPEL_AGENT``, a flat Django setting
+#: or the default — the deployment states them where they are reviewable. Note
+#: what is deliberately NOT here: ``*_API_KEY``, ``*_BASE_URL``/``*_URL`` and
+#: the model names. Those are per-deployment credentials and endpoints, and the
+#: environment is their canonical channel.
+NO_ENV = (
+    # Code selection.
+    "CACHE_POLICY",
+    "CLI_BINARY",
+    "PROVIDERS",
+    "DEFAULT_PROVIDER",
+    "STT_PROVIDERS",
+    "DEFAULT_STT_PROVIDER",
+    "STT_FALLBACK_CHAIN",
+    "STT_LANGUAGE_ROUTES",
+    "STT_PRICING_MODULES",
+    "STT_MODEL_CONFIGS",
+    "DIARIZATION_PROVIDERS",
+    "DEFAULT_DIARIZATION_PROVIDER",
+    "EMBEDDING_PROVIDERS",
+    "DEFAULT_EMBEDDING_PROVIDER",
+    "RERANK_PROVIDERS",
+    "DEFAULT_RERANK_PROVIDER",
+    "IMAGE_PROVIDERS",
+    "DEFAULT_IMAGE_PROVIDER",
+    # Ceilings — cost, time and the guarded download.
+    "MAX_TOKENS",
+    "CLI_TIMEOUT",
+    "STT_TIMEOUT",
+    "STT_DOWNLOAD_MAX_BYTES",
+    "STT_DOWNLOAD_TIMEOUT",
+    "STT_DOWNLOAD_TOTAL_DEADLINE",
+    "STT_DOWNLOAD_ALLOWED_HOSTS",
+    "STT_DOWNLOAD_ALLOW_ANY_HOST",
+    "DIARIZATION_TIMEOUT",
+    "EMBEDDINGS_TIMEOUT",
+    "RERANK_TIMEOUT",
+    # Tenancy and retention gates.
+    "CACHE_LOOKUP",
+    "CACHE_TTL",
+    "CACHE_ALLOW_UNSCOPED",
+    "PROMPT_LOG_RETENTION_DAYS",
+    "PROMPT_LOG_RETENTION_SCHEDULED",
+)
+
+#: Values an environment variable (or a hand-written string in a settings
+#: dict) may spell "yes" with. ``AppSettings`` does no coercion — it hands
+#: back the raw string — and ``bool("false")`` is True, so a boolean read
+#: straight through ``bool()`` reverses the operator's intent. Every boolean
+#: key in this namespace goes through an accessor below instead.
+_TRUTHY = {"1", "true", "yes", "on"}
+
 agent_settings = AppSettings(
     "STAPEL_AGENT",
     defaults={
@@ -79,11 +149,19 @@ agent_settings = AppSettings(
         # Whole download, redirects included. A per-socket timeout alone
         # bounds nothing against a server that trickles one byte per window.
         "STT_DOWNLOAD_TOTAL_DEADLINE": 300.0,
-        # Optional exact-host allowlist for audio URLs ([] = any public
-        # host). Deployments that only ever pass presigned URLs from their
-        # own object store should list that store here: it turns the
+        # Exact-host allowlist for audio URLs. Deployments pass presigned
+        # URLs from their own object store: listing it here turns the
         # SSRF-shaped surface into a fetch of one known origin.
         "STT_DOWNLOAD_ALLOWED_HOSTS": [],
+        # What an EMPTY allowlist means. False (the default) = refuse the
+        # download: an unconfigured deployment must not be one where any
+        # caller-supplied host on the public internet is fetchable, and
+        # "we forgot to fill the list" must not read the same as "any host
+        # is fine". True restores the pre-0.10 behaviour — every public
+        # host, with the fetcher's private/loopback/metadata guards still
+        # applied — for hosts that genuinely accept arbitrary origins.
+        # Ignored when the allowlist is non-empty: the list wins.
+        "STT_DOWNLOAD_ALLOW_ANY_HOST": False,
         # Overlay merged OVER stt.pricing.BUILTIN_STT_PRICING_MODULES —
         # {provider name: dotted path to a module exposing estimate_cost()}.
         # A host that registered its own STT adapter registers its rate card
@@ -217,12 +295,67 @@ agent_settings = AppSettings(
         # and its token counters stay for accounting. None = no retention
         # limit, and the host owes the regulator an explanation.
         "PROMPT_LOG_RETENTION_DAYS": 90,
+        # The host declares that its scheduler runs `purge_prompt_logs`
+        # (cron, systemd timer, k8s CronJob — anything this process cannot
+        # see). False = checks.check_prompt_log_retention_is_scheduled
+        # warns at boot, because a retention window nothing executes is a
+        # number in a settings file, not a policy: the prompts and full
+        # responses stay in the table forever while the config says 90
+        # days. A beat schedule that runs the job is detected and silences
+        # the warning without this flag.
+        "PROMPT_LOG_RETENTION_SCHEDULED": False,
         # Dotted path to a stapel_agent.cache.CachePolicy subclass — the
         # cache seam. The default implements the PromptLog+TTL behaviour;
         # swap for Redis/no-op without forking.
         "CACHE_POLICY": "stapel_agent.cache.PromptLogCachePolicy",
     },
     import_strings=("CACHE_POLICY",),
+    no_env=NO_ENV,
 )
 
-__all__ = ["agent_settings"]
+
+def _flag(key: str) -> bool:
+    """Read one boolean key without the ``bool("false") is True`` trap.
+
+    Falls back to the shipped default when Django settings are not
+    configured, so this stays usable outside a Django process (the STT
+    download path is importable on its own — see ``stt.base._limit``).
+    """
+    try:
+        value = getattr(agent_settings, key)
+    except Exception:  # Django absent or settings not configured
+        value = agent_settings.defaults[key]
+    if isinstance(value, str):
+        return value.strip().lower() in _TRUTHY
+    return bool(value)
+
+
+def stt_download_allow_any_host() -> bool:
+    """``STT_DOWNLOAD_ALLOW_ANY_HOST`` as a bool (see that key)."""
+    return _flag("STT_DOWNLOAD_ALLOW_ANY_HOST")
+
+
+def prompt_log_retention_scheduled() -> bool:
+    """``PROMPT_LOG_RETENTION_SCHEDULED`` as a bool (see that key)."""
+    return _flag("PROMPT_LOG_RETENTION_SCHEDULED")
+
+
+def pyannoteai_exclusive() -> bool:
+    """``PYANNOTEAI_EXCLUSIVE`` as a bool (see that key).
+
+    This one is env-readable on purpose (it shapes a request, it does not
+    decide a trust question), which is exactly why it needs the accessor:
+    ``PYANNOTEAI_EXCLUSIVE=false`` in the environment arrives as the
+    string ``"false"`` and ``bool("false")`` is True — the operator would
+    get the opposite of what they asked for.
+    """
+    return _flag("PYANNOTEAI_EXCLUSIVE")
+
+
+__all__ = [
+    "NO_ENV",
+    "agent_settings",
+    "prompt_log_retention_scheduled",
+    "pyannoteai_exclusive",
+    "stt_download_allow_any_host",
+]

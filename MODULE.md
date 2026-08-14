@@ -61,7 +61,8 @@ same name → environment variable → default. All keys are read **lazily at ca
 | `STT_DOWNLOAD_MAX_BYTES` | `134217728` | Byte cap on an audio URL download (128 MiB). The transfer aborts mid-stream when it is crossed — an oversized body is never buffered whole. |
 | `STT_DOWNLOAD_TIMEOUT` | `30.0` | Per-socket connect/read timeout for one hop of that download. |
 | `STT_DOWNLOAD_TOTAL_DEADLINE` | `300.0` | Ceiling (seconds) on the **whole** download, redirects included. A per-call `timeout=` may lower it, never raise it — a caller cannot buy a longer hold on a worker than the deployment allows. |
-| `STT_DOWNLOAD_ALLOWED_HOSTS` | `[]` | Exact-host allowlist for audio URLs, applied to every redirect hop (`[]` = any public host). A deployment that only ever passes presigned URLs from its own object store should list that store here. |
+| `STT_DOWNLOAD_ALLOWED_HOSTS` | `[]` | Exact-host allowlist for audio URLs, applied to every redirect hop. A deployment that only ever passes presigned URLs from its own object store lists that store here. **Empty is not a wildcard**: with no allowlist the download is refused unless `STT_DOWNLOAD_ALLOW_ANY_HOST` is on. |
+| `STT_DOWNLOAD_ALLOW_ANY_HOST` | `False` | The explicit opt-out for deployments that genuinely accept audio from arbitrary origins: an empty allowlist then means any **public** host, with the fetcher's https-only / private-IP / redirect guards still applied. Ignored when the allowlist is non-empty. |
 | `WHISPER_BASE_URL` / `WHISPER_API_KEY` / `WHISPER_MODEL` | `""` / `""` / `"whisper-1"` | OpenAI-compatible Whisper endpoint (OpenAI API or self-hosted faster-whisper — the key is optional for self-hosted). |
 | `ELEVENLABS_API_KEY` / `ELEVENLABS_STT_URL` / `ELEVENLABS_STT_MODEL` | `""` / Scribe URL / `"scribe_v2"` | ElevenLabs Scribe credentials/endpoint/model. |
 | `ASSEMBLYAI_API_KEY` / `ASSEMBLYAI_BASE_URL` / `ASSEMBLYAI_MODEL` | `""` / `"https://api.assemblyai.com"` / `"universal"` | AssemblyAI credentials/endpoint/`speech_model`. |
@@ -78,6 +79,7 @@ same name → environment variable → default. All keys are read **lazily at ca
 | `CACHE_TTL` | `604800` | Cache window in seconds; expired rows are ignored (default policy). |
 | `CACHE_ALLOW_UNSCOPED` | `[]` | Sources whose content the host declares **non-personal**, so a call without `user_id` may still use the shared cache. Empty = fail closed: an unscoped call skips the cache rather than risk answering one tenant with another's response. |
 | `PROMPT_LOG_RETENTION_DAYS` | `90` | Age after which `purge_prompt_logs` scrubs a ledger row's TEXT (prompt, system prompt, response, error); the row and its token counters stay for accounting. `None` = keep text forever, an explicit decision the host owns. |
+| `PROMPT_LOG_RETENTION_SCHEDULED` | `False` | The host declares that its scheduler (cron, systemd timer, CronJob) runs `manage.py purge_prompt_logs`. Left false, `stapel_agent.W014` warns at boot that the retention window is a number nothing enforces. A Celery beat entry running the job is detected and needs no declaration. |
 | `CACHE_POLICY` | `"stapel_agent.cache.PromptLogCachePolicy"` | Dotted path to a `CachePolicy` subclass — in `import_strings`, instantiated per call. See "Cache policy" below. |
 
 ### LLM providers — open registry with MERGE semantics (flagship seam)

@@ -537,7 +537,23 @@ class FakeHttpResponse:
         pass
 
 
-def serve_audio(monkeypatch, *responses, ip="93.184.216.34"):
+def allow_any_audio_host(monkeypatch):
+    """Stand in for a deployment that opted into any-public-host audio.
+
+    The shipped default is closed: an empty ``STT_DOWNLOAD_ALLOWED_HOSTS``
+    refuses the download instead of meaning "any host". Tests whose
+    subject is a *different* guard (scheme, IP range, redirect, DNS) say
+    so here in one line, rather than each carrying settings for a decision
+    they are not about. The flag is patched rather than overridden through
+    ``settings`` because pytest-django's fixture replaces the whole
+    ``STAPEL_AGENT`` dict, and half these call sites set it afterwards.
+    """
+    from stapel_agent import conf
+
+    monkeypatch.setattr(conf, "stt_download_allow_any_host", lambda: True)
+
+
+def serve_audio(monkeypatch, *responses, ip="93.184.216.34", allow_any_host=True):
     """Fake the network under the guarded fetcher — one response per hop.
 
     Patches the two seams the fetcher owns (``socket.getaddrinfo`` and
@@ -545,10 +561,20 @@ def serve_audio(monkeypatch, *responses, ip="93.184.216.34"):
     itself, so provider tests keep exercising the real guard chain instead
     of a stub that would hide a hole in it. Never egresses. Returns the
     list of ``(host, ip, path)`` tuples actually connected to.
+
+    *allow_any_host* applies :func:`allow_any_audio_host` (the default),
+    so a test about some other guard does not have to think about the
+    allowlist. A test about the allowlist gate itself passes
+    ``allow_any_host=False`` and gets the real accessor back; the
+    allowlist setting wins over the flag either way, so the host-pinning
+    tests are unaffected.
     """
     import socket
 
     from stapel_core.net import safe_fetch
+
+    if allow_any_host:
+        allow_any_audio_host(monkeypatch)
 
     specs = list(responses) or [b"audio-bytes"]
     seen: list[tuple] = []
