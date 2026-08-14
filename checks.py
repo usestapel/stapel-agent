@@ -8,6 +8,8 @@ Registered from ``AgentConfig.ready()``. IDs:
   (typo, or an optional dependency missing in this image).
 - ``stapel_agent.W002`` — a registry entry resolves to something that is
   not an ``LlmProvider`` subclass.
+- ``stapel_agent.W014`` — ``PROMPT_LOG_RETENTION_DAYS`` is configured but
+  nothing is known to run the purge.
 
 Import/subclass problems are warnings, not errors, on purpose: providers
 resolve lazily per request and degrade to ``status: "failure"`` — a
@@ -357,6 +359,68 @@ def check_rerank_providers(app_configs, **kwargs):
     return issues
 
 
+#: Substring that identifies the retention job in a beat schedule — the
+#: management command's name, which is also what a Celery task wrapping it
+#: is invariably called.
+PURGE_JOB_NAME = "purge_prompt_logs"
+
+
+@checks.register("stapel_agent")
+def check_prompt_log_retention_is_scheduled(app_configs, **kwargs):
+    """W014: the retention window is set and nothing is known to enforce it.
+
+    ``PROMPT_LOG_RETENTION_DAYS`` defaults to 90, but the only executor
+    this package ships is the ``purge_prompt_logs`` management command.
+    Nothing in ``AgentConfig.ready()`` schedules it, so unless the host
+    wired a cron entry the prompts, system prompts and full responses in
+    ``PromptLog`` are kept forever while the configuration states 90 days
+    — a retention policy that exists only as a number (audit AGENT-02).
+
+    A process cannot see the host's crontab, so the operator declares it:
+    ``PROMPT_LOG_RETENTION_SCHEDULED = True``. A beat schedule that runs
+    the job is detected and needs no declaration. Warning rather than
+    Error because the gap is a compliance problem, not a broken deploy —
+    but silence was the wrong default, since an unenforced retention
+    policy looks exactly like an enforced one from the settings file.
+
+    ``PROMPT_LOG_RETENTION_DAYS = None`` is not reported here: keeping the
+    text forever is then a stated decision, not an accident.
+    """
+    from django.conf import settings
+
+    from .conf import agent_settings, prompt_log_retention_scheduled
+
+    if agent_settings.PROMPT_LOG_RETENTION_DAYS is None:
+        return []
+    if prompt_log_retention_scheduled():
+        return []
+
+    schedule = getattr(settings, "CELERY_BEAT_SCHEDULE", None) or {}
+    for entry in schedule.values():
+        if PURGE_JOB_NAME in str((entry or {}).get("task", "")):
+            return []
+        if PURGE_JOB_NAME in str((entry or {}).get("args", "")):
+            return []
+
+    return [
+        checks.Warning(
+            "STAPEL_AGENT['PROMPT_LOG_RETENTION_DAYS'] is "
+            f"{agent_settings.PROMPT_LOG_RETENTION_DAYS!r}, but nothing in "
+            "this process runs the purge: PromptLog keeps prompts, system "
+            "prompts and full responses in plaintext for as long as the row "
+            "exists.",
+            hint=(
+                f"Schedule `manage.py {PURGE_JOB_NAME}` (cron, systemd timer, "
+                "CronJob) and set "
+                "STAPEL_AGENT['PROMPT_LOG_RETENTION_SCHEDULED'] = True to "
+                "declare it, or set PROMPT_LOG_RETENTION_DAYS = None to state "
+                "that this deployment keeps the text indefinitely."
+            ),
+            id="stapel_agent.W014",
+        )
+    ]
+
+
 def _registry_issues(
     *,
     kind: str,
@@ -413,9 +477,11 @@ def _registry_issues(
 
 
 __all__ = [
+    "PURGE_JOB_NAME",
     "check_diarization_providers",
     "check_embedding_providers",
     "check_image_providers",
+    "check_prompt_log_retention_is_scheduled",
     "check_providers",
     "check_rerank_providers",
     "check_stt_providers",

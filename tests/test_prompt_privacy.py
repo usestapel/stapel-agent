@@ -182,6 +182,86 @@ class TestRetention:
         assert old.prompt == ""
 
 
+class TestRetentionIsScheduled:
+    """W014: the retention window is a number until something runs it.
+
+    ``PROMPT_LOG_RETENTION_DAYS`` shipped a 90-day default and the only
+    executor is the ``purge_prompt_logs`` management command. Nothing in
+    ``AgentConfig.ready()`` schedules it, so a host that never wired cron
+    keeps every prompt and full response forever while its settings say
+    90 days — and nothing said so.
+    """
+
+    def _run(self):
+        from stapel_agent.checks import check_prompt_log_retention_is_scheduled
+
+        return check_prompt_log_retention_is_scheduled(app_configs=None)
+
+    def _ids(self):
+        return [issue.id for issue in self._run()]
+
+    def test_the_shipped_default_warns(self, settings):
+        settings.STAPEL_AGENT = {}
+        assert self._ids() == ["stapel_agent.W014"]
+
+    def test_the_warning_names_the_command_and_both_ways_out(self, settings):
+        settings.STAPEL_AGENT = {}
+        issue = self._run()[0]
+        assert "purge_prompt_logs" in issue.hint
+        assert "PROMPT_LOG_RETENTION_SCHEDULED" in issue.hint
+        assert "PROMPT_LOG_RETENTION_DAYS = None" in issue.hint
+
+    def test_declaring_the_scheduler_silences_it(self, settings):
+        settings.STAPEL_AGENT = {"PROMPT_LOG_RETENTION_SCHEDULED": True}
+        assert self._ids() == []
+
+    def test_a_string_declaration_is_read_as_a_boolean(self, settings):
+        # An env var cannot reach this key (it is in conf.NO_ENV), but a
+        # settings dict written by hand can still carry a string.
+        settings.STAPEL_AGENT = {"PROMPT_LOG_RETENTION_SCHEDULED": "false"}
+        assert self._ids() == ["stapel_agent.W014"]
+
+    def test_a_beat_entry_running_the_job_silences_it(self, settings):
+        settings.STAPEL_AGENT = {}
+        settings.CELERY_BEAT_SCHEDULE = {
+            "agent-purge": {
+                "task": "stapel_agent.tasks.purge_prompt_logs",
+                "schedule": 86400,
+            }
+        }
+        assert self._ids() == []
+
+    def test_a_beat_entry_running_the_command_silences_it(self, settings):
+        settings.STAPEL_AGENT = {}
+        settings.CELERY_BEAT_SCHEDULE = {
+            "agent-purge": {
+                "task": "myapp.run_management_command",
+                "args": ("purge_prompt_logs",),
+                "schedule": 86400,
+            }
+        }
+        assert self._ids() == []
+
+    def test_a_beat_schedule_that_runs_something_else_still_warns(self, settings):
+        settings.STAPEL_AGENT = {}
+        settings.CELERY_BEAT_SCHEDULE = {
+            "other": {"task": "myapp.tasks.send_digest", "schedule": 60}
+        }
+        assert self._ids() == ["stapel_agent.W014"]
+
+    def test_retention_switched_off_is_a_decision_not_a_gap(self, settings):
+        settings.STAPEL_AGENT = {"PROMPT_LOG_RETENTION_DAYS": None}
+        assert self._ids() == []
+
+    def test_the_check_is_registered_with_django(self):
+        from django.core.checks import registry
+
+        from stapel_agent.checks import check_prompt_log_retention_is_scheduled
+
+        assert check_prompt_log_retention_is_scheduled in registry.registry.get_checks()
+
+
+
 @pytest.mark.django_db
 class TestGDPRProvider:
     def test_registered_with_the_registry(self):
