@@ -55,6 +55,56 @@ def _cache_policy() -> CachePolicy:
     return agent_settings.CACHE_POLICY()
 
 
+def _policy_takes_scope(policy: CachePolicy) -> bool:
+    """Whether *policy* can key its entries by tenant.
+
+    A policy written against the pre-scope signature cannot tell two
+    tenants apart, so it is not asked to: the caller skips the cache
+    entirely rather than hand a stranger's answer back. Fail closed —
+    there is no version of this where the sharing is the safe outcome.
+    """
+    import inspect
+
+    try:
+        params = inspect.signature(policy.lookup).parameters
+    except (TypeError, ValueError):  # C-implemented or exotic callable
+        return False
+    return "user_id" in params or any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
+    )
+
+
+def _cache_allowed(policy: CachePolicy, source: str, user_id) -> bool:
+    """Whether this call may read from / write to the prompt cache.
+
+    AGENT-02: the key used to be content-only, so two tenants issuing the
+    same sensitive prompt shared one stored response. A cache entry is now
+    bound to the caller's scope, and a call that supplies no scope does not
+    use the cache at all — unless the host has declared the source's
+    content non-personal in ``CACHE_ALLOW_UNSCOPED`` (UI-string translation
+    is the case that pays for itself; a recording summary never is).
+    """
+    if not policy.should_cache(source):
+        return False
+    if not _policy_takes_scope(policy):
+        logger.warning(
+            "stapel-agent: cache policy %s predates tenant-scoped keys — "
+            "caching disabled for it (add user_id to lookup()/store())",
+            type(policy).__name__,
+        )
+        return False
+    if user_id is not None:
+        return True
+    if source in set(agent_settings.CACHE_ALLOW_UNSCOPED or []):
+        return True
+    logger.debug(
+        "stapel-agent: %s call has no user_id — cache bypassed (unscoped "
+        "entries would be shared across tenants)",
+        source,
+    )
+    return False
+
+
 def _usage(row_or_result, *, model: str = "", provider: str = "") -> dict:
     """What the call consumed, and what it cost.
 
@@ -213,7 +263,13 @@ def complete(
     model = backend.resolve_model(model_size, models[model_size])
 
     policy = _cache_policy()
-    if not skip_cache and not images and not schema and policy.should_cache(source):
+    scope = str(user_id) if user_id is not None else None
+    if (
+        not skip_cache
+        and not images
+        and not schema
+        and _cache_allowed(policy, source, scope)
+    ):
         cached = policy.lookup(
             prompt,
             system_prompt,
@@ -221,6 +277,7 @@ def complete(
             provider=provider_name,
             model=model,
             model_size=model_size,
+            user_id=scope,
         )
         if cached is not None:
             logger.info("stapel-agent: cache hit for %s prompt", source)
@@ -298,7 +355,7 @@ def complete(
     # external-store policies (Redis, ...) hook in here. Never store
     # multimodal or schema-constrained results — the text key sees
     # neither the pixels nor the requested shape.
-    if not images and not schema:
+    if not images and not schema and _cache_allowed(policy, source, scope):
         policy.store(
             prompt,
             system_prompt,
@@ -307,6 +364,7 @@ def complete(
             provider=provider_name,
             model=model,
             model_size=model_size,
+            user_id=scope,
         )
 
     return {
@@ -431,7 +489,8 @@ def translate(
     prompt = json.dumps(entries, indent=2, ensure_ascii=False)
 
     policy = _cache_policy()
-    if not skip_cache and policy.should_cache(PromptSource.TRANSLATE):
+    scope = str(user_id) if user_id is not None else None
+    if not skip_cache and _cache_allowed(policy, PromptSource.TRANSLATE, scope):
         # Resolve the same provider/model the inner complete() will use so
         # the pre-check key matches what complete() stored (translate calls
         # complete with skip_cache=True to avoid a double lookup).
@@ -451,6 +510,7 @@ def translate(
                 provider=provider_name,
                 model=model,
                 model_size=model_size,
+                user_id=scope,
             )
             if model is not None
             else None
@@ -820,6 +880,29 @@ def diarize(
 # ─── Summarization ────────────────────────────────────────────────────
 
 
+def _summary_result(summary: str, usage: dict) -> dict:
+    """Envelope a plain summary, flagging structured-output leakage.
+
+    AI-01: a schema-constrained answer parses by construction, a prose one
+    does not, so the plain path carries a canary instead. Model output is
+    untrusted at this boundary — the flag travels with the text so a
+    consumer can refuse to render it, and it appears only when something
+    was actually seen, keeping the clean-path envelope unchanged.
+    """
+    from .safety.markers import detect_structured_output_leak
+
+    leaked = detect_structured_output_leak(summary)
+    envelope = {"status": "ok", "summary": summary, "usage": usage}
+    if leaked:
+        logger.warning(
+            "stapel-agent: summary carries structured-output scaffolding %s "
+            "— treat as untrusted, do not render as markup",
+            leaked,
+        )
+        envelope["safety"] = {"structured_output_leak": leaked, "untrusted": True}
+    return envelope
+
+
 def summarize(
     text_or_transcript,
     *,
@@ -886,7 +969,7 @@ def summarize(
         result = _run(chunks[0], prep.SUMMARY_SYSTEM_PROMPT)
         if result["status"] == "failure":
             return {"status": "failure", "reason": result.get("reason")}
-        return {"status": "ok", "summary": result.get("result") or "", "usage": usage}
+        return _summary_result(result.get("result") or "", usage)
 
     # Map-reduce: summarize each chunk, then merge the partials.
     partials: list[str] = []
@@ -906,7 +989,7 @@ def summarize(
     )
     if merged["status"] == "failure":
         return {"status": "failure", "reason": merged.get("reason")}
-    return {"status": "ok", "summary": merged.get("result") or "", "usage": usage}
+    return _summary_result(merged.get("result") or "", usage)
 
 
 # ─── Embeddings ───────────────────────────────────────────────────────

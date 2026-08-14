@@ -40,6 +40,10 @@ consuming project.
 | STT_FALLBACK_CHAIN | env | providers tried in order after the default on retryable failure. | no | [] |
 | STT_LANGUAGE_ROUTES | env | {iso-639-1: [provider names]} language routing matrix. | no | {} |
 | STT_TIMEOUT | env | hard cap (seconds) on one provider's submit+poll cycle. | no | 1800 |
+| STT_DOWNLOAD_MAX_BYTES | env | byte cap on an audio-URL download; the transfer aborts mid-stream when crossed. | no | 134217728 |
+| STT_DOWNLOAD_TIMEOUT | env | per-socket connect/read timeout for one hop of that download. | no | 30.0 |
+| STT_DOWNLOAD_TOTAL_DEADLINE | env | ceiling (seconds) on the whole download incl. redirects; a per-call timeout may only lower it. | no | 300.0 |
+| STT_DOWNLOAD_ALLOWED_HOSTS | env | exact-host allowlist for audio URLs, applied to every redirect hop ([] = any public host). | no | [] |
 | STT_PRICING_MODULES | env | overlay merged OVER built-in STT rate cards ({provider name: dotted path to a module exposing `estimate_cost()`}); None/"" declares a provider unpriced. | no | {} |
 | STT_MODEL_CONFIGS | env | overlay merged OVER the built-in STT model-config catalog ({config id: `ModelConfig`}); None/"" removes a shipped config. | no | {} |
 | WHISPER_BASE_URL | env | OpenAI-compatible Whisper endpoint. | no | (empty) |
@@ -82,4 +86,6 @@ consuming project.
 |-----|--------|---------|----------|---------|
 | CACHE_LOOKUP | env | per-source cache-by-prompt toggle {source: bool}. | no | {llm_facade: false, translate: true, summarize: false} |
 | CACHE_TTL | env | seconds; cached rows older than this are ignored. | no | 604800 |
+| CACHE_ALLOW_UNSCOPED | env | sources declared non-personal, so a call without user_id may use the shared cache; empty = an unscoped call skips the cache. | no | [] |
+| PROMPT_LOG_RETENTION_DAYS | env | age after which `purge_prompt_logs` scrubs a ledger row's text (counters kept); None = no limit. | no | 90 |
 | CACHE_POLICY | env | dotted path to a CachePolicy subclass (the cache seam). | no | stapel_agent.cache.PromptLogCachePolicy |

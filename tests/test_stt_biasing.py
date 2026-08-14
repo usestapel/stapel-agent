@@ -23,6 +23,7 @@ from stapel_agent.stt.base import (
 from stapel_agent.stt.providers.assemblyai import AssemblyAIProvider
 from stapel_agent.stt.providers.elevenlabs import ElevenLabsProvider
 from stapel_agent.stt.providers.whisper_http import WhisperHttpProvider
+from stapel_agent.tests.fakes import serve_audio
 from stapel_agent.tests.test_stt_providers import (
     ASSEMBLY_DONE,
     ELEVENLABS_BODY,
@@ -42,13 +43,7 @@ class TestElevenLabsKeyterms:
     def configured(self, settings, monkeypatch):
         settings.STAPEL_AGENT = {"ELEVENLABS_API_KEY": "xi-test"}
 
-        class DownloadResp:
-            content = b"mp3-bytes"
-
-            def raise_for_status(self):
-                pass
-
-        monkeypatch.setattr("requests.get", lambda *a, **kw: DownloadResp())
+        serve_audio(monkeypatch, b"mp3-bytes")
         return settings
 
     def _run(self, monkeypatch, **kwargs):

@@ -57,7 +57,7 @@ from typing import Optional
 
 import requests
 
-from ...conf import agent_settings
+from ...conf import agent_settings, pyannoteai_exclusive
 from ..base import (
     DiarizationError,
     DiarizationProvider,
@@ -127,7 +127,9 @@ class PyannoteCloudProvider(DiarizationProvider):
         body: dict = {
             "url": self._media_url(audio, timeout=timeout),
             "model": agent_settings.PYANNOTEAI_MODEL,
-            "exclusive": bool(agent_settings.PYANNOTEAI_EXCLUSIVE),
+            # Via the accessor, not bool(): the setting is env-readable and
+            # bool("false") is True — see conf.pyannoteai_exclusive.
+            "exclusive": pyannoteai_exclusive(),
         }
         if num_speakers is not None:
             body["numSpeakers"] = int(num_speakers)

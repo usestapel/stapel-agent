@@ -1,27 +1,35 @@
 {
-  "_comment": "Curated layer for the `surface` section of docs/capabilities.json (discoverability-design.md §1.2). NOTE the honest boundary: stapel-agent's capabilities.json is otherwise still HAND-WRITTEN — this module has no gate registry and no docs/schema.json, so provides/axes/extension_points/operations_total are not derived from code and are not drift-gated. `make contract` patches in the two derivable things: module/version from pyproject (the hand-written copy had rotted to 0.2.10 against a 0.8.0 package) and the derived `surface`. Converting the rest of the document to an emitter is separate work.",
-
-  "surface_roots": [
-    {"select": "functions", "path": "safety/redaction.py"},
-    {"select": "functions", "path": "safety/markers.py"}
-  ],
-
-  "surface": {
-    "redaction_gate": {
-      "kind": "gate_function",
-      "intent": "Call before writing ANY model-produced text to a durable artifact (prompt log, cache row, transcript, report): raises RedactionError when the payload carries a provider key or the value of a *_API_KEY/_SECRET/_PASSWORD env var. It is a gate, not a filter — there is nothing to inspect afterwards, so an import without a call is the whole failure mode (that is exactly how it was lost once during a port: the import survived, the call did not)."
-    },
-    "detect_pwned_markers": {
-      "kind": "gate_function",
-      "intent": "The FLAG half of the flag/escape split: report which known prompt-injection markers a piece of untrusted text carries, without deciding any encoding. Run it on every LLM output and every retrieved chunk before that text reaches a consumer; the SafetyReport is what a caller branches on."
-    },
-    "redact_markers": {
-      "kind": "gate_function",
-      "intent": "The ESCAPE half for auto-escaping template engines (Jinja2): strips injection markers and does NO entity encoding, because the template engine already encodes and pre-encoding here double-escapes. Use this — not a hand-rolled replace — for any text rendered into a template."
-    },
-    "sanitize_for_rag": {
-      "kind": "gate_function",
-      "intent": "The ESCAPE half for text fed BACK into a model: strips markers and collapses whitespace. Mandatory for every retrieval chunk — an unfiltered marker inside a RAG chunk lands in the follow-up model's context and re-triggers the same attack, so 'the reader already flagged it' is not a reason to skip this."
-    }
+ "_comment": "Curated layer for the `surface` section of docs/capabilities.json (discoverability-design.md §1.2). NOTE the honest boundary: stapel-agent's capabilities.json is otherwise still HAND-WRITTEN — this module has no gate registry and no docs/schema.json, so provides/axes/extension_points/operations_total are not derived from code and are not drift-gated. `make contract` patches in the two derivable things: module/version from pyproject (the hand-written copy had rotted to 0.2.10 against a 0.8.0 package) and the derived `surface`. Converting the rest of the document to an emitter is separate work.",
+ "surface_roots": [
+  {
+   "select": "functions",
+   "path": "safety/redaction.py"
+  },
+  {
+   "select": "functions",
+   "path": "safety/markers.py"
   }
+ ],
+ "surface": {
+  "redaction_gate": {
+   "kind": "gate_function",
+   "intent": "Call before writing ANY model-produced text to a durable artifact (prompt log, cache row, transcript, report): raises RedactionError when the payload carries a provider key or the value of a *_API_KEY/_SECRET/_PASSWORD env var. It is a gate, not a filter — there is nothing to inspect afterwards, so an import without a call is the whole failure mode (that is exactly how it was lost once during a port: the import survived, the call did not)."
+  },
+  "detect_pwned_markers": {
+   "kind": "gate_function",
+   "intent": "The FLAG half of the flag/escape split: report which known prompt-injection markers a piece of untrusted text carries, without deciding any encoding. Run it on every LLM output and every retrieved chunk before that text reaches a consumer; the SafetyReport is what a caller branches on."
+  },
+  "redact_markers": {
+   "kind": "gate_function",
+   "intent": "The ESCAPE half for auto-escaping template engines (Jinja2): strips injection markers and does NO entity encoding, because the template engine already encodes and pre-encoding here double-escapes. Use this — not a hand-rolled replace — for any text rendered into a template."
+  },
+  "sanitize_for_rag": {
+   "kind": "gate_function",
+   "intent": "The ESCAPE half for text fed BACK into a model: strips markers and collapses whitespace. Mandatory for every retrieval chunk — an unfiltered marker inside a RAG chunk lands in the follow-up model's context and re-triggers the same attack, so 'the reader already flagged it' is not a reason to skip this."
+  },
+  "detect_structured_output_leak": {
+   "kind": "gate_function",
+   "intent": "Run on any plain-text model answer before a consumer stores or renders it: returns the names of structured-output scaffolds (tool-call envelopes, parameter tags, chat-template tokens, schema echoes) that leaked into prose. The schema-constrained path proves its shape by construction and needs no canary; the prose path has no such proof, so this is the detector that says the answer is degraded and the text is markup nobody asked for (audit AI-01)."
+  }
+ }
 }

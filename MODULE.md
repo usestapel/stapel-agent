@@ -29,6 +29,8 @@ registries). Everything below is verifiable against the code in this repo.
 | HTTP API (`urls.py`, `views.py`) | `api/llm/complete` (accepts optional `images`), `api/llm/translate`, `api/llm/transcribe`, `api/llm/summarize`, `api/llm/generate-image` (all `IsServiceRequest \| IsStaffUser`; hosts mount the app under `agent/`). LLM/STT/image failures are HTTP 200 with `status: "failure"` |
 | Providers (`providers/`) | `LlmProvider` ABC + `ProviderResult`/`ProviderError`/`ProviderTimeout` (`providers/base.py`), open registry (`providers/__init__.py`: `BUILTIN_PROVIDERS`, `register_provider()`, `registered_providers()`), `AnthropicProvider` (SDK, default), `OpenAICompatProvider` (any `/chat/completions` dialect), `ClaudeCodeCLIProvider` (opt-in `claude -p` spawn, never the default) |
 | Cache (`cache.py`) | `CachePolicy` ABC (`should_cache` / `lookup` / optional `store`) + `PromptLogCachePolicy` default (PromptLog rows + `CACHE_LOOKUP`/`CACHE_TTL`) |
+| Privacy & retention (`gdpr.py`, `retention.py`, `management/`) | `AgentGDPRProvider` (section `agent`; registered into `stapel_core.gdpr.gdpr_registry` from `AgentConfig.ready()`, so subject export/erasure reaches the prompt ledger), `purge_prompt_logs()` + `scrub_queryset()` (scrub the text, keep the counters), management command `purge_prompt_logs [--days N] [--dry-run]` — the job a deployment schedules |
+| Safety (`safety/`) | `redaction_gate` (provider keys/env secrets never reach a durable artifact), `detect_pwned_markers` / `redact_markers` / `sanitize_for_rag` (prompt-injection flag+escape split), `detect_structured_output_leak` (structured-output scaffolding leaking into a plain answer) |
 | System checks (`checks.py`) | `stapel_agent.E001` (DEFAULT_PROVIDER not in the effective registry), `W001` (unimportable provider path), `W002` (entry is not an `LlmProvider` subclass), `W003`/`W004` (the STT equivalents), `W005`/`W006` (the image-registry equivalents) — registered from `AgentConfig.ready()` |
 | Public API (`__init__.py`, PEP 562 lazy) | `__all__ = ["AudioRef", "CachePolicy", "GeneratedImage", "ImageGenProvider", "ImageRef", "LlmProvider", "NormalizedTranscript", "ProviderResult", "SttProvider", "agent_settings", "complete", "generate_image", "register_image_provider", "register_provider", "register_stt_provider", "registered_image_providers", "registered_providers", "registered_stt_providers", "summarize", "transcribe", "translate"]` — Django-free at import |
 
@@ -56,6 +58,11 @@ same name → environment variable → default. All keys are read **lazily at ca
 | `STT_FALLBACK_CHAIN` | `[]` | Provider names tried in order after the default — on **retryable** failure only. |
 | `STT_LANGUAGE_ROUTES` | `{}` | `{iso-639-1: [provider names]}` language matrix; beats the default chain, loses to an explicit `provider` in the request. |
 | `STT_TIMEOUT` | `1800` | Hard cap (seconds) on one STT provider's submit+poll cycle. |
+| `STT_DOWNLOAD_MAX_BYTES` | `134217728` | Byte cap on an audio URL download (128 MiB). The transfer aborts mid-stream when it is crossed — an oversized body is never buffered whole. |
+| `STT_DOWNLOAD_TIMEOUT` | `30.0` | Per-socket connect/read timeout for one hop of that download. |
+| `STT_DOWNLOAD_TOTAL_DEADLINE` | `300.0` | Ceiling (seconds) on the **whole** download, redirects included. A per-call `timeout=` may lower it, never raise it — a caller cannot buy a longer hold on a worker than the deployment allows. |
+| `STT_DOWNLOAD_ALLOWED_HOSTS` | `[]` | Exact-host allowlist for audio URLs, applied to every redirect hop. A deployment that only ever passes presigned URLs from its own object store lists that store here. **Empty is not a wildcard**: with no allowlist the download is refused unless `STT_DOWNLOAD_ALLOW_ANY_HOST` is on. |
+| `STT_DOWNLOAD_ALLOW_ANY_HOST` | `False` | The explicit opt-out for deployments that genuinely accept audio from arbitrary origins: an empty allowlist then means any **public** host, with the fetcher's https-only / private-IP / redirect guards still applied. Ignored when the allowlist is non-empty. |
 | `WHISPER_BASE_URL` / `WHISPER_API_KEY` / `WHISPER_MODEL` | `""` / `""` / `"whisper-1"` | OpenAI-compatible Whisper endpoint (OpenAI API or self-hosted faster-whisper — the key is optional for self-hosted). |
 | `ELEVENLABS_API_KEY` / `ELEVENLABS_STT_URL` / `ELEVENLABS_STT_MODEL` | `""` / Scribe URL / `"scribe_v2"` | ElevenLabs Scribe credentials/endpoint/model. |
 | `ASSEMBLYAI_API_KEY` / `ASSEMBLYAI_BASE_URL` / `ASSEMBLYAI_MODEL` | `""` / `"https://api.assemblyai.com"` / `"universal"` | AssemblyAI credentials/endpoint/`speech_model`. |
@@ -70,6 +77,9 @@ same name → environment variable → default. All keys are read **lazily at ca
 | `IMAGES_MODEL` | `""` | Optional model name; empty = omitted from the request (single-model servers). |
 | `CACHE_LOOKUP` | `{"llm_facade": False, "translate": True, "summarize": False}` | Per-source cache-by-prompt toggle, honoured by the **default** cache policy (latest `success` row with identical prompt+system_prompt+source **and matching provider + resolved model + model size**; multimodal rows are excluded — the text key can't see pixels). |
 | `CACHE_TTL` | `604800` | Cache window in seconds; expired rows are ignored (default policy). |
+| `CACHE_ALLOW_UNSCOPED` | `[]` | Sources whose content the host declares **non-personal**, so a call without `user_id` may still use the shared cache. Empty = fail closed: an unscoped call skips the cache rather than risk answering one tenant with another's response. |
+| `PROMPT_LOG_RETENTION_DAYS` | `90` | Age after which `purge_prompt_logs` scrubs a ledger row's TEXT (prompt, system prompt, response, error); the row and its token counters stay for accounting. `None` = keep text forever, an explicit decision the host owns. |
+| `PROMPT_LOG_RETENTION_SCHEDULED` | `False` | The host declares that its scheduler (cron, systemd timer, CronJob) runs `manage.py purge_prompt_logs`. Left false, `stapel_agent.W014` warns at boot that the retention window is a number nothing enforces. A Celery beat entry running the job is detected and needs no declaration. |
 | `CACHE_POLICY` | `"stapel_agent.cache.PromptLogCachePolicy"` | Dotted path to a `CachePolicy` subclass — in `import_strings`, instantiated per call. See "Cache policy" below. |
 
 ### LLM providers — open registry with MERGE semantics (flagship seam)
@@ -210,6 +220,17 @@ Cloud adapters that need a fetchable URL call `audio.require_url(provider=...)`
 (fatal error otherwise); upload-style adapters call `audio.read_bytes(...)`,
 which accepts any ref kind. `audio.describe()` is the PII-safe form logged to
 the ledger (URL host only — no signed query strings, no raw bytes).
+
+The URL in an `AudioRef` arrives in the request payload, so `read_bytes()` is
+an SSRF and a memory sink and does not fetch it itself: it goes through
+`stapel_core.net.fetch_bytes`, the fleet's one guarded fetcher — https only,
+every resolved address checked against private/loopback/link-local/CGNAT and
+cloud-metadata ranges, the socket pinned to the validated IP (DNS rebinding
+buys nothing), every redirect re-validated from scratch, the body capped
+mid-stream and the whole operation bounded by a deadline. The four
+`STT_DOWNLOAD_*` settings above are its ceilings. A refusal is a fatal
+`TranscriptionError`, never a retryable one — the next provider in the chain
+would be handed the same bad ref.
 
 Worked example — a self-hosted **GigaAM** endpoint (a ru-quality STT engine)
 stays app-layer; no fork:
@@ -423,13 +444,21 @@ size** within `CACHE_TTL`. Swap it for Redis or a no-op without forking:
 | Method | Signature | Contract |
 |---|---|---|
 | `should_cache` | `(source: str) -> bool` | Whether this source consults the cache at all. |
-| `lookup` | `(prompt, system_prompt, source, *, provider, model, model_size) -> str \| None` | Cached raw response text, or None on a miss. `provider`/`model` (resolved `MODELS[model_size]`)/`model_size` are part of the key — a "small" answer must never satisfy a "large" request, an explicit `provider=` must not collide with the default, and a model-version bump in `MODELS` must invalidate old rows. |
-| `store` | `(prompt, system_prompt, source, response, *, provider, model, model_size) -> None` | Optional (no-op default): persist a success for policies with external storage — the default policy needs nothing here because the PromptLog ledger row IS its storage. |
+| `lookup` | `(prompt, system_prompt, source, *, provider, model, model_size, user_id=None) -> str \| None` | Cached raw response text, or None on a miss. `provider`/`model` (resolved `MODELS[model_size]`)/`model_size` are part of the key — a "small" answer must never satisfy a "large" request, an explicit `provider=` must not collide with the default, and a model-version bump in `MODELS` must invalidate old rows. `user_id` is the caller's scope and is part of the key too: two tenants sending the same words are not entitled to each other's answers. |
+| `store` | `(prompt, system_prompt, source, response, *, provider, model, model_size, user_id=None) -> None` | Optional (no-op default): persist a success for policies with external storage — the default policy needs nothing here because the PromptLog ledger row IS its storage. |
 
 > **Breaking in 0.2.0:** `lookup`/`store` gained the keyword-only
 > `provider`/`model`/`model_size` params. A custom policy must add them to
 > its overrides (they are required, not defaulted — a mismatch is a loud
 > `TypeError`, never a silent cross-model cache hit). See CHANGELOG.
+
+A cache entry belongs to whoever asked for it. `services` passes the call's
+`user_id` to the policy, the default policy filters ledger rows on it, and a
+call that carries **no** scope does not touch the cache at all unless its
+source is listed in `CACHE_ALLOW_UNSCOPED`. A policy whose `lookup` signature
+predates `user_id` cannot tell two tenants apart, so it is not asked to: the
+caller logs a warning and skips the cache rather than hand a stranger's answer
+back.
 
 The `PromptLog` ledger row is written for every provider call **regardless of the
 policy** — caching is a read seam; token accounting is not optional.

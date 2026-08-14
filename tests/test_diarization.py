@@ -420,6 +420,23 @@ class TestPyannoteCloud:
         assert body["exclusive"] is True      # provider_options wins
         assert body["confidence"] is True     # unknown keys pass through
 
+    def test_string_false_from_the_environment_turns_exclusive_off(
+        self, configured, monkeypatch
+    ):
+        """PYANNOTEAI_EXCLUSIVE is env-readable and AppSettings does no
+        coercion, so an operator writing `PYANNOTEAI_EXCLUSIVE=false`
+        hands the adapter the STRING "false" — and bool("false") is True,
+        i.e. exactly the opposite of what was asked for."""
+        configured.STAPEL_AGENT = {
+            "PYANNOTEAI_API_KEY": "cloud-key",
+            "PYANNOTEAI_EXCLUSIVE": "false",
+        }
+        _, captured = self._run(
+            monkeypatch,
+            requests_queue=[FakeResponse({"jobId": "j"}), FakeResponse(PYANNOTE_JOB)],
+        )
+        assert captured[0]["json"]["exclusive"] is False
+
     def test_bounds_travel_via_provider_options(self, configured, monkeypatch):
         _, captured = self._run(
             monkeypatch,

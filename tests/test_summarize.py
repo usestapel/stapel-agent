@@ -226,3 +226,52 @@ class TestSummarizeService:
         services.summarize("same text")
         # CACHE_LOOKUP defaults summarize to off — both calls hit the LLM.
         assert len(fake_provider.calls) == 2
+
+
+@pytest.mark.django_db
+class TestSummaryStructuredOutputCanary:
+    """AI-01: a plain summary is prose a model wrote, and prose carries no
+    proof of its own shape. When the model spills its structured-output
+    machinery into that prose, the envelope has to say so — a consumer that
+    renders summaries as markup is otherwise holding tags nobody asked for.
+    """
+
+    def test_leaked_scaffolding_is_flagged_on_the_envelope(self, fake_provider):
+        fake_provider.result = ProviderResult(
+            text='Decisions: ship on Friday. <invoke name="post_summary">'
+        )
+        result = services.summarize("meeting notes")
+        assert result["status"] == "ok"
+        assert result["safety"] == {
+            "structured_output_leak": ["TOOL_CALL_ENVELOPE"],
+            "untrusted": True,
+        }
+        # The text is handed back as-is: this is a flag, not a filter, and a
+        # consumer that decides to show it must see what the model produced.
+        assert result["summary"] == fake_provider.result.text
+
+    def test_a_clean_summary_carries_no_safety_key(self, fake_provider):
+        fake_provider.result = ProviderResult(text="Decisions: ship on Friday.")
+        assert "safety" not in services.summarize("meeting notes")
+
+    def test_the_merge_pass_is_checked_too(self, fake_provider, monkeypatch):
+        """Map-reduce answers come from the merge call, so the canary has to
+        sit on that path as well — not only on the single-shot one."""
+        original = fake_provider.complete
+
+        def leaky_merge(self, *, prompt, model, system_prompt=None):
+            if "Part 1 summary:" in prompt:
+                return ProviderResult(text="Merged. <|im_start|>assistant")
+            return original(
+                self, prompt=prompt, model=model, system_prompt=system_prompt
+            )
+
+        monkeypatch.setattr(fake_provider, "complete", leaky_merge)
+        result = services.summarize("a" * 100, chunk_tokens=10)
+        assert result["status"] == "ok"
+        assert result["safety"]["structured_output_leak"] == ["CHAT_TEMPLATE_TOKEN"]
+
+    def test_a_failed_summary_is_unchanged(self, fake_provider):
+        """The failure envelope has no summary to inspect and gains no key."""
+        fake_provider.error = ProviderError("llm down")
+        assert services.summarize("text") == {"status": "failure", "reason": "llm down"}

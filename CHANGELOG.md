@@ -5,6 +5,159 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security — UPGRADE NOTE: the settings namespace stopped taking orders from the environment
+
+`AppSettings` falls back to `os.environ[KEY]` for every key a namespace does
+not exclude, and `STAPEL_AGENT` excluded nothing. The key names are generic —
+`CLI_BINARY`, `CACHE_POLICY`, `MAX_TOKENS`, `DEFAULT_PROVIDER` — so in a shared
+pod, a compose file or a CI image a same-named variable belonging to something
+else lands on them. What it lands on is not cosmetic: `CLI_BINARY` is argv[0] of
+a `subprocess.run` (the Claude Code CLI provider), `CACHE_POLICY` is an
+`import_strings` key and therefore an `import_string()` target, and the
+`STT_DOWNLOAD_*` keys are the SSRF/DoS ceilings on a caller-supplied URL. A
+ceiling an outsider can raise is not a ceiling.
+
+`stapel_agent.conf.NO_ENV` now lists the code-selecting keys (`CACHE_POLICY`,
+`CLI_BINARY`, every `*_PROVIDERS` overlay, every `DEFAULT_*` name, the STT
+routes/pricing/model-config overlays), the ceilings (`MAX_TOKENS`,
+`CLI_TIMEOUT`, `STT_TIMEOUT`, all four `STT_DOWNLOAD_*`, `DIARIZATION_TIMEOUT`,
+`EMBEDDINGS_TIMEOUT`, `RERANK_TIMEOUT`) and the tenancy/retention gates
+(`CACHE_LOOKUP`, `CACHE_TTL`, `CACHE_ALLOW_UNSCOPED`,
+`PROMPT_LOG_RETENTION_DAYS`, `PROMPT_LOG_RETENTION_SCHEDULED`).
+
+**If your deployment configures any of those through an environment variable it
+will now be ignored** — silently, because the default takes over. Move it into
+`settings.STAPEL_AGENT`, where it is reviewable. There is deliberately no
+opt-out for this one: the whole point is that the value cannot be set from
+outside the settings file. What is *not* closed, and still reads the
+environment: `*_API_KEY`, `*_BASE_URL`/`*_URL` and the model names — those are
+per-deployment credentials and endpoints and the environment is their canonical
+channel.
+
+### Security — UPGRADE NOTE: an empty audio-host allowlist is a refusal, not a wildcard
+
+`STT_DOWNLOAD_ALLOWED_HOSTS = []` meant "any public host", so the deployment
+that had configured nothing was the one that would fetch whatever host a
+request named. Empty now means the audio download is **refused** — a fatal
+`TranscriptionError` (`no_allowed_hosts`), raised before any DNS lookup, naming
+both ways out.
+
+**If you transcribe from URLs and have no allowlist, transcription of `url`
+refs will start failing on upgrade.** Either list the origins you actually fetch
+from:
+
+```python
+STAPEL_AGENT = {"STT_DOWNLOAD_ALLOWED_HOSTS": ["files.example.com"]}
+```
+
+or take the explicit opt-out, new in this release:
+
+```python
+STAPEL_AGENT = {"STT_DOWNLOAD_ALLOW_ANY_HOST": True}
+```
+
+The opt-out restores the previous behaviour and nothing more: https-only, the
+private/loopback/link-local/CGNAT/metadata refusals, the per-hop re-validation,
+the byte cap and the deadline all still apply. `path` and `data` refs are
+unaffected. Both keys are in `NO_ENV`, so neither the ceiling nor its opt-out
+can be flipped by an environment variable.
+
+### Fixed — booleans no longer read backwards when they arrive as strings
+
+`AppSettings` does no coercion, and `bool("false")` is True. An operator who set
+`PYANNOTEAI_EXCLUSIVE=false` in the environment got exclusive diarization
+anyway. Boolean keys in this namespace now go through accessors
+(`conf.pyannoteai_exclusive`, `conf.stt_download_allow_any_host`,
+`conf.prompt_log_retention_scheduled`) that read `1/true/yes/on` and treat
+everything else as false — so a mis-typed switch fails closed instead of
+silently inverting.
+
+### Security — UPGRADE NOTE: an unscheduled retention policy is now loud (`stapel_agent.W014`)
+
+`PROMPT_LOG_RETENTION_DAYS` has defaulted to 90 since the ledger landed, but the
+only executor this package ships is the `purge_prompt_logs` management command,
+and nothing registers a periodic task. A host that never wired cron kept every
+prompt, system prompt and full response forever while its configuration said 90
+days, and nothing anywhere said so (audit AGENT-02 follow-up).
+
+`stapel_agent.checks.check_prompt_log_retention_is_scheduled` now raises
+`stapel_agent.W014` at boot when the window is set and nothing is known to
+enforce it. **Expect this warning on upgrade** unless you either:
+
+- declare the job you already run —
+  `STAPEL_AGENT = {"PROMPT_LOG_RETENTION_SCHEDULED": True}` (a Celery beat entry
+  running `purge_prompt_logs` is detected and needs no declaration); or
+- state that this deployment keeps the text indefinitely —
+  `PROMPT_LOG_RETENTION_DAYS = None`, which this check does not report.
+
+It is a Warning, not an Error: the gap is a compliance problem, not a broken
+deploy. Silence was the wrong default, because an unenforced retention policy
+looks exactly like an enforced one from the settings file.
+
+### Security — the audio download is no longer a way into the private network
+
+`AudioRef.read_bytes()` handed a caller-supplied URL to
+`requests.get(url, timeout=600, stream=True)` and returned `resp.content`: any
+scheme, any address, any redirect, any size. A producer that could put a URL in
+a transcribe request could therefore reach cloud metadata, an internal admin
+port or a link-local service, and could hold a worker for ten minutes while
+filling its memory with an unbounded body (audit AGENT-01).
+
+The fetch now goes through `stapel_core.net.fetch_bytes` — the fleet's single
+guarded fetcher, https-only, every resolved address validated against the
+private/loopback/link-local/CGNAT/metadata ranges, the socket pinned to the
+validated IP, every redirect re-validated from scratch, the body capped
+mid-stream and the whole operation bounded by a deadline. Writing a second
+implementation here is what created the gap in the first place, so this
+package consumes core's rather than growing its own.
+
+Four new ceilings (`STT_DOWNLOAD_MAX_BYTES`, `STT_DOWNLOAD_TIMEOUT`,
+`STT_DOWNLOAD_TOTAL_DEADLINE`, `STT_DOWNLOAD_ALLOWED_HOSTS`) configure it. The
+per-call `timeout=` argument is now a request, not an authority: it may lower
+the configured deadline and never raise it. The error taxonomy is unchanged
+where it matters — a refusal or a 4xx is fatal (the next provider would fail on
+the same ref), transport/deadline/5xx stay retryable.
+
+### Security — a cached answer belongs to whoever asked for it
+
+The prompt cache was keyed on content alone (prompt + system prompt + source),
+so two tenants sending the same sensitive prompt shared one stored response and
+its metadata (audit AGENT-02). `CachePolicy.lookup`/`store` now take the
+caller's `user_id`, the default policy filters ledger rows on it, and a call
+that carries no scope does not use the cache at all unless its source is listed
+in the new `CACHE_ALLOW_UNSCOPED` — fail closed, because there is no version of
+this where the sharing is the safe outcome. A host policy whose signature
+predates the argument cannot tell tenants apart, so it is switched off with a
+warning instead of trusted.
+
+### Security — the prompt ledger answers subject requests, and its text expires
+
+`PromptLog` holds prompts, system prompts and full responses in plaintext, and
+appeared in no export, no erasure path and no retention job (audit AGENT-02).
+
+- `stapel_agent.gdpr.AgentGDPRProvider` (section `agent`) is registered into
+  `stapel_core.gdpr.gdpr_registry` from `AgentConfig.ready()`, like every other
+  package's provider.
+- `stapel_agent.retention.purge_prompt_logs()` and the `purge_prompt_logs`
+  management command scrub row text older than the new
+  `PROMPT_LOG_RETENTION_DAYS` (default 90).
+
+Both scrub rather than delete: the text is customer content, the token counters
+are the finance ledger, and a row without its text holds no personal data.
+
+### Security — a plain summary now carries the structured-output canary
+
+A schema-constrained answer proves its shape by construction; a prose summary
+cannot, and the plain path had no equivalent check (audit AI-01). New
+`safety.markers.detect_structured_output_leak()` names the scaffolding a model
+can spill into prose — tool-call envelopes, parameter tags, chat-template
+tokens, schema echoes — and `services.summarize()` runs it on both the
+single-shot and the merge path. A hit adds
+`safety: {"structured_output_leak": [...], "untrusted": True}` to the envelope
+so a consumer can refuse to render it. It is a flag, not a filter: the text is
+returned unchanged.
+
+
 ## [0.8.1] — 2026-08-02
 
 ### Packaging / contract
