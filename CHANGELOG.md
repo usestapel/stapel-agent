@@ -5,6 +5,43 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-08-21
+
+### Added — an unfillable audio allowlist is loud at boot (`stapel_agent.W015`)
+
+`STT_DOWNLOAD_ALLOWED_HOSTS` defaults to `[]`, and 0.10.0 made that default
+fail closed: `stt.base._download` refuses the fetch with
+`audio URL refused (no_allowed_hosts)` before any DNS lookup. Correct, and
+invisible — the refusal happens per request, inside a worker, on a path most
+callers treat as best-effort. The key is also an SSRF ceiling, so it is in
+`conf.NO_ENV`: a deployment that tried to set it from the environment set
+nothing at all.
+
+The iron-agent dev stand ran that way for its whole life. Green system checks,
+green deploy, and every single transcription refused.
+
+A new system check, `stapel_agent.W015`, now says so at startup when the
+allowlist is empty and no wildcard is declared. The message names the
+setting, the fix, and the reason an environment variable did not work.
+
+Warning, not error, and it silences on any of three explicit states — there is
+no reliable way to ask "is STT in play" (the registry always carries the
+built-in adapters and their credentials have no common seam), so the operator
+declares the answer as with `W014`:
+
+```python
+# state the object store your presigned audio URLs point at (derive the host
+# from the store's public URL — do not hardcode one stand's domain), or
+STAPEL_AGENT = {"STT_DOWNLOAD_ALLOWED_HOSTS": ["files.example.com"]}
+# accept any public host, or
+STAPEL_AGENT = {"STT_DOWNLOAD_ALLOW_ANY_HOST": True}
+# remove the STT surface entirely
+STAPEL_AGENT = {"STT_PROVIDERS": {"whisper-http": None, ...}}
+```
+
+No runtime behaviour changed: a deployment that was transcribing keeps
+transcribing, and one that was silently refusing now hears about it.
+
 ## [0.10.0] — 2026-08-14
 
 The 2026-08-11 security audit: AGENT-01, AGENT-02 and AI-01, plus the

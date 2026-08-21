@@ -24,7 +24,7 @@ pip install stapel-agent
 
 | Fact | Value |
 |---|---|
-| Version | `0.10.0` |
+| Version | `0.11.0` |
 | Python | `>=3.11` (3.11, 3.12, 3.13, 3.14) |
 | HTTP operations | 5 |
 | Config axes | 4 |
@@ -145,7 +145,7 @@ retry on another provider.
 | `STT_DOWNLOAD_MAX_BYTES` | `134217728` | Byte cap on an audio-URL download (128 MiB), enforced mid-stream |
 | `STT_DOWNLOAD_TIMEOUT` | `30.0` | Per-socket connect/read timeout for one hop of that download |
 | `STT_DOWNLOAD_TOTAL_DEADLINE` | `300.0` | Ceiling on the whole download incl. redirects; a per-call `timeout=` may only lower it |
-| `STT_DOWNLOAD_ALLOWED_HOSTS` | `[]` | Exact-host allowlist for audio URLs, applied to every hop. Empty = the download is REFUSED (empty is not a wildcard) |
+| `STT_DOWNLOAD_ALLOWED_HOSTS` | `[]` | Exact-host allowlist for audio URLs, applied to every hop. Empty = the download is REFUSED (empty is not a wildcard) and `W015` warns at boot. Settings-only (`NO_ENV`) — an env var cannot fill it |
 | `STT_DOWNLOAD_ALLOW_ANY_HOST` | `False` | Opt-out: accept audio from any public host when the allowlist is empty. The other fetch guards still apply |
 | `WHISPER_BASE_URL` / `WHISPER_API_KEY` / `WHISPER_MODEL` | `""` / `""` / `"whisper-1"` | OpenAI-compatible Whisper endpoint — the OpenAI API or self-hosted faster-whisper (key optional) |
 | `ELEVENLABS_API_KEY` / `ELEVENLABS_STT_URL` / `ELEVENLABS_STT_MODEL` | `""` / Scribe URL / `"scribe_v2"` | ElevenLabs Scribe |
