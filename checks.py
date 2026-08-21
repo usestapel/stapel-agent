@@ -10,6 +10,8 @@ Registered from ``AgentConfig.ready()``. IDs:
   not an ``LlmProvider`` subclass.
 - ``stapel_agent.W014`` — ``PROMPT_LOG_RETENTION_DAYS`` is configured but
   nothing is known to run the purge.
+- ``stapel_agent.W015`` — the STT audio-download allowlist is empty and
+  no wildcard is declared, so every URL AudioRef is refused.
 
 Import/subclass problems are warnings, not errors, on purpose: providers
 resolve lazily per request and degrade to ``status: "failure"`` — a
@@ -421,6 +423,64 @@ def check_prompt_log_retention_is_scheduled(app_configs, **kwargs):
     ]
 
 
+@checks.register("stapel_agent")
+def check_stt_download_allowlist(app_configs, **kwargs):
+    """W015: the audio-download allowlist is empty and nothing declares a
+    wildcard, so every URL-shaped ``AudioRef`` is refused at call time.
+
+    ``STT_DOWNLOAD_ALLOWED_HOSTS`` is an SSRF ceiling: it is in
+    ``conf.NO_ENV``, so it resolves from ``settings.STAPEL_AGENT`` only —
+    an environment variable cannot fill it, and the shipped default is
+    ``[]``. That default fails closed on purpose (``stt.base._download``
+    raises ``no_allowed_hosts``), but the refusal happens per request,
+    inside a worker, on a path most callers treat as best-effort. The
+    iron-agent dev stand ran that way for its whole life: green checks,
+    green deploy, and every transcription refused before the first DNS
+    lookup (2026-08-21).
+
+    Warning, not Error: a deployment may install this app for text
+    completion alone and never transcribe anything, and there is no
+    reliable way to ask "is STT in play" — the registry always carries
+    the built-in adapters, and their credentials have no common seam. So
+    the operator declares the answer, as with W014: list the object-store
+    host(s), or set ``STT_DOWNLOAD_ALLOW_ANY_HOST = True``. Either way
+    the intent is written down where a reviewer sees it.
+
+    A deployment that masked every STT adapter (each name set to ``None``
+    in ``STT_PROVIDERS``) has removed the surface and is not warned.
+    """
+    from .conf import agent_settings, stt_download_allow_any_host
+    from .stt import registered_stt_providers
+
+    if list(agent_settings.STT_DOWNLOAD_ALLOWED_HOSTS or []):
+        return []
+    if stt_download_allow_any_host():
+        return []
+    if not registered_stt_providers():
+        return []
+
+    return [
+        checks.Warning(
+            "STAPEL_AGENT['STT_DOWNLOAD_ALLOWED_HOSTS'] is empty and "
+            "STT_DOWNLOAD_ALLOW_ANY_HOST is off: every transcription of a "
+            "URL AudioRef will fail with "
+            "\"audio URL refused (no_allowed_hosts)\" — at call time, in a "
+            "worker, not here.",
+            hint=(
+                "Set STAPEL_AGENT['STT_DOWNLOAD_ALLOWED_HOSTS'] = "
+                "['<audio-host>'] in settings.py to the exact host(s) your "
+                "presigned audio URLs point at (derive it from the object "
+                "store's public URL rather than hardcoding a stand domain), "
+                "or set STAPEL_AGENT['STT_DOWNLOAD_ALLOW_ANY_HOST'] = True "
+                "to accept any public host. This key is an SSRF ceiling: it "
+                "is in stapel_agent.conf.NO_ENV, so an environment variable "
+                "is IGNORED for it — it has to be stated in settings.py."
+            ),
+            id="stapel_agent.W015",
+        )
+    ]
+
+
 def _registry_issues(
     *,
     kind: str,
@@ -484,5 +544,6 @@ __all__ = [
     "check_prompt_log_retention_is_scheduled",
     "check_providers",
     "check_rerank_providers",
+    "check_stt_download_allowlist",
     "check_stt_providers",
 ]
