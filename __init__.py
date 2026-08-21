@@ -52,6 +52,8 @@ no Django code until an attribute is actually accessed):
     registered_rerank_providers — effective rerank provider mapping
     register_image_provider     — runtime image provider registration
     registered_image_providers  — effective image provider mapping
+    resolve_size_ceiling        — the entitled model-size ceiling for an identity,
+                                  or None (see STAPEL_AGENT['MODEL_SIZE_CEILING_ENTITLEMENT'])
 """
 
 __all__ = [
@@ -89,6 +91,7 @@ __all__ = [
     "registered_rerank_providers",
     "registered_stt_providers",
     "rerank",
+    "resolve_size_ceiling",
     "summarize",
     "transcribe",
     "translate",
@@ -110,6 +113,7 @@ _EXPORTS = {
     # services.rerank / llm.rerank / POST api/v1/llm/rerank.
     "rerank": (".rerank", None),
     "generate_image": (".services", "generate_image"),
+    "resolve_size_ceiling": (".services", "resolve_size_ceiling"),
     "LlmProvider": (".providers.base", "LlmProvider"),
     "ProviderResult": (".providers.base", "ProviderResult"),
     "SttProvider": (".stt.base", "SttProvider"),

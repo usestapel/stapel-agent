@@ -37,8 +37,9 @@ from stapel_core.conf import AppSettings
 #: * the ``*_PROVIDERS`` overlays, the ``DEFAULT_*`` names and the STT routes
 #:   choose which adapter class serves a call;
 #: * the ``STT_DOWNLOAD_*`` keys are the SSRF/DoS ceilings on a caller-supplied
-#:   URL, and the ``CACHE_*``/``PROMPT_LOG_*`` keys are the tenancy and
-#:   retention gates. A ceiling an outsider can raise is not a ceiling.
+#:   URL, and the ``CACHE_*``/``PROMPT_LOG_*``/``MODEL_SIZE_CEILING_ENTITLEMENT``
+#:   keys are the tenancy, retention and entitlement gates. A ceiling an
+#:   outsider can raise is not a ceiling.
 #:
 #: They still resolve through ``settings.STAPEL_AGENT``, a flat Django setting
 #: or the default — the deployment states them where they are reviewable. Note
@@ -83,6 +84,7 @@ NO_ENV = (
     "CACHE_ALLOW_UNSCOPED",
     "PROMPT_LOG_RETENTION_DAYS",
     "PROMPT_LOG_RETENTION_SCHEDULED",
+    "MODEL_SIZE_CEILING_ENTITLEMENT",
 )
 
 #: Values an environment variable (or a hand-written string in a settings
@@ -102,6 +104,7 @@ agent_settings = AppSettings(
             "small": "claude-haiku-4-5-20251001",
             "medium": "claude-sonnet-5",
             "large": "claude-opus-4-8",
+            "xlarge": "claude-fable-5",
         },
         # Overlay merged OVER providers.BUILTIN_PROVIDERS (anthropic /
         # openai-compat / claude-code): add or override entries here,
@@ -304,6 +307,15 @@ agent_settings = AppSettings(
         # days. A beat schedule that runs the job is detected and silences
         # the warning without this flag.
         "PROMPT_LOG_RETENTION_SCHEDULED": False,
+        # Entitlement key (STAPEL_BILLING's plan catalog) that caps the
+        # MODEL_SIZES a caller may request — see services.resolve_size_ceiling.
+        # None (default): the seam is closed, every deployment's behaviour
+        # is byte-identical to before this key existed. Set it to a key name
+        # (e.g. "llm.model_size_ceiling") to have billing.check_entitlement's
+        # int value (a 1-based rank into MODEL_SIZES) cap what a caller with
+        # a resolvable user_id may ask for; a request above the ceiling is
+        # refused (REASON_MODEL_SIZE_CEILING), never silently downgraded.
+        "MODEL_SIZE_CEILING_ENTITLEMENT": None,
         # Dotted path to a stapel_agent.cache.CachePolicy subclass — the
         # cache seam. The default implements the PromptLog+TTL behaviour;
         # swap for Redis/no-op without forking.

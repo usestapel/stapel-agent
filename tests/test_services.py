@@ -77,6 +77,12 @@ class TestPromptLog:
         assert "gigantic" in result["reason"]
         assert fake_provider.calls == []
 
+    def test_xlarge_resolves_to_the_fable_default(self, fake_provider):
+        result = services.complete("hello", "xlarge", source=PromptSource.OTHER)
+        assert result["status"] == "ok"
+        assert fake_provider.calls[0]["model"] == "claude-fable-5"
+        assert PromptLog.objects.get().model_size == "xlarge"
+
     def test_unknown_provider_mentions_name(self, fake_provider):
         result = services.complete(
             "hello", "small", provider="mystery", source=PromptSource.OTHER

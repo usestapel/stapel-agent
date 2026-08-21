@@ -20,7 +20,7 @@ consuming project.
 
 | Key | Source | Purpose | Required | Default |
 |-----|--------|---------|----------|---------|
-| MODELS | env | size→model-name map for the default (Anthropic) providers (`small`/`medium`/`large`). | no | claude-haiku-4-5 / claude-sonnet-5 / claude-opus-4-8 |
+| MODELS | env | size→model-name map for the default (Anthropic) providers (`small`/`medium`/`large`/`xlarge`). | no | claude-haiku-4-5 / claude-sonnet-5 / claude-opus-4-8 / claude-fable-5 |
 | PROVIDERS | env | overlay merged OVER the built-in provider registry (dotted paths); None/"" removes a name. | no | {} |
 | DEFAULT_PROVIDER | env | provider used when a request names none. | no | anthropic |
 | ANTHROPIC_API_KEY | vault | Anthropic SDK key (read lazily at call time). | no | (empty) |
@@ -88,4 +88,5 @@ consuming project.
 | CACHE_TTL | env | seconds; cached rows older than this are ignored. | no | 604800 |
 | CACHE_ALLOW_UNSCOPED | env | sources declared non-personal, so a call without user_id may use the shared cache; empty = an unscoped call skips the cache. | no | [] |
 | PROMPT_LOG_RETENTION_DAYS | env | age after which `purge_prompt_logs` scrubs a ledger row's text (counters kept); None = no limit. | no | 90 |
+| MODEL_SIZE_CEILING_ENTITLEMENT | env | entitlement key (STAPEL_BILLING plan catalog) that caps how far up the `MODELS` size ladder a caller's plan reaches; unset = seam closed, no billing lookup at all. | no | (none) |
 | CACHE_POLICY | env | dotted path to a CachePolicy subclass (the cache seam). | no | stapel_agent.cache.PromptLogCachePolicy |

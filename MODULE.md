@@ -21,7 +21,7 @@ registries). Everything below is verifiable against the code in this repo.
 | Area | Contents |
 |---|---|
 | Models (`models.py`) | `PromptLog` (immutable per-call ledger: `source` llm_facade/translate/transcribe/summarize/generate_image/other, `model`, `model_size`, `prompt`, `system_prompt`, `response`, `status` success/failure/timeout/error, `error_message`, `input_tokens`/`output_tokens`/`thinking_tokens`/`cache_read_tokens`/`cache_write_tokens`, `duration_ms`, `audio_duration_ms` (billable audio length, distinct from wall clock), `cost_usd`/`cost_basis` (as computed at call time, never recomputed), `user_id`, `workspace_id`, JSON `metadata`, `created_at`; doubles as the cache-by-prompt store) |
-| Services (`services.py`) | `complete()` (cache lookup → provider → PromptLog row → `{status, result, usage}`; optional `images` for vision), `complete_json()` (JSON-API system prompt + JSON extraction — the `llm.complete` surface), `translate()`, `transcribe()` (STT router walk — see "STT providers"), `summarize()` (single-shot / map-reduce over `complete()`), `generate_image()` (see "Image generation"), `get_provider()` / `get_stt_provider()` / `get_image_provider()` (lazy resolution against the merged registries), `JSON_API_SYSTEM_PROMPT` |
+| Services (`services.py`) | `complete()` (cache lookup → optional size-ceiling gate → provider → PromptLog row → `{status, result, usage}`; optional `images` for vision), `complete_json()` (JSON-API system prompt + JSON extraction — the `llm.complete` surface), `translate()`, `transcribe()` (STT router walk — see "STT providers"), `summarize()` (single-shot / map-reduce over `complete()`), `generate_image()` (see "Image generation"), `get_provider()` / `get_stt_provider()` / `get_image_provider()` (lazy resolution against the merged registries), `resolve_size_ceiling()` / `enforce_size_ceiling()` / `ModelSizeCeilingExceeded` (see "Model-size ceiling"), `JSON_API_SYSTEM_PROMPT` |
 | Parsing (`parsing.py`) | `parse_json_response()` (direct JSON → fenced block → object anywhere → array anywhere; surrounding prose becomes `comment`), `parse_translation_response()`, Django-free |
 | STT seam (`stt/`) | `SttProvider` ABC (incl. the `keyterms`/`provider_options` biasing seam), `AudioRef` (exactly one of url/path/data), `NormalizedTranscript` (incl. the counts-only `biasing` block)/`NormalizedUtterance`/`NormalizedWord` + `transcript_from_dict()`/`utterances_from_words()`, `TranscriptionError` (fatal) / `RetryableTranscriptionError` (transient) error taxonomy (`stt/base.py`, Django-free); open registry (`stt/__init__.py`); language router (`stt/router.py`); adapters `whisper-http` / `elevenlabs` / `assemblyai` / `deepgram` / `gladia` / `soniox` / `speechmatics` / `xai-stt` (`stt/providers/`) |
 | Summarization prep (`summary.py`) | `render_markdown()` (timestamped `[MM:SS] speaker: text` lines), `build_summary_input()` (token-budget chunking with `seg_NNNN` → start-ms anchors), `split_text_chunks()`, the three system prompts (single-shot / chunk / merge) — Django-free |
@@ -45,7 +45,7 @@ same name → environment variable → default. All keys are read **lazily at ca
 
 | Key | Default | What it customizes |
 |---|---|---|
-| `MODELS` | `{"small": "claude-haiku-4-5-20251001", "medium": "claude-sonnet-5", "large": "claude-opus-4-8"}` | The size → model map every request goes through. |
+| `MODELS` | `{"small": "claude-haiku-4-5-20251001", "medium": "claude-sonnet-5", "large": "claude-opus-4-8", "xlarge": "claude-fable-5"}` | The size → model map every request goes through. |
 | `PROVIDERS` | `{}` | Overlay **merged over** `providers.BUILTIN_PROVIDERS` — see "LLM providers" below. Resolved lazily per request via `import_string` in `services.get_provider` (not `import_strings` — an unknown/broken entry degrades to `status: "failure"`, never an import-time crash). |
 | `DEFAULT_PROVIDER` | `"anthropic"` | Provider used when the request names none. |
 | `ANTHROPIC_API_KEY` | `""` | Anthropic SDK key (read lazily per call). |
@@ -80,6 +80,7 @@ same name → environment variable → default. All keys are read **lazily at ca
 | `CACHE_ALLOW_UNSCOPED` | `[]` | Sources whose content the host declares **non-personal**, so a call without `user_id` may still use the shared cache. Empty = fail closed: an unscoped call skips the cache rather than risk answering one tenant with another's response. |
 | `PROMPT_LOG_RETENTION_DAYS` | `90` | Age after which `purge_prompt_logs` scrubs a ledger row's TEXT (prompt, system prompt, response, error); the row and its token counters stay for accounting. `None` = keep text forever, an explicit decision the host owns. |
 | `PROMPT_LOG_RETENTION_SCHEDULED` | `False` | The host declares that its scheduler (cron, systemd timer, CronJob) runs `manage.py purge_prompt_logs`. Left false, `stapel_agent.W014` warns at boot that the retention window is a number nothing enforces. A Celery beat entry running the job is detected and needs no declaration. |
+| `MODEL_SIZE_CEILING_ENTITLEMENT` | `None` | Entitlement key in STAPEL_BILLING's plan catalog that caps how far up `MODELS`' size ladder a caller's plan reaches. `None` (the default): the seam is CLOSED — `complete()` never asks billing anything, byte-identical to every release before 0.13. Set it to a key name (e.g. `"llm.model_size_ceiling"`) to turn it on. See "Model-size ceiling" below. |
 | `CACHE_POLICY` | `"stapel_agent.cache.PromptLogCachePolicy"` | Dotted path to a `CachePolicy` subclass — in `import_strings`, instantiated per call. See "Cache policy" below. |
 
 ### LLM providers — open registry with MERGE semantics (flagship seam)
@@ -470,6 +471,47 @@ back.
 The `PromptLog` ledger row is written for every provider call **regardless of the
 policy** — caching is a read seam; token accounting is not optional.
 
+### Model-size ceiling (optional, closed by default)
+
+`STAPEL_AGENT["MODEL_SIZE_CEILING_ENTITLEMENT"]` names an entitlement key in
+STAPEL_BILLING's plan catalog. Unset (`None`, the default), `complete()` never
+asks billing anything — every call resolves and completes exactly as it did
+before this key existed. Configured, `complete()` consults
+`services.resolve_size_ceiling(user_id, workspace_id)` before running the
+call and refuses a request whose `model_size` sits above what the caller's
+plan resolves to.
+
+| Symbol | Signature | Contract |
+|---|---|---|
+| `resolve_size_ceiling` | `(user_id, workspace_id=None) -> str \| None` | The largest `MODEL_SIZES` entry `user_id`'s plan entitles them to, or `None` for "no ceiling". Also exported from the package root (`stapel_agent.resolve_size_ceiling`) so a caller (Studio's architect) can clamp an escalation **before** it happens instead of hitting the refusal. |
+| `enforce_size_ceiling` | `(model_size, user_id, workspace_id=None) -> None` | Raises `ModelSizeCeilingExceeded` if `model_size` is above the resolved ceiling; a no-op otherwise (including when the seam is closed). |
+| `ModelSizeCeilingExceeded` | `Exception` with `.requested_size` / `.ceiling` | Raised only inside `services`; `complete()` catches it immediately and degrades to the house `{"status": "failure", ...}` contract — never raised across the public API. |
+
+Billed via `stapel_core.comm.call("billing.check_entitlement", {"user_id",
+"key", "quantity": 1})`, reading `{"allowed", "limit", "reason"}` back
+(`limit` is a 1-based rank into `MODEL_SIZES`). **No ceiling is applied**
+(fails OPEN, logged) in every one of these cases — mirroring
+ironmemo-backend's `recordings_ext.entitlement` gate exactly:
+
+- the switch is unset;
+- the call carries no `user_id` (nothing to ask billing ABOUT — logged as a
+  warning, since a system-internal call has no plan);
+- `billing.check_entitlement` is unreachable (`CommError` — not installed, no
+  route, network failure — logged as a warning: refusing an otherwise-
+  permitted size because OUR OWN billing call failed is worse than the cost
+  of one over-generous call);
+- billing answered but with nothing usable to cap TO — a bool-only
+  entitlement or a denial from an unknown key/plan (logged as an ERROR: this
+  one means the deployment's plan catalog needs fixing).
+
+A refusal is a normal `{"status": "failure", "reason":
+REASON_MODEL_SIZE_CEILING, "ceiling": ..., "requested_size": ...}` envelope
+(threaded through `complete_json`/`summarize` too) — an upsell surface, never
+a silent downgrade to a smaller size. `workspace_id` is accepted at every call
+site for signature symmetry but not consulted:
+`billing.check_entitlement` is user-anchored only, and this package has no
+mapping from an opaque `workspace_id` to a billing subject.
+
 ### Swappable models
 
 None. `PromptLog` has a fixed `db_table` (`agent_prompt_log`) and no user FK — it
@@ -513,7 +555,7 @@ microservices — same code). JSON Schemas live in `schemas/functions/`.
 
 | Function | Payload | Returns |
 |---|---|---|
-| `llm.complete` | `{prompt, model: "small"\|"medium"\|"large", system_prompt?, provider?, images?: [{url} \| {data_b64, mime?}]}` — image entries are url or base64 only (schema-enforced oneOf; a raw `data` key is rejected) | Same dict as the HTTP response: `{status, result?, comment?, reason?, usage?}` |
+| `llm.complete` | `{prompt, model: "small"\|"medium"\|"large"\|"xlarge", system_prompt?, provider?, images?: [{url} \| {data_b64, mime?}]}` — image entries are url or base64 only (schema-enforced oneOf; a raw `data` key is rejected) | Same dict as the HTTP response: `{status, result?, comment?, reason?, usage?}` |
 | `llm.translate` | `{from_lang, to, entries: {key: text}}` (comm uses `from_lang`, not the HTTP wire key `from`) | `{status, result?: {key: translated}, reason?}` |
 | `llm.transcribe` | `{audio_url, language?, diarization?, provider?, timeout_seconds? (>= 1)}` — **URLs only, never raw audio bytes** (`additionalProperties: false` rejects `data`/`path` keys); byte/path refs exist only for in-process `services.transcribe(AudioRef(...))` callers | `{status, transcript?: NormalizedTranscript, provider_used?, fallback_used?, reason?}` |
 | `llm.summarize` | `{text \| transcript: NormalizedTranscript-dict (exactly one, schema-enforced oneOf), language?, model?, provider?}` | `{status, summary?, usage?, reason?}` |

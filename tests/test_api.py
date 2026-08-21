@@ -134,6 +134,16 @@ class TestComplete:
         _complete(api_client, HTTP_X_API_KEY="test-service-key")
         assert fake_provider.calls[0]["model"] == "claude-haiku-4-5-20251001"
 
+    def test_xlarge_size_resolves_to_fable(self, api_client, fake_provider):
+        resp = _complete(
+            api_client,
+            {"prompt": "x", "model": "xlarge", "provider": "fake"},
+            HTTP_X_API_KEY="test-service-key",
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+        assert fake_provider.calls[0]["model"] == "claude-fable-5"
+
     def test_staff_user_id_logged(self, staff_client, staff_user, fake_provider):
         _complete(staff_client)
         log = PromptLog.objects.get()
@@ -368,6 +378,16 @@ class TestSummarizeEndpoint:
         )
         assert resp.status_code == 400
         assert fake_provider.calls == []
+
+    def test_xlarge_size_is_accepted(self, api_client, fake_provider):
+        resp = self._post(
+            api_client,
+            {"text": "t", "model": "xlarge", "provider": "fake"},
+            HTTP_X_API_KEY="test-service-key",
+        )
+        assert resp.status_code == 200, resp.content
+        assert resp.json()["status"] == "ok"
+        assert fake_provider.calls[0]["model"] == "claude-fable-5"
 
     def test_llm_failure_is_http_200(self, api_client, fake_provider):
         fake_provider.error = ProviderError("llm down")

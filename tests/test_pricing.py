@@ -64,7 +64,7 @@ class TestTheCardsThatWereMissing:
         the defect: the most expensive route, estimated at nothing."""
         from stapel_agent.conf import agent_settings
 
-        for size in ("small", "medium", "large"):
+        for size in ("small", "medium", "large", "xlarge"):
             assert is_priced(agent_settings.defaults["MODELS"][size]), size
 
 

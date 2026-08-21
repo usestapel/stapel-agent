@@ -21,7 +21,8 @@
       "enum": [
         "small",
         "medium",
-        "large"
+        "large",
+        "xlarge"
       ],
       "description": "Model size (default medium)."
     },

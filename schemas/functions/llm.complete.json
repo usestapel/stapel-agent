@@ -13,7 +13,8 @@
       "enum": [
         "small",
         "medium",
-        "large"
+        "large",
+        "xlarge"
       ],
       "description": "Model size, mapped via STAPEL_AGENT['MODELS']."
     },

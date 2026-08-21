@@ -10,7 +10,7 @@ class CompleteRequest:
 
     Attributes:
         prompt: The user prompt sent to the model.
-        model: Model size — small, medium or large. Example: small
+        model: Model size — small, medium, large or xlarge. Example: small
         provider: Provider name from STAPEL_AGENT["PROVIDERS"]; defaults
             to DEFAULT_PROVIDER.
         system_prompt: Replaces the built-in JSON-API system prompt.
@@ -170,7 +170,7 @@ class SummarizeRequest:
         text: Plain text to summarize.
         transcript: A NormalizedTranscript dict (llm.transcribe output).
         language: Language to respond in; defaults to the input's.
-        model: Model size (small/medium/large). Example: medium
+        model: Model size (small/medium/large/xlarge). Example: medium
         provider: LLM provider name.
     """
 

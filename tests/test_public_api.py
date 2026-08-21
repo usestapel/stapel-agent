@@ -47,6 +47,7 @@ class TestLazyExports:
             "registered_rerank_providers",
             "registered_stt_providers",
             "rerank",
+            "resolve_size_ceiling",
             "summarize",
             "transcribe",
             "translate",
@@ -131,12 +132,14 @@ class TestLazyExports:
         assert stapel_agent.agent_settings is agent_settings
 
     def test_services_resolve(self):
-        from stapel_agent.services import complete, translate
+        from stapel_agent.services import complete, resolve_size_ceiling, translate
 
         assert stapel_agent.complete is complete
         assert stapel_agent.translate is translate
+        assert stapel_agent.resolve_size_ceiling is resolve_size_ceiling
         assert callable(stapel_agent.complete)
         assert callable(stapel_agent.translate)
+        assert callable(stapel_agent.resolve_size_ceiling)
 
     def test_provider_seam_resolves(self):
         from stapel_agent.providers import register_provider, registered_providers

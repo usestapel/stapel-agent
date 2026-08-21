@@ -27,7 +27,155 @@ JSON_API_SYSTEM_PROMPT = (
     "required structure and a content."
 )
 
-MODEL_SIZES = ("small", "medium", "large")
+MODEL_SIZES = ("small", "medium", "large", "xlarge")
+
+#: 1-based rank of each size in the ladder — the same integer a plan
+#: catalog entry writes for ``MODEL_SIZE_CEILING_ENTITLEMENT`` (1 caps a
+#: plan at "small", 4 (or omitting the key) is unrestricted). See
+#: :func:`resolve_size_ceiling`.
+MODEL_SIZE_RANK = {name: i + 1 for i, name in enumerate(MODEL_SIZES)}
+
+#: Structural reason on the ``{"status": "failure", ...}`` envelope when
+#: :func:`resolve_size_ceiling` refuses a request — mirrors
+#: ``stapel_billing.entitlements``' own short-slug reasons (``not_in_plan``,
+#: ``limit_exceeded``, ...) rather than this module's usual free-text
+#: ``reason`` strings, since this failure IS an entitlement verdict.
+REASON_MODEL_SIZE_CEILING = "model_size_ceiling_exceeded"
+
+
+class ModelSizeCeilingExceeded(Exception):
+    """*model_size* is above what *user_id*'s plan entitles (see
+    :func:`resolve_size_ceiling`).
+
+    Raised only inside this module — ``complete()`` catches it right where
+    it is raised and degrades to the house ``{"status": "failure",
+    "reason": ...}`` contract, exactly like every other LLM/provider
+    failure (module docstring: never exceptions across the public API).
+    It exists as a real class, not just a reason string, so the one place
+    that raises it can carry both values without inventing a second ad hoc
+    shape, and so a future in-process caller catching it directly (instead
+    of parsing ``reason``) has something precise to catch.
+    """
+
+    def __init__(self, requested_size: str, ceiling: str):
+        self.requested_size = requested_size
+        self.ceiling = ceiling
+        super().__init__(
+            f"model size {requested_size!r} exceeds the entitled ceiling {ceiling!r}"
+        )
+
+
+def resolve_size_ceiling(user_id, workspace_id=None) -> str | None:
+    """The largest ``MODEL_SIZES`` entry *user_id*'s plan entitles them to.
+
+    Returns ``None`` for "no ceiling" — the byte-identical, pre-0.13
+    behaviour — in every one of these cases:
+
+    * ``STAPEL_AGENT['MODEL_SIZE_CEILING_ENTITLEMENT']`` is unset. The seam
+      is closed by default; setting it to an entitlement key name in
+      STAPEL_BILLING's plan catalog (e.g. ``"llm.model_size_ceiling"``) is
+      what turns it on.
+    * *user_id* is absent. There is no subject to ask billing ABOUT — a
+      system-internal call has no plan — so this logs a warning (an
+      operator who DID mean to gate every caller needs to see identity-less
+      calls arriving) and applies no ceiling, same as ``ironmemo``'s
+      recordings gate treats an unbillable anonymous caller as a distinct
+      case rather than a denial.
+    * ``billing.check_entitlement`` is unreachable (``CommError`` — not
+      installed, no route, or a network failure). Mirrors
+      ``ironmemo-backend``'s ``recordings_ext.entitlement`` gate: refusing
+      an otherwise-permitted size because OUR OWN billing call failed is a
+      worse outcome than the cost of one over-generous call, so this fails
+      OPEN (no ceiling), logged as a warning.
+    * billing answered but with nothing usable to cap TO — a bool
+      entitlement (a feature switch, not a ladder rank), or a denial from
+      an unknown key/plan (catalog misconfiguration). Logged as an error
+      (unlike the two cases above, this one means the deployment's plan
+      catalog needs fixing) and, again, no ceiling — the same "denial
+      without a usable cap ⇒ process unrestricted" idiom ironmemo's gate
+      uses for its own catalog-misconfiguration case.
+
+    ``workspace_id`` is accepted — every call site already carries it
+    alongside ``user_id`` — but not consulted: ``billing.check_entitlement``
+    is user-anchored only (payload is ``{"user_id", "key", "quantity"}``,
+    no workspace concept), and this package has no mapping from an opaque
+    ``workspace_id`` to a billing subject (unlike stapel-workspaces, which
+    resolves an org to its owner's user_id itself). A per-workspace ceiling
+    needs that mapping on the host side.
+
+    Meant to be called proactively too — a caller (Studio's architect
+    clamping an escalation before it happens) can resolve the ceiling and
+    pick a size within it, never hitting the refusal in ``complete()`` at
+    all.
+    """
+    key = agent_settings.MODEL_SIZE_CEILING_ENTITLEMENT
+    if not key:
+        return None
+    if not user_id:
+        logger.warning(
+            "resolve_size_ceiling: %r is configured but this call carries "
+            "no user_id — no ceiling applied (nothing to ask billing about)",
+            key,
+        )
+        return None
+
+    from stapel_core.comm import call
+    from stapel_core.comm.exceptions import CommError
+
+    try:
+        result = call(
+            "billing.check_entitlement",
+            {"user_id": str(user_id), "key": key, "quantity": 1},
+        )
+    except CommError as exc:
+        logger.warning(
+            "resolve_size_ceiling: billing unreachable (%s) — no ceiling applied",
+            exc,
+        )
+        return None
+    except Exception:  # pragma: no cover — guard against an unexpected provider
+        logger.exception(
+            "resolve_size_ceiling: unexpected billing failure — no ceiling applied"
+        )
+        return None
+
+    result = result or {}
+    limit = result.get("limit")
+    if not isinstance(limit, int) or isinstance(limit, bool):
+        if not result.get("allowed", True):
+            logger.error(
+                "resolve_size_ceiling: billing denied %r without a usable "
+                "cap (limit=%r, reason=%r) — no ceiling applied; check the "
+                "plan catalog",
+                key, limit, result.get("reason"),
+            )
+        return None
+
+    if limit >= len(MODEL_SIZES):
+        return None  # at/above the top of the ladder — unrestricted
+    if limit < 1:
+        logger.error(
+            "resolve_size_ceiling: %r resolved to a non-positive rank "
+            "(%r) — no ceiling applied; check the plan catalog",
+            key, limit,
+        )
+        return None
+    return MODEL_SIZES[limit - 1]
+
+
+def enforce_size_ceiling(model_size: str, user_id, workspace_id=None) -> None:
+    """Raise :class:`ModelSizeCeilingExceeded` if *model_size* is above the
+    ceiling :func:`resolve_size_ceiling` returns for this identity; a no-op
+    (including when the seam is closed) otherwise.
+
+    The raising half of the seam — ``complete()`` is the only caller today,
+    and it immediately catches what this raises to build the house
+    ``status: "failure"`` envelope, but the class is public so a direct
+    in-process caller can catch it too instead of parsing ``reason``.
+    """
+    ceiling = resolve_size_ceiling(user_id, workspace_id)
+    if ceiling is not None and MODEL_SIZE_RANK[model_size] > MODEL_SIZE_RANK[ceiling]:
+        raise ModelSizeCeilingExceeded(model_size, ceiling)
 
 
 def get_provider(name: str) -> LlmProvider:
@@ -267,6 +415,17 @@ def complete(
     if model_size not in models:
         return {"status": "failure", "reason": f"Unknown model size '{model_size}'"}
 
+    try:
+        enforce_size_ceiling(model_size, user_id, workspace_id)
+    except ModelSizeCeilingExceeded as exc:
+        logger.info("stapel-agent: %s", exc)
+        return {
+            "status": "failure",
+            "reason": REASON_MODEL_SIZE_CEILING,
+            "ceiling": exc.ceiling,
+            "requested_size": exc.requested_size,
+        }
+
     schema, _model = _resolve_schema(schema)
 
     # Resolve the provider/model BEFORE the cache lookup: the cache key
@@ -475,7 +634,13 @@ def complete_json(
     )
     if raw["status"] == "failure":
         return _drop_none(
-            {"status": "failure", "reason": raw.get("reason"), "usage": raw.get("usage")}
+            {
+                "status": "failure",
+                "reason": raw.get("reason"),
+                "usage": raw.get("usage"),
+                "ceiling": raw.get("ceiling"),
+                "requested_size": raw.get("requested_size"),
+            }
         )
 
     result, comment = parse_json_response(raw.get("result") or "")
@@ -1171,7 +1336,7 @@ def summarize(
     if len(chunks) == 1:
         result = _run(chunks[0], prep.SUMMARY_SYSTEM_PROMPT)
         if result["status"] == "failure":
-            return {"status": "failure", "reason": result.get("reason")}
+            return _failure(result)
         return _summary_result(result.get("result") or "", usage)
 
     # Map-reduce: summarize each chunk, then merge the partials.
@@ -1181,7 +1346,7 @@ def summarize(
             f"Part {idx + 1} of {len(chunks)}:\n\n{chunk}", prep.CHUNK_SYSTEM_PROMPT
         )
         if result["status"] == "failure":
-            return {"status": "failure", "reason": result.get("reason")}
+            return _failure(result)
         partials.append(result.get("result") or "")
 
     merged = _run(
@@ -1191,7 +1356,7 @@ def summarize(
         prep.MERGE_SYSTEM_PROMPT,
     )
     if merged["status"] == "failure":
-        return {"status": "failure", "reason": merged.get("reason")}
+        return _failure(merged)
     return _summary_result(merged.get("result") or "", usage)
 
 
@@ -1526,13 +1691,34 @@ def _drop_none(payload: dict) -> dict:
     return {k: v for k, v in payload.items() if v is not None}
 
 
+def _failure(result: dict) -> dict:
+    """A ``complete()`` failure, re-shaped for a caller one level up.
+
+    Carries ``ceiling``/``requested_size`` through when present (the
+    :data:`REASON_MODEL_SIZE_CEILING` refusal) — everything else about the
+    failure is ``reason`` alone, same as before this key existed.
+    """
+    return _drop_none(
+        {
+            "status": "failure",
+            "reason": result.get("reason"),
+            "ceiling": result.get("ceiling"),
+            "requested_size": result.get("requested_size"),
+        }
+    )
+
+
 __all__ = [
     "JSON_API_SYSTEM_PROMPT",
     "MODEL_SIZES",
+    "MODEL_SIZE_RANK",
+    "ModelSizeCeilingExceeded",
+    "REASON_MODEL_SIZE_CEILING",
     "complete",
     "complete_json",
     "diarize",
     "embed",
+    "enforce_size_ceiling",
     "generate_image",
     "get_diarization_provider",
     "get_embedding_provider",
@@ -1541,6 +1727,7 @@ __all__ = [
     "get_rerank_provider",
     "get_stt_provider",
     "rerank",
+    "resolve_size_ceiling",
     "stt_catalog",
     "summarize",
     "transcribe",

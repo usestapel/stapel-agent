@@ -5,6 +5,56 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-08-22
+
+### Added — a fourth rung on the model-size ladder: `xlarge`
+
+The size vocabulary was `small` / `medium` / `large` — haiku-, sonnet- and
+opus-class. Fable-class had nowhere to go. `xlarge` is now accepted
+everywhere `large` was (the `llm.complete` / `llm.summarize` comm schemas,
+the HTTP serializers, `resolve_model`), and `STAPEL_AGENT["MODELS"]` ships a
+default of `claude-fable-5` for it, alongside the existing three. The ladder
+is additive — no existing size, model id or default changed — so a caller
+that never asks for `xlarge` sees no difference, and a host that only wants
+the built-in default gets Fable at the top of the ladder for free.
+
+### Added — an optional model-size entitlement ceiling
+
+A four-rung size ladder is also a monetization axis: a free plan capped at
+`small`, a paid one reaching further up. `STAPEL_AGENT["MODEL_SIZE_CEILING_ENTITLEMENT"]`
+names an entitlement key (default unset — the seam is closed, and every
+existing deployment's behaviour is byte-identical). Configured, `complete()`
+asks `billing.check_entitlement` for that key before running a call: an
+integer value is read as a 1-based rank into `MODEL_SIZES`, and a request
+above the caller's resolved ceiling is **refused** —
+`{"status": "failure", "reason": "model_size_ceiling_exceeded", "ceiling",
+"requested_size"}` — never silently downgraded to a size nobody asked for.
+`llm.complete` and `llm.summarize` (both surfaces — comm and HTTP) carry the
+refusal through.
+
+Failure posture mirrors the fleet's own precedent rather than inventing one:
+no `user_id` on the call (nothing to ask billing *about* — a system-internal
+call has no plan) and an unreachable `billing.check_entitlement` (not
+installed, no route, a network failure) both apply **no ceiling** — the same
+fail-open choice `ironmemo-backend`'s `recordings_ext.entitlement` gate makes
+for its own billing seam, because refusing an otherwise-permitted size over
+OUR OWN outage is a worse outcome than the cost of one over-generous call.
+Both cases log; the identity case at `warning`, the seam-down case too. A
+denial from billing that names no usable cap (a bool entitlement, an unknown
+key or plan) is a plan-catalog misconfiguration, not a ceiling — logged at
+`error`, still no ceiling.
+
+Two new public functions: `services.resolve_size_ceiling(user_id,
+workspace_id=None)` answers "what's the ceiling" without raising, for a
+caller (Studio's architect, escalating up the ladder) that wants to clamp
+*before* asking; `services.enforce_size_ceiling(...)` raises
+`ModelSizeCeilingExceeded` — the specific, catchable class `complete()`
+itself catches to build the refusal dict. `workspace_id` is accepted
+everywhere the identity pair already travels but not consulted:
+`billing.check_entitlement` is user-anchored only, and this package has no
+mapping from an opaque `workspace_id` to a billing subject (unlike
+stapel-workspaces, which resolves an org to its owner itself).
+
 ## [0.12.0] — 2026-08-21
 
 ### Added — the prompt ledger becomes a meter

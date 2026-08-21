@@ -85,7 +85,7 @@ COMPLETE_SCHEMA = {
         "prompt": {"type": "string", "description": "The user prompt."},
         "model": {
             "type": "string",
-            "enum": ["small", "medium", "large"],
+            "enum": ["small", "medium", "large", "xlarge"],
             "description": "Model size, mapped via STAPEL_AGENT['MODELS'].",
         },
         "system_prompt": {
@@ -160,7 +160,7 @@ TRANSLATE_SCHEMA = {
 def llm_complete(payload: dict) -> dict:
     """JSON LLM completion — same result dict as ``POST api/v1/llm/complete``.
 
-    Payload: ``{"prompt": str, "model": "small"|"medium"|"large",
+    Payload: ``{"prompt": str, "model": "small"|"medium"|"large"|"xlarge",
     "system_prompt"?: str, "provider"?: str, "images"?: [{"url"} |
     {"data_b64", "mime"?}], "role"?: str, "max_tokens"?: int,
     "user_id"?: str, "workspace_id"?: str}``. ``role``
@@ -271,7 +271,7 @@ SUMMARIZE_SCHEMA = {
         },
         "model": {
             "type": "string",
-            "enum": ["small", "medium", "large"],
+            "enum": ["small", "medium", "large", "xlarge"],
             "description": "Model size (default medium).",
         },
         "provider": {

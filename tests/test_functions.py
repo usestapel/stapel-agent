@@ -50,6 +50,10 @@ class TestLlmComplete:
         assert fake_provider.calls[0]["system_prompt"] == "custom"
         assert fake_provider.calls[0]["model"] == "claude-sonnet-5"
 
+    def test_xlarge_size_accepted_and_resolved(self, fake_provider):
+        call("llm.complete", {"prompt": "p", "model": "xlarge", "provider": "fake"})
+        assert fake_provider.calls[0]["model"] == "claude-fable-5"
+
     def test_schema_rejects_missing_prompt(self, fake_provider):
         with pytest.raises(SchemaValidationError):
             call("llm.complete", {"model": "small"})
@@ -285,6 +289,16 @@ class TestLlmSummarize:
         # oneOf: text XOR transcript — sending both matches two branches.
         with pytest.raises(SchemaValidationError):
             call("llm.summarize", {"text": "t", "transcript": {"provider": "x"}})
+
+    def test_xlarge_size_accepted(self, fake_provider):
+        fake_provider.result = ProviderResult(
+            text="## Summary", input_tokens=8, output_tokens=2
+        )
+        result = call(
+            "llm.summarize", {"text": "t", "model": "xlarge", "provider": "fake"}
+        )
+        assert result["status"] == "ok"
+        assert fake_provider.calls[0]["model"] == "claude-fable-5"
 
     def test_schema_rejects_bad_model_size(self, fake_provider):
         with pytest.raises(SchemaValidationError):

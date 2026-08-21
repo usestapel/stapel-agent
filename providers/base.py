@@ -98,7 +98,7 @@ class LlmProvider(ABC):
         return None
 
     def resolve_model(self, model_size: str, default: str) -> str:
-        """Map a size ("small"/"medium"/"large") to this backend's model name.
+        """Map a size ("small"/"medium"/"large"/"xlarge") to this backend's model name.
 
         *default* is the already-resolved ``MODELS[model_size]`` value;
         providers with their own model map (openai-compat) override this.

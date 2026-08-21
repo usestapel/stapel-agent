@@ -24,7 +24,7 @@ pip install stapel-agent
 
 | Fact | Value |
 |---|---|
-| Version | `0.12.0` |
+| Version | `0.13.0` |
 | Python | `>=3.11` (3.11, 3.12, 3.13, 3.14) |
 | HTTP operations | 5 |
 | Config axes | 4 |
@@ -70,7 +70,7 @@ Two surfaces, same contracts:
 
 | Surface | HTTP | comm Function | Does |
 |---|---|---|---|
-| Complete | `POST /agent/api/llm/complete` | `llm.complete` | JSON completion: `{"prompt", "model": "small\|medium\|large", "system_prompt"?, "provider"?, "images"?}` → parsed JSON in `result`, prose in `comment`. `images` (vision) entries are `{url}` or `{data_b64, mime?}` — OCR, screenshots, photo moderation |
+| Complete | `POST /agent/api/llm/complete` | `llm.complete` | JSON completion: `{"prompt", "model": "small\|medium\|large\|xlarge", "system_prompt"?, "provider"?, "images"?}` → parsed JSON in `result`, prose in `comment`. `images` (vision) entries are `{url}` or `{data_b64, mime?}` — OCR, screenshots, photo moderation |
 | Translate | `POST /agent/api/llm/translate` | `llm.translate` | `{"from"/"from_lang", "to", "entries": {key: text}}` → `{key: translated}` (cached by prompt) |
 | Transcribe | `POST /agent/api/llm/transcribe` | `llm.transcribe` | `{"audio_url", "language"?, "diarization"?, "provider"?, "timeout_seconds"?}` → a normalized transcript (words, utterances, speakers, timings) via the STT router |
 | Summarize | `POST /agent/api/llm/summarize` | `llm.summarize` | exactly one of `text` / `transcript` (+ `language`?, `model`?, `provider`?) → Markdown `summary` + aggregated `usage`; long inputs are map-reduced |
@@ -78,7 +78,7 @@ Two surfaces, same contracts:
 
 ```bash
 # HTTP (service-to-service: X-API-KEY, or a staff session)
-POST /agent/api/llm/complete   {"prompt": "...", "model": "small|medium|large",
+POST /agent/api/llm/complete   {"prompt": "...", "model": "small|medium|large|xlarge",
                                 "provider"?: "...", "system_prompt"?: "...",
                                 "images"?: [{"url": "https://..."} | {"data_b64": "...", "mime"?: "image/webp"}]}
 POST /agent/api/llm/translate  {"from": "auto", "to": "de", "entries": {"key": "text"}}
@@ -134,7 +134,7 @@ retry on another provider.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `MODELS` | `{"small": "claude-haiku-4-5-20251001", "medium": "claude-sonnet-5", "large": "claude-opus-4-8"}` | Size → model-name map |
+| `MODELS` | `{"small": "claude-haiku-4-5-20251001", "medium": "claude-sonnet-5", "large": "claude-opus-4-8", "xlarge": "claude-fable-5"}` | Size → model-name map |
 | `PROVIDERS` | `{}` | Overlay **merged over** the built-in registry (anthropic / openai-compat / claude-code) — add/override entries, `None` removes one; resolved lazily per request |
 | `DEFAULT_PROVIDER` | `"anthropic"` | Provider used when a request names none |
 | `ANTHROPIC_API_KEY` | `""` | Key for the Anthropic SDK provider (read lazily) |
@@ -166,6 +166,7 @@ retry on another provider.
 | `CACHE_ALLOW_UNSCOPED` | `[]` | Sources whose content the host declares non-personal; a call without `user_id` otherwise skips the cache |
 | `PROMPT_LOG_RETENTION_DAYS` | `90` | Age after which `purge_prompt_logs` scrubs a ledger row's text, keeping its token counters |
 | `PROMPT_LOG_RETENTION_SCHEDULED` | `False` | Declares that the host's scheduler runs `purge_prompt_logs`; otherwise a system check (`W014`) says the window is unenforced |
+| `MODEL_SIZE_CEILING_ENTITLEMENT` | `None` | Entitlement key (STAPEL_BILLING plan catalog) capping how far up the size ladder a caller's plan reaches; unset = seam closed, no billing lookup at all — see `resolve_size_ceiling` |
 | `CACHE_POLICY` | `"stapel_agent.cache.PromptLogCachePolicy"` | Dotted path to a `CachePolicy` subclass — swap the prompt cache (Redis, no-op, ...) without forking |
 
 ## Provider matrix

@@ -19,7 +19,7 @@ ERR_400_EMPTY_DOCUMENTS = "error.400.empty_documents"
 ERR_400_INVALID_TOP_N = "error.400.invalid_top_n"
 
 AGENT_ERRORS = {
-    ERR_400_INVALID_MODEL_SIZE: "Model must be one of: small, medium, large",
+    ERR_400_INVALID_MODEL_SIZE: "Model must be one of: small, medium, large, xlarge",
     ERR_400_SUMMARIZE_INPUT: "Provide exactly one of: text, transcript",
     ERR_400_INVALID_IMAGE: (
         "Each image needs exactly one of: url, data_b64 (valid base64)"
