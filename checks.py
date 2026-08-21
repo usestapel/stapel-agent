@@ -8,6 +8,8 @@ Registered from ``AgentConfig.ready()``. IDs:
   (typo, or an optional dependency missing in this image).
 - ``stapel_agent.W002`` — a registry entry resolves to something that is
   not an ``LlmProvider`` subclass.
+- ``stapel_agent.W016`` — the default LLM provider is registered but not
+  usable (missing credential/binary/package).
 - ``stapel_agent.W014`` — ``PROMPT_LOG_RETENTION_DAYS`` is configured but
   nothing is known to run the purge.
 - ``stapel_agent.W015`` — the STT audio-download allowlist is empty and
@@ -62,6 +64,12 @@ def check_providers(app_configs, **kwargs):
     # would be the same false positive as warning about a peer nobody
     # talks to. The message says plainly what breaks, so it cannot be
     # read as noise.
+    #
+    # id was W009 through 0.13.0 — a collision with check_embedding_providers'
+    # entry-check id (also W009, introduced two days earlier: 0.4.0 vs 0.6.2).
+    # SILENCED_SYSTEM_CHECKS on either check silenced both. Renumbered to
+    # W016 (the next free id) in 0.13.1; embeddings kept W009 as the older,
+    # already-referenced id (darom fleet deploy, 2026-08-22).
     default_target = effective.get(default)
     if default_target is not None:
         try:
@@ -87,7 +95,7 @@ def check_providers(app_configs, **kwargs):
                         "complete with empty summaries and no error surfaces "
                         "anywhere."
                     ),
-                    id="stapel_agent.W009",
+                    id="stapel_agent.W016",
                 )
             )
 

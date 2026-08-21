@@ -124,7 +124,7 @@ class TestSystemChecks:
         # "Clean" now requires a CONFIGURED default. This test used to
         # assert [] against stock settings — i.e. against a config that
         # could not serve a single call (anthropic, no key), which is
-        # exactly the blindness W009 ends.
+        # exactly the blindness W016 ends.
         # openai-compat rather than anthropic-with-a-key: the anthropic
         # backend also needs an optional package, and a library suite must
         # not depend on whether that extra is installed in the venv running
@@ -145,7 +145,7 @@ class TestSystemChecks:
         """
         settings.STAPEL_AGENT = {"ANTHROPIC_API_KEY": ""}
         issues = check_providers(None)
-        assert [i.id for i in issues] == ["stapel_agent.W009"]
+        assert [i.id for i in issues] == ["stapel_agent.W016"]
         assert "ANTHROPIC_API_KEY is empty" in issues[0].msg
         # The hint must name the silent consequence, not just the misconfig.
         assert "empty summaries" in issues[0].hint
@@ -155,7 +155,7 @@ class TestSystemChecks:
             "DEFAULT_PROVIDER": "openai-compat",
             "OPENAI_COMPAT_BASE_URL": "",
         }
-        assert [i.id for i in check_providers(None)] == ["stapel_agent.W009"]
+        assert [i.id for i in check_providers(None)] == ["stapel_agent.W016"]
 
     def test_openai_compat_needs_no_api_key(self, settings):
         """A self-hosted endpoint (vLLM/Ollama/TEI) legitimately has none."""
@@ -190,7 +190,7 @@ class TestSystemChecks:
     def test_unimportable_dotted_path_is_warning(self, settings):
         settings.STAPEL_AGENT = {
             # A usable default, so this test measures W001 and not the
-            # W009 "default provider unusable" warning added alongside it.
+            # W016 "default provider unusable" warning added alongside it.
             "DEFAULT_PROVIDER": "openai-compat",
             "OPENAI_COMPAT_BASE_URL": "http://vllm:8000/v1",
             "PROVIDERS": {"broken": "no.such.module.Cls"},
@@ -221,6 +221,53 @@ class TestSystemChecks:
         from django.core.checks.registry import registry
 
         assert check_providers in registry.registered_checks
+
+
+class TestCheckIdsAreUnique:
+    """Pins the invariant the W009 collision violated: `check_providers`'s
+    "default provider unusable" warning and `check_embedding_providers`'s
+    entry-check both used ``stapel_agent.W009`` (introduced two days apart,
+    0.6.2 and 0.4.0) — `SILENCED_SYSTEM_CHECKS` on either silenced both,
+    invisibly, per the darom fleet's 2026-08-22 deploy.
+
+    Static, not a settings-driven run of every check: a check id is a
+    string constant passed as ``id=``/``entry_check_id=``/
+    ``default_check_id=`` at each call site, so parsing the module source
+    finds every one without needing to engineer settings that trigger each
+    warning. The one legitimate reuse pattern — the SAME check function
+    using its own id across sibling branches of one semantic check (e.g.
+    W003's import-error and not-a-subclass branches) — is allowed; only a
+    ``id`` shared ACROSS two different top-level check functions fails.
+    """
+
+    def test_no_id_is_shared_across_two_check_functions(self):
+        import ast
+        import inspect
+
+        import stapel_agent.checks as checks_module
+
+        tree = ast.parse(inspect.getsource(checks_module))
+
+        id_owners: dict[str, set[str]] = {}
+        for node in tree.body:
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            fn_ids = {
+                sub.value.value
+                for sub in ast.walk(node)
+                if isinstance(sub, ast.keyword)
+                and sub.arg in ("id", "entry_check_id", "default_check_id")
+                and isinstance(sub.value, ast.Constant)
+                and isinstance(sub.value.value, str)
+            }
+            for check_id in fn_ids:
+                id_owners.setdefault(check_id, set()).add(node.name)
+
+        shared = {cid: owners for cid, owners in id_owners.items() if len(owners) > 1}
+        assert not shared, (
+            "check id(s) used by more than one check function — "
+            f"SILENCED_SYSTEM_CHECKS on one silences all of them: {shared}"
+        )
 
 
 @pytest.mark.django_db

@@ -5,6 +5,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.13.1] — 2026-08-22
+
+### Fixed
+
+- **Check id collision: `stapel_agent.W009` renumbered to `W016`.** Two
+  unrelated system checks shared one id — `check_providers`'s "default LLM
+  provider is registered but not usable" warning (added in 0.6.2,
+  2026-07-26) and `check_embedding_providers`'s "an `EMBEDDING_PROVIDERS`
+  entry cannot be imported / is not an `EmbeddingProvider` subclass"
+  warning (added in 0.4.0, 2026-07-24, so the older and unchanged holder of
+  the id). Found by the darom fleet deploy:
+  `SILENCED_SYSTEM_CHECKS = ["stapel_agent.W009"]`, meant to quiet one of
+  the two, silently silenced BOTH — including the unusable-default-provider
+  warning the deploy still needed. The LLM-provider check now reports as
+  `stapel_agent.W016`; the embedding-registry check keeps `W009` unchanged.
+  A new test (`TestCheckIdsAreUnique`, `tests/test_extension_points.py`)
+  statically pins every check id in `checks.py` to exactly one check
+  function so this class of collision cannot regress silently again.
+
 ## [0.13.0] — 2026-08-22
 
 ### Added — a fourth rung on the model-size ladder: `xlarge`
