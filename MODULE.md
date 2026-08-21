@@ -20,7 +20,7 @@ registries). Everything below is verifiable against the code in this repo.
 
 | Area | Contents |
 |---|---|
-| Models (`models.py`) | `PromptLog` (immutable per-call ledger: `source` llm_facade/translate/transcribe/summarize/generate_image/other, `model`, `model_size`, `prompt`, `system_prompt`, `response`, `status` success/failure/timeout/error, `error_message`, `input_tokens`/`output_tokens`/`thinking_tokens`/`cache_read_tokens`/`cache_write_tokens`, `duration_ms`, `user_id`, JSON `metadata`, `created_at`; doubles as the cache-by-prompt store) |
+| Models (`models.py`) | `PromptLog` (immutable per-call ledger: `source` llm_facade/translate/transcribe/summarize/generate_image/other, `model`, `model_size`, `prompt`, `system_prompt`, `response`, `status` success/failure/timeout/error, `error_message`, `input_tokens`/`output_tokens`/`thinking_tokens`/`cache_read_tokens`/`cache_write_tokens`, `duration_ms`, `audio_duration_ms` (billable audio length, distinct from wall clock), `cost_usd`/`cost_basis` (as computed at call time, never recomputed), `user_id`, `workspace_id`, JSON `metadata`, `created_at`; doubles as the cache-by-prompt store) |
 | Services (`services.py`) | `complete()` (cache lookup → provider → PromptLog row → `{status, result, usage}`; optional `images` for vision), `complete_json()` (JSON-API system prompt + JSON extraction — the `llm.complete` surface), `translate()`, `transcribe()` (STT router walk — see "STT providers"), `summarize()` (single-shot / map-reduce over `complete()`), `generate_image()` (see "Image generation"), `get_provider()` / `get_stt_provider()` / `get_image_provider()` (lazy resolution against the merged registries), `JSON_API_SYSTEM_PROMPT` |
 | Parsing (`parsing.py`) | `parse_json_response()` (direct JSON → fenced block → object anywhere → array anywhere; surrounding prose becomes `comment`), `parse_translation_response()`, Django-free |
 | STT seam (`stt/`) | `SttProvider` ABC (incl. the `keyterms`/`provider_options` biasing seam), `AudioRef` (exactly one of url/path/data), `NormalizedTranscript` (incl. the counts-only `biasing` block)/`NormalizedUtterance`/`NormalizedWord` + `transcript_from_dict()`/`utterances_from_words()`, `TranscriptionError` (fatal) / `RetryableTranscriptionError` (transient) error taxonomy (`stt/base.py`, Django-free); open registry (`stt/__init__.py`); language router (`stt/router.py`); adapters `whisper-http` / `elevenlabs` / `assemblyai` / `deepgram` / `gladia` / `soniox` / `speechmatics` / `xai-stt` (`stt/providers/`) |
@@ -190,8 +190,15 @@ stay visible) → `STT_LANGUAGE_ROUTES[lang]` (language normalized `en-US` → `
 `RetryableTranscriptionError` only (429/5xx/timeouts/transport); a fatal
 `TranscriptionError` (bad audio, auth, other 4xx) stops immediately — the next
 provider would fail on the same input. Every `transcribe()` call writes one
-PromptLog row: `source=transcribe`, `model` = provider name, token columns
-NULL, `metadata.attempts` = the per-provider walk.
+PromptLog row: `source=transcribe`, `model` = provider name, LLM token columns
+NULL, `metadata.attempts` = the per-provider walk. A successful call also
+stores the billable quantity — `audio_duration_ms` from the provider's own
+reported duration, and `cost_usd`/`cost_basis` from the STT rate card for that
+provider (its model config when the catalog has one, so price variants and
+hybrid diarization stages are included; the bare card otherwise, which is how
+a host-registered adapter gets priced). A provider that reports no duration,
+or one with no rate card, leaves the row `unpriced` and says so in the log —
+unknown, never free.
 
 ABC contract (`stt/base.py`, Django-free):
 
@@ -420,7 +427,7 @@ token columns NULL.
 ### Summarization contract
 
 `services.summarize(text_or_transcript, *, language=None, model_size="medium",
-provider=None, user_id=None, chunk_tokens=None)` accepts a `str`, a
+provider=None, user_id=None, workspace_id=None, chunk_tokens=None)` accepts a `str`, a
 `NormalizedTranscript`, or its `to_dict()` form (the shape `llm.transcribe`
 returns) — exactly one input, enforced at every surface. Transcripts are
 rendered to timestamped `[MM:SS] speaker: text` Markdown; `summary.py` chunks
@@ -512,6 +519,16 @@ microservices — same code). JSON Schemas live in `schemas/functions/`.
 | `llm.summarize` | `{text \| transcript: NormalizedTranscript-dict (exactly one, schema-enforced oneOf), language?, model?, provider?}` | `{status, summary?, usage?, reason?}` |
 | `llm.generate_image` | `{prompt, size?, n? (1-10), provider?, timeout_seconds? (>= 1)}` | `{status, images?: [{url? \| data_b64?, mime}], provider_used?, reason?}` — raw results; storage is the caller's job |
 | `llm.stt_catalog` | `{}` (no arguments) | `{status, providers: [{name, available, model, pinned_model, supports_diarization, supported_languages, cost_per_hour}], default_provider, fallback_chain, language_routes}` — the addressable STT surface; each `model` is the registration's effective model (the `speech_model` pin, else the configured default). Read-only, writes no PromptLog row |
+
+Every function in that table except `llm.stt_catalog` also accepts the
+optional attribution pair `{user_id?, workspace_id?}`, recorded on the
+PromptLog row it writes. Both are **optional** — a payload that omits them
+stays valid, so no existing host breaks — and **recorded only**: nothing in
+this package authorises, entitles, debits or rate-limits on them. They exist
+because these schemas are `additionalProperties: false` and product traffic
+arrives over comm, so before 0.12.0 every row written by a real pipeline
+stage had `user_id = NULL` and the token ledger had no subject to attribute
+to. `llm.stt_catalog` writes no row and therefore has nobody to attribute.
 
 ### Admin categories (`stapel_core.access`, admin-suite AS-5)
 

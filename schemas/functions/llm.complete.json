@@ -71,6 +71,14 @@
     "schema": {
       "type": "object",
       "description": "JSON Schema that CONSTRAINS the decoder, rather than asking for JSON in prose. Without this, a caller in another service could only ask nicely — structured output existed in-process and stopped at the service boundary, which is the one place a malformed answer is hardest to recover from. A provider that cannot constrain output fails the call instead of quietly answering the prose way. Pass the schema as pydantic emits it: the transport applies the strict-subset transform itself."
+    },
+    "user_id": {
+      "type": "string",
+      "description": "Who this call is for — recorded on the PromptLog row so per-user cost is answerable. Opaque to this package: any id shape the host uses. Optional; omitting it leaves the row unattributed, never rejected."
+    },
+    "workspace_id": {
+      "type": "string",
+      "description": "Which tenant this call is for — recorded on the PromptLog row so per-workspace cost is answerable without summing over its members. Optional, opaque, recorded only."
     }
   },
   "required": [

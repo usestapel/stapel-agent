@@ -22,9 +22,11 @@ class PromptLogAdmin(StapelModelAdmin):
         "input_tokens",
         "output_tokens",
         "duration_ms",
+        "cost_usd",
         "user_id",
+        "workspace_id",
     ]
-    list_filter = ["source", "status", "model_size"]
-    search_fields = ["prompt", "user_id", "model"]
+    list_filter = ["source", "status", "model_size", "cost_basis"]
+    search_fields = ["prompt", "user_id", "workspace_id", "model"]
     date_hierarchy = "created_at"
     ordering = ["-created_at"]

@@ -59,6 +59,9 @@ __all__ = [
     "STT_REST_PRICE_PER_HOUR",
     "STT_STREAMING_PRICE_PER_HOUR",
     "estimate_xai_stt_cost",
+    "MIMO_V25_ASR_PRICE_PER_HOUR",
+    "MIMO_V25_ASR_PRICE_PER_HOUR_CNY",
+    "estimate_xiaomi_mimo_cost",
 ]
 
 # name -> (relative module, attribute). Each provider module's function is
@@ -94,6 +97,11 @@ _EXPORTS = {
     "STT_REST_PRICE_PER_HOUR": (".xai_stt", "STT_REST_PRICE_PER_HOUR"),
     "STT_STREAMING_PRICE_PER_HOUR": (".xai_stt", "STT_STREAMING_PRICE_PER_HOUR"),
     "estimate_xai_stt_cost": (".xai_stt", "estimate_cost"),
+    "MIMO_V25_ASR_PRICE_PER_HOUR": (
+        ".xiaomi_mimo", "MIMO_V25_ASR_PRICE_PER_HOUR"),
+    "MIMO_V25_ASR_PRICE_PER_HOUR_CNY": (
+        ".xiaomi_mimo", "MIMO_V25_ASR_PRICE_PER_HOUR_CNY"),
+    "estimate_xiaomi_mimo_cost": (".xiaomi_mimo", "estimate_cost"),
 }
 
 
@@ -104,6 +112,10 @@ _EXPORTS = {
 # rate card are addressed by one name. ``whisper-http`` is deliberately
 # ABSENT: a self-hosted endpoint has no published card, and inventing a $0
 # one would report someone's GPU bill as free.
+#
+# ``xiaomi_mimo`` is absent for the other reason: the card ships (see
+# ``.xiaomi_mimo``) but the adapter is host-side, and this map may only name
+# providers this package registers. A host registers the pair together.
 BUILTIN_STT_PRICING_MODULES: dict[str, str] = {
     "assemblyai": "stapel_agent.stt.pricing.assemblyai",
     "deepgram": "stapel_agent.stt.pricing.deepgram",

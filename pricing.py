@@ -26,7 +26,9 @@ replaces a known figure is how a ledger drifts from an invoice.
 
 Prices are applied at call time, not at read time. Storing the cost as computed
 when the call was made keeps a year-old row honest after the rate card changes;
-recomputing later would quietly restate history.
+recomputing later would quietly restate history. Since 0.12.0 that storage is
+real: ``PromptLog.cost_usd`` / ``cost_basis`` are written by the completion
+pipeline from this module's output, once, and never revisited.
 """
 
 from __future__ import annotations
@@ -36,18 +38,44 @@ import re
 
 logger = logging.getLogger(__name__)
 
-# verified https://docs.claude.com/en/docs/about-claude/pricing.md fetched 03 Jul 2026
+# verified https://platform.claude.com/docs/en/about-claude/pricing.md
+# (the docs.claude.com URL now 302s there) fetched 21 Aug 2026
 # {model_id: {"input": USD/MTok, "output": USD/MTok}}
+#
+# Base input/output only. Deliberately NOT modelled here, because each is a
+# multiplier on a request shape this facade does not choose: cache
+# writes/reads (1.25x/2x/0.1x — the cache token columns are recorded, the
+# multiplier is not applied), the Batch API's 50% discount, the
+# ``inference_geo="us"`` 1.1x, and fast mode on Opus 5 / 4.8 ($10/$50). A row
+# whose call used one of those is under-counted, and honestly so: this is
+# ``pricing_estimate``, and ``provider_ticks`` beats it whenever the provider
+# reports its own charge.
 PRICES_USD_PER_MTOK: dict[str, dict[str, float]] = {
-    # Claude Sonnet 5 — released 30 Jun 2026. Introductory $2/$10 per MTok
-    # through 31 Aug 2026; standard $3/$15 from 1 Sep 2026 (intro is active now).
+    # Claude Sonnet 5 — released 30 Jun 2026 at an introductory $2/$10 per
+    # MTok "through 31 Aug 2026", with $3/$15 scheduled for 1 Sep 2026.
+    # THAT INCREASE WAS CANCELLED: as of the 21 Aug 2026 price list, $2/$10
+    # "is now the standard price" and "the previously scheduled increase
+    # ... will not occur". So this table needs no effective-date machinery
+    # for it, and the number below stays correct after 31 Aug 2026 with no
+    # release. Costs already computed and stored at $2/$10 stay right too.
     # ⚠️ New tokenizer emits ~30% more tokens for the same text than Sonnet 4.6.
     "claude-sonnet-5": {"input": 2.0, "output": 10.0},
     # Legacy Sonnet — kept for comparison / explicit override.
     "claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
     "claude-sonnet-4-5": {"input": 3.0, "output": 15.0},
     "claude-haiku-4-5": {"input": 1.0, "output": 5.0},
+    # Fable/Mythos 5 — the top tier, and the reason an unpriced row is worth
+    # shouting about: at 5x Opus, one silently-zero month is real money.
+    "claude-fable-5": {"input": 10.0, "output": 50.0},
+    "claude-mythos-5": {"input": 10.0, "output": 50.0},
+    # The Opus family bills flat across revisions; each is listed rather
+    # than aliased so a provider's echoed model id resolves to its own key
+    # and a future divergence is a one-line edit, not a refactor.
+    "claude-opus-5": {"input": 5.0, "output": 25.0},
     "claude-opus-4-8": {"input": 5.0, "output": 25.0},
+    "claude-opus-4-7": {"input": 5.0, "output": 25.0},
+    "claude-opus-4-6": {"input": 5.0, "output": 25.0},
+    "claude-opus-4-5": {"input": 5.0, "output": 25.0},
     # --- P75 non-Anthropic summary models (verified 2026-07-10, primary docs;
     # --- sources + notes in pipeline/summarize/providers.py) ----------------
     # xAI grok-4.5: docs.x.ai/developers/models ($2/$6, ctx 500k)

@@ -17,6 +17,22 @@ from __future__ import annotations
 from stapel_core.gdpr import GDPRProvider
 
 
+def _jsonable(key: str, value):
+    """One row value, in a shape a subject-access export can serialise.
+
+    UUIDs and timestamps stringify; ``cost_usd`` is a ``Decimal``, which
+    ``json.dumps`` refuses outright — a column added for accounting must
+    not be the reason an erasure export raises.
+    """
+    from decimal import Decimal
+
+    if key in ("created_at", "id"):
+        return value.isoformat() if hasattr(value, "isoformat") else str(value)
+    if isinstance(value, Decimal):
+        return float(value)
+    return value
+
+
 class AgentGDPRProvider(GDPRProvider):
     """Export / erase one user's rows in the LLM prompt ledger."""
 
@@ -45,20 +61,16 @@ class AgentGDPRProvider(GDPRProvider):
                 "output_tokens",
                 "thinking_tokens",
                 "duration_ms",
+                # The metering columns are part of the subject's record too:
+                # a person asking what we hold on them is owed the numbers
+                # we bill their account on, not only the text.
+                "audio_duration_ms",
+                "cost_usd",
+                "cost_basis",
                 "created_at",
             )
         )
-        return {
-            "prompts": [
-                {
-                    key: (value.isoformat() if hasattr(value, "isoformat") else str(value))
-                    if key in ("created_at", "id")
-                    else value
-                    for key, value in row.items()
-                }
-                for row in rows
-            ]
-        }
+        return {"prompts": [{k: _jsonable(k, v) for k, v in row.items()} for row in rows]}
 
     def delete(self, user_id: int) -> None:
         """Erase the content, keep the accounting row (anonymised)."""

@@ -33,6 +33,75 @@ class TestTable:
             assert prices["output"] >= prices["input"], model
 
 
+class TestTheCardsThatWereMissing:
+    """A model absent from the table costs 0.0 and gets summed as free.
+
+    Every entry here was reachable from a running deployment while unpriced
+    — the top of the range most of all, where one silent month is real
+    money.
+    """
+
+    @pytest.mark.parametrize(
+        "model,expected",
+        [
+            ("claude-opus-5", (5.0, 25.0)),
+            ("claude-opus-4-8", (5.0, 25.0)),
+            ("claude-opus-4-7", (5.0, 25.0)),
+            ("claude-opus-4-6", (5.0, 25.0)),
+            ("claude-opus-4-5", (5.0, 25.0)),
+            ("claude-fable-5", (10.0, 50.0)),
+            ("claude-mythos-5", (10.0, 50.0)),
+            ("claude-sonnet-5", (2.0, 10.0)),
+            ("claude-haiku-4-5", (1.0, 5.0)),
+        ],
+    )
+    def test_verified_against_the_published_list(self, model, expected):
+        prices = PRICES_USD_PER_MTOK[model]
+        assert (prices["input"], prices["output"]) == expected
+
+    def test_the_default_large_model_is_priced(self):
+        """``conf.MODELS['large']`` shipping unpriced is the exact shape of
+        the defect: the most expensive route, estimated at nothing."""
+        from stapel_agent.conf import agent_settings
+
+        for size in ("small", "medium", "large"):
+            assert is_priced(agent_settings.defaults["MODELS"][size]), size
+
+
+class TestSonnet5IntroductoryPricing:
+    """The scheduled increase that isn't.
+
+    Sonnet 5 launched at an introductory $2/$10 "through 31 Aug 2026", with
+    $3/$15 booked for 1 September. That increase was CANCELLED — the
+    21 Aug 2026 price list says $2/$10 "is now the standard price". So the
+    right mechanism here is no mechanism: a date-aware entry that flipped to
+    $3/$15 would make every row computed after August wrong, which is the
+    opposite of what an effective-date pair was wanted for.
+    """
+
+    def test_the_intro_price_is_the_standard_price(self):
+        assert PRICES_USD_PER_MTOK["claude-sonnet-5"] == {"input": 2.0, "output": 10.0}
+
+    def test_the_estimate_does_not_move_with_the_calendar(self):
+        """Locked deliberately: nothing in this module reads a clock, so
+        1 September needs no release and produces no surprise."""
+        import inspect
+
+        import stapel_agent.pricing as pricing
+
+        source = inspect.getsource(pricing)
+        for clock in ("datetime", "date.today", "time.time", "timezone.now"):
+            assert clock not in source, (
+                f"pricing.py grew a clock ({clock}) — a rate card that "
+                "changes by itself must be justified by a scheduled price "
+                "change that is actually happening"
+            )
+
+    def test_a_september_call_costs_what_an_august_call_costs(self):
+        before = estimate_cost("claude-sonnet-5", 1_000_000, 1_000_000)
+        assert before == pytest.approx(12.0)
+
+
 class TestEstimate:
     def test_a_million_of_each(self):
         assert estimate_cost("claude-sonnet-5", 1_000_000, 1_000_000) == pytest.approx(12.0)

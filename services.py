@@ -14,7 +14,7 @@ from django.utils.module_loading import import_string
 
 from .cache import CachePolicy
 from .conf import agent_settings
-from .models import PromptLog, PromptSource, PromptStatus
+from .models import CostBasis, PromptLog, PromptSource, PromptStatus
 from .parsing import parse_json_response, parse_translation_response
 from .providers import registered_providers
 from .providers.base import LlmProvider, ProviderError, ProviderTimeout
@@ -105,6 +105,42 @@ def _cache_allowed(policy: CachePolicy, source: str, user_id) -> bool:
     return False
 
 
+def _identity(user_id, workspace_id) -> dict:
+    """The two attribution columns, normalised to ``str | None``.
+
+    One helper because every ledger write needs both and the hosts' id
+    shapes differ (ints, UUIDs, slugs) — the columns are CharFields on
+    purpose, and the coercion belongs in one place rather than repeated
+    at nine call sites with nine chances to forget the ``None`` case.
+    """
+    return {
+        "user_id": str(user_id) if user_id is not None else None,
+        "workspace_id": str(workspace_id) if workspace_id is not None else None,
+    }
+
+
+def _cost_columns(cost: dict | None) -> dict:
+    """``pricing.cost_fields()`` output as PromptLog columns.
+
+    Decimal, not float: these get SUMmed over a billing period, and a
+    ledger that drifts by float error in the seventh place is a ledger
+    somebody has to reconcile by hand. Quantised to the column's eight
+    places here rather than at the database, so the value the row holds
+    is the value this process computed.
+    """
+    from decimal import Decimal
+
+    if not cost:
+        return {}
+    amount = cost.get("cost_usd")
+    return {
+        "cost_usd": (
+            Decimal(str(round(float(amount), 8))) if amount is not None else None
+        ),
+        "cost_basis": cost.get("cost_basis"),
+    }
+
+
 def _usage(row_or_result, *, model: str = "", provider: str = "") -> dict:
     """What the call consumed, and what it cost.
 
@@ -182,6 +218,7 @@ def complete(
     provider: str | None = None,
     source: str = PromptSource.LLM_FACADE,
     user_id: str | None = None,
+    workspace_id: str | None = None,
     metadata: dict | None = None,
     skip_cache: bool = False,
     images: list | None = None,
@@ -193,8 +230,14 @@ def complete(
 
     Flow: cache lookup (via the configured ``CACHE_POLICY``; the default
     honours ``CACHE_LOOKUP[source]``) → resolve provider → call → write a
-    PromptLog row (every token column) → return. CLI/HTTP timeouts land
-    as status ``timeout`` in the log.
+    PromptLog row (every token column, plus ``cost_usd``/``cost_basis``)
+    → return. CLI/HTTP timeouts land as status ``timeout`` in the log.
+
+    *user_id* and *workspace_id* are the attribution pair. Both are
+    optional and both are only ever recorded — nothing in this package
+    authorises, debits or gates on them. A call that supplies neither is
+    still served; it just cannot be billed to anyone afterwards, which is
+    the state every comm caller was in before 0.12.0.
 
     *images* (a list of ``ImageRef``) makes the request multimodal. The
     prompt cache is text-keyed, so image requests bypass lookup AND
@@ -301,7 +344,7 @@ def complete(
         model_size=model_size,
         prompt=prompt,
         system_prompt=system_prompt,
-        user_id=str(user_id) if user_id is not None else None,
+        **_identity(user_id, workspace_id),
         metadata={**(metadata or {}), "provider": provider_name, **extra_meta},
     )
 
@@ -349,6 +392,19 @@ def complete(
     log.cache_read_tokens = result.cache_read_tokens
     log.cache_write_tokens = result.cache_write_tokens
     log.duration_ms = int((time.monotonic() - start) * 1000)
+    # Computed once and used twice: the caller's ``usage`` and the ledger
+    # row carry the same number by construction, so a dashboard and an
+    # invoice cannot disagree about one call.
+    usage = _usage(result, model=model, provider=provider_name)
+    for column, value in _cost_columns(usage).items():
+        setattr(log, column, value)
+    if usage.get("cost_basis") == "unpriced":
+        logger.warning(
+            "stapel-agent: no rate card for model %r (provider %r) — the "
+            "%s row is stored with cost_basis=unpriced; add the model to "
+            "stapel_agent.pricing.PRICES_USD_PER_MTOK",
+            model, provider_name, source,
+        )
     log.save()
 
     # No-op for the default policy (the ledger row above IS its storage);
@@ -367,11 +423,7 @@ def complete(
             user_id=scope,
         )
 
-    return {
-        "status": "ok",
-        "result": result.text,
-        "usage": _usage(result, model=model, provider=provider_name),
-    }
+    return {"status": "ok", "result": result.text, "usage": usage}
 
 
 def complete_json(
@@ -381,6 +433,7 @@ def complete_json(
     system_prompt: str | None = None,
     provider: str | None = None,
     user_id: str | None = None,
+    workspace_id: str | None = None,
     metadata: dict | None = None,
     images: list | None = None,
     max_tokens: int | None = None,
@@ -414,6 +467,7 @@ def complete_json(
         provider=provider,
         source=PromptSource.LLM_FACADE,
         user_id=user_id,
+        workspace_id=workspace_id,
         metadata=metadata,
         images=images,
         max_tokens=max_tokens,
@@ -464,6 +518,7 @@ def translate(
     *,
     provider: str | None = None,
     user_id: str | None = None,
+    workspace_id: str | None = None,
     skip_cache: bool = False,
 ) -> dict:
     """Translate a ``{key: text}`` mapping.
@@ -533,6 +588,7 @@ def translate(
         provider=provider,
         source=PromptSource.TRANSLATE,
         user_id=user_id,
+        workspace_id=workspace_id,
         metadata={"from": from_lang, "to": to, "key_count": len(entries)},
         skip_cache=True,  # already checked above
     )
@@ -636,6 +692,91 @@ def stt_catalog() -> dict:
     }
 
 
+def _stt_cost(provider_name: str, language: str | None, duration_ms: int | None) -> dict:
+    """What one transcription cost, and which rate card said so.
+
+    Returns ``{"cost_usd", "cost_basis", "priced_by"}``. STT does not bill
+    tokens, it bills audio hours, so this is a different computation from
+    :func:`pricing.cost_fields` — but it lands in the same two columns, so
+    "what did this user cost" is one query over one table rather than a
+    union of per-surface special cases.
+
+    Attribution order, and why:
+
+    1. The **model config** for (provider, language), when the catalog has
+       one. It is the only thing that knows the price VARIANTS — a
+       Deepgram ``multi`` run bills above the monolingual rate over the
+       identical wire model, and a hybrid config adds its separate
+       diarization stage's card, because the invoice will too.
+    2. Failing that, the provider's **rate card directly**, at the card's
+       own default model. This is the host-registered-adapter case: an
+       adapter that ships outside this package has no catalog entry, and
+       refusing to price it would leave a live paid route reading as
+       unknown for no better reason than where its class lives.
+
+    Every road to "we do not know" is logged, because that is the whole
+    defect this release closes: the silent zero. ``None`` cost with
+    ``unpriced`` never means free.
+    """
+    from .stt.base import normalize_language
+    from .stt.model_configs import estimate_cost as estimate_config_cost
+    from .stt.model_configs import resolve_config
+    from .stt.pricing import pricing_module
+
+    unknown = {
+        "cost_usd": None,
+        "cost_basis": CostBasis.UNPRICED,
+        "priced_by": None,
+    }
+
+    if duration_ms is None:
+        logger.warning(
+            "stapel-agent: STT provider %r reported no audio duration — the "
+            "transcribe row is stored unpriced and its cost cannot be "
+            "reconstructed from the ledger (the provider's response carries "
+            "no duration, or the adapter drops it)",
+            provider_name,
+        )
+        return unknown
+
+    module = pricing_module(provider_name)
+    if module is None:
+        logger.warning(
+            "stapel-agent: no rate card for STT provider %r — %s ms of audio "
+            "stored unpriced. This is a live billable call priced at nothing: "
+            "register a card with "
+            "stapel_agent.stt.pricing.register_stt_pricing_module(%r, ...)",
+            provider_name, duration_ms, provider_name,
+        )
+        return unknown
+
+    try:
+        config = resolve_config(provider_name, normalize_language(language) or "")
+    except ValueError:
+        config = None
+
+    if config is not None:
+        cost = estimate_config_cost(config, duration_ms)
+        priced_by = config.model_config_id
+    else:
+        cost = module.estimate_cost(duration_ms)
+        priced_by = provider_name
+
+    if cost is None:
+        logger.warning(
+            "stapel-agent: rate card for STT provider %r does not price "
+            "%r — row stored unpriced",
+            provider_name, priced_by,
+        )
+        return unknown
+
+    return {
+        "cost_usd": cost,
+        "cost_basis": CostBasis.PRICING_ESTIMATE,
+        "priced_by": priced_by,
+    }
+
+
 def transcribe(
     audio,
     *,
@@ -646,6 +787,7 @@ def transcribe(
     keyterms: list[str] | None = None,
     provider_options: dict | None = None,
     user_id: str | None = None,
+    workspace_id: str | None = None,
     metadata: dict | None = None,
 ) -> dict:
     """Transcribe *audio* (an ``AudioRef``) through the STT router.
@@ -655,6 +797,16 @@ def transcribe(
     ``RetryableTranscriptionError`` — fatal errors (bad input, auth) stop
     the walk. Every call writes one PromptLog row (``source=transcribe``,
     ``model`` = provider name, token columns null).
+
+    THE ROW IS AUDITABLE. STT is billed per hour of audio, and the row
+    used to hold neither the audio's length nor a price: ``prompt`` was
+    ``url:<host>`` and ``duration_ms`` was how long WE waited. A
+    successful transcription now stores the provider-reported audio
+    length in ``audio_duration_ms`` and the cost that length implies in
+    ``cost_usd``/``cost_basis`` (see :func:`_stt_cost`), so the largest
+    spend path in an audio product can be reconstructed from the ledger
+    alone. A provider that reports no duration leaves both null and says
+    so in the log — unknown, never free.
 
     ``keyterms`` (normalized vocabulary-bias terms) and
     ``provider_options`` (free-form per-provider passthrough) are
@@ -686,7 +838,26 @@ def transcribe(
     failure_reason = "No STT provider available"
     fallback_used = False
 
-    def _log(status: str, *, provider_used: str, response: str | None, error: str | None):
+    def _log(
+        status: str,
+        *,
+        provider_used: str,
+        response: str | None,
+        error: str | None,
+        transcript=None,
+    ):
+        # The billable quantity comes from the provider's own answer, which
+        # is the only party that measured the audio. A failed attempt has
+        # no transcript and therefore no duration — and no cost, which is
+        # correct: providers do not bill for a call that returned nothing.
+        audio_ms = None
+        if transcript is not None and transcript.duration_seconds is not None:
+            audio_ms = int(round(float(transcript.duration_seconds) * 1000))
+        cost = (
+            _stt_cost(provider_used, transcript.language or language, audio_ms)
+            if transcript is not None
+            else {}
+        )
         PromptLog.objects.create(
             source=PromptSource.TRANSCRIBE,
             model=provider_used,
@@ -696,7 +867,9 @@ def transcribe(
             status=status,
             error_message=error,
             duration_ms=int((time.monotonic() - start) * 1000),
-            user_id=str(user_id) if user_id is not None else None,
+            audio_duration_ms=audio_ms,
+            **_cost_columns(cost),
+            **_identity(user_id, workspace_id),
             metadata={
                 **(metadata or {}),
                 "audio": audio.describe(),
@@ -704,6 +877,10 @@ def transcribe(
                 "diarization": diarization,
                 "fallback_used": fallback_used,
                 "attempts": attempts,
+                # Which card produced cost_usd — a config id, a provider
+                # name, or absent when nothing priced it. Without this the
+                # number is unfalsifiable a quarter later.
+                **({"priced_by": cost["priced_by"]} if cost.get("priced_by") else {}),
             },
         )
 
@@ -760,7 +937,13 @@ def transcribe(
             continue
 
         attempts.append({"provider": name, "error_kind": None, "error": None})
-        _log(PromptStatus.SUCCESS, provider_used=name, response=transcript.text, error=None)
+        _log(
+            PromptStatus.SUCCESS,
+            provider_used=name,
+            response=transcript.text,
+            error=None,
+            transcript=transcript,
+        )
         return {
             "status": "ok",
             "transcript": transcript.to_dict(),
@@ -803,6 +986,7 @@ def diarize(
     timeout_seconds: int | None = None,
     provider_options: dict | None = None,
     user_id: str | None = None,
+    workspace_id: str | None = None,
     metadata: dict | None = None,
 ) -> dict:
     """Diarize *audio* (an ``AudioRef``) through the configured backend.
@@ -827,7 +1011,13 @@ def diarize(
     name = provider or agent_settings.DEFAULT_DIARIZATION_PROVIDER
     start = time.monotonic()
 
-    def _log(status: str, *, error: str | None = None, extra: dict | None = None):
+    def _log(
+        status: str,
+        *,
+        error: str | None = None,
+        extra: dict | None = None,
+        audio_seconds: float | None = None,
+    ):
         PromptLog.objects.create(
             source=PromptSource.DIARIZE,
             model=name,
@@ -837,7 +1027,17 @@ def diarize(
             status=status,
             error_message=error,
             duration_ms=int((time.monotonic() - start) * 1000),
-            user_id=str(user_id) if user_id is not None else None,
+            # Diarization bills per audio hour too (pyannoteAI's card, with
+            # a 20 s minimum per job). The number was already measured and
+            # already in ``metadata``; it belongs in the column the meter
+            # queries. Pricing this surface is a separate step — the row is
+            # at least reconstructable now.
+            audio_duration_ms=(
+                int(round(float(audio_seconds) * 1000))
+                if audio_seconds is not None
+                else None
+            ),
+            **_identity(user_id, workspace_id),
             metadata={
                 **(metadata or {}),
                 "audio": audio.describe(),
@@ -869,6 +1069,7 @@ def diarize(
             "speakers_detected": len(result.speakers_detected),
             "duration_seconds": result.duration_seconds,
         },
+        audio_seconds=result.duration_seconds,
     )
     return {
         "status": "ok",
@@ -910,6 +1111,7 @@ def summarize(
     model_size: str = "medium",
     provider: str | None = None,
     user_id: str | None = None,
+    workspace_id: str | None = None,
     chunk_tokens: int | None = None,
 ) -> dict:
     """Summarize plain text or a transcript through the LLM pipeline.
@@ -960,6 +1162,7 @@ def summarize(
             provider=provider,
             source=PromptSource.SUMMARIZE,
             user_id=user_id,
+            workspace_id=workspace_id,
         )
         for key in usage:
             usage[key] += (result.get("usage") or {}).get(key, 0)
@@ -1023,6 +1226,7 @@ def embed(
     timeout_seconds: int | None = None,
     provider_options: dict | None = None,
     user_id: str | None = None,
+    workspace_id: str | None = None,
     metadata: dict | None = None,
 ) -> dict:
     """Embed a batch of texts through the configured backend.
@@ -1068,7 +1272,7 @@ def embed(
             status=status,
             error_message=error,
             duration_ms=int((time.monotonic() - start) * 1000),
-            user_id=str(user_id) if user_id is not None else None,
+            **_identity(user_id, workspace_id),
             metadata={**(metadata or {}), "batch_size": batch_size, **(extra or {})},
         )
 
@@ -1136,6 +1340,7 @@ def rerank(
     timeout_seconds: int | None = None,
     provider_options: dict | None = None,
     user_id: str | None = None,
+    workspace_id: str | None = None,
     metadata: dict | None = None,
 ) -> dict:
     """Rerank *documents* against *query* through the configured backend.
@@ -1175,7 +1380,7 @@ def rerank(
             status=status,
             error_message=error,
             duration_ms=int((time.monotonic() - start) * 1000),
-            user_id=str(user_id) if user_id is not None else None,
+            **_identity(user_id, workspace_id),
             metadata={
                 **(metadata or {}),
                 "document_count": doc_count,
@@ -1247,6 +1452,7 @@ def generate_image(
     provider: str | None = None,
     timeout_seconds: int | None = None,
     user_id: str | None = None,
+    workspace_id: str | None = None,
     metadata: dict | None = None,
 ) -> dict:
     """Generate images through the configured backend.
@@ -1276,7 +1482,7 @@ def generate_image(
             status=status,
             error_message=error,
             duration_ms=int((time.monotonic() - start) * 1000),
-            user_id=str(user_id) if user_id is not None else None,
+            **_identity(user_id, workspace_id),
             metadata={**(metadata or {}), "size": size, "n": n, **(extra or {})},
         )
 

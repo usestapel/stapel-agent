@@ -24,7 +24,7 @@ pip install stapel-agent
 
 | Fact | Value |
 |---|---|
-| Version | `0.11.0` |
+| Version | `0.12.0` |
 | Python | `>=3.11` (3.11, 3.12, 3.13, 3.14) |
 | HTTP operations | 5 |
 | Config axes | 4 |
@@ -108,10 +108,17 @@ validation and auth. Successful completions return the parsed JSON in
 (`input_tokens` / `output_tokens`).
 
 Every provider call writes a `PromptLog` row: model, size, source, status,
-duration and the full token ledger (input / output / thinking / cache-read /
-cache-write) — per-user and per-source cost accounting needs no other table.
+duration, the full token ledger (input / output / thinking / cache-read /
+cache-write) and what it cost — `cost_usd` with a `cost_basis` saying whether
+that is the provider's own figure, this package's rate card, or unknown.
+Attribution is the optional `user_id` / `workspace_id` pair every `llm.*` comm
+function accepts, so per-user and per-tenant cost accounting needs no other
+table. The cost is stored **as computed at call time** and never recomputed:
+re-pricing an old row against today's card would quietly restate history.
 Transcriptions land there too (`source=transcribe`, `model` = STT provider
-name, token columns NULL, the fallback walk in `metadata.attempts`); each
+name, LLM token columns NULL but `audio_duration_ms` carrying the billable
+audio length and `cost_usd` the rate card applied to it, the fallback walk in
+`metadata.attempts`); each
 summarize pass is a normal LLM row (`source=summarize`); image generations
 log as `source=generate_image` with `{count, mimes, bytes_total}` in
 metadata — image bytes never touch the ledger, and multimodal completions

@@ -28,6 +28,14 @@
     "provider": {
       "type": "string",
       "description": "LLM provider name from STAPEL_AGENT['PROVIDERS']."
+    },
+    "user_id": {
+      "type": "string",
+      "description": "Who this call is for — recorded on the PromptLog row so per-user cost is answerable. Opaque to this package: any id shape the host uses. Optional; omitting it leaves the row unattributed, never rejected."
+    },
+    "workspace_id": {
+      "type": "string",
+      "description": "Which tenant this call is for — recorded on the PromptLog row so per-workspace cost is answerable without summing over its members. Optional, opaque, recorded only."
     }
   },
   "oneOf": [

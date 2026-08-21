@@ -16,6 +16,51 @@ from stapel_core.comm import function
 
 logger = logging.getLogger(__name__)
 
+# ─── Identity, and why every schema below carries it ──────────────────
+#
+# These schemas are ``additionalProperties: false``, and product traffic
+# reaches this package ONLY over comm. So until 0.12.0 there was no way for
+# a caller to say who a call was for: `PromptLog.user_id` existed, the HTTP
+# views filled it, and every row written by a real pipeline stage read NULL.
+# The token columns were complete and the table could still not answer "what
+# did this customer cost us" — a meter with no subject.
+#
+# Both fields are OPTIONAL, and that is a compatibility promise, not
+# indecision: a payload that omits them stays valid, so no existing host
+# breaks and adoption is per-call-site. They are RECORDED ONLY — nothing in
+# this package authorises, entitles, debits or rate-limits on them. Metering
+# is not billing, and a library that quietly started enforcing on an id it
+# was handed for accounting would be the worse surprise.
+IDENTITY_PROPERTIES = {
+    "user_id": {
+        "type": "string",
+        "description": "Who this call is for — recorded on the PromptLog "
+        "row so per-user cost is answerable. Opaque to this package: any "
+        "id shape the host uses. Optional; omitting it leaves the row "
+        "unattributed, never rejected.",
+    },
+    "workspace_id": {
+        "type": "string",
+        "description": "Which tenant this call is for — recorded on the "
+        "PromptLog row so per-workspace cost is answerable without "
+        "summing over its members. Optional, opaque, recorded only.",
+    },
+}
+
+
+def _identity_kwargs(payload: dict) -> dict:
+    """The optional attribution pair, as service kwargs.
+
+    ``payload.get`` rather than a required read, in one place, so that
+    "absent stays valid" is a property of the code and not of eight
+    call sites remembering to spell it the same way.
+    """
+    return {
+        "user_id": payload.get("user_id"),
+        "workspace_id": payload.get("workspace_id"),
+    }
+
+
 IMAGE_ITEM_SCHEMA = {
     "type": "object",
     "properties": {
@@ -85,6 +130,7 @@ COMPLETE_SCHEMA = {
             "answering the prose way. Pass the schema as pydantic emits it: "
             "the transport applies the strict-subset transform itself.",
         },
+        **IDENTITY_PROPERTIES,
     },
     "required": ["prompt", "model"],
     "additionalProperties": False,
@@ -103,6 +149,7 @@ TRANSLATE_SCHEMA = {
             "additionalProperties": {"type": "string"},
             "description": "Mapping of keys to source-language strings.",
         },
+        **IDENTITY_PROPERTIES,
     },
     "required": ["from_lang", "to", "entries"],
     "additionalProperties": False,
@@ -115,7 +162,8 @@ def llm_complete(payload: dict) -> dict:
 
     Payload: ``{"prompt": str, "model": "small"|"medium"|"large",
     "system_prompt"?: str, "provider"?: str, "images"?: [{"url"} |
-    {"data_b64", "mime"?}], "role"?: str, "max_tokens"?: int}``. ``role``
+    {"data_b64", "mime"?}], "role"?: str, "max_tokens"?: int,
+    "user_id"?: str, "workspace_id"?: str}``. ``role``
     is an opaque caller tag (multi-role pipelines address
     providers/observability by it) and is ignored here; ``max_tokens`` is
     a per-call output-token cap overriding the configured ``MAX_TOKENS``.
@@ -140,6 +188,7 @@ def llm_complete(payload: dict) -> dict:
         images=images or None,
         max_tokens=payload.get("max_tokens"),
         schema=payload.get("schema"),
+        **_identity_kwargs(payload),
     )
 
 
@@ -147,7 +196,8 @@ def llm_complete(payload: dict) -> dict:
 def llm_translate(payload: dict) -> dict:
     """Key-value translation — same result dict as ``POST api/v1/llm/translate``.
 
-    Payload: ``{"from_lang": str, "to": str, "entries": {key: text}}``.
+    Payload: ``{"from_lang": str, "to": str, "entries": {key: text},
+    "user_id"?: str, "workspace_id"?: str}``.
     Returns ``{"status": "ok", "result": {key: translated}}`` or
     ``{"status": "failure", "reason": str}``.
     """
@@ -157,6 +207,7 @@ def llm_translate(payload: dict) -> dict:
         payload["from_lang"],
         payload["to"],
         payload["entries"],
+        **_identity_kwargs(payload),
     )
 
 
@@ -200,6 +251,7 @@ TRANSCRIBE_SCHEMA = {
             "specifics without a core release. Unknown keys go to the "
             "provider as-is.",
         },
+        **IDENTITY_PROPERTIES,
     },
     "required": ["audio_url"],
     "additionalProperties": False,
@@ -226,6 +278,7 @@ SUMMARIZE_SCHEMA = {
             "type": "string",
             "description": "LLM provider name from STAPEL_AGENT['PROVIDERS'].",
         },
+        **IDENTITY_PROPERTIES,
     },
     "oneOf": [{"required": ["text"]}, {"required": ["transcript"]}],
     "additionalProperties": False,
@@ -238,7 +291,8 @@ def llm_transcribe(payload: dict) -> dict:
 
     Payload: ``{"audio_url": str, "language"?, "diarization"?,
     "provider"?, "timeout_seconds"?, "keyterms"?: [str],
-    "provider_options"?: {...}}``. ``keyterms`` is the generic
+    "provider_options"?: {...}, "user_id"?: str,
+    "workspace_id"?: str}``. ``keyterms`` is the generic
     vocabulary-biasing seam (plain terms; providers without support
     report ``biasing.applied: false`` instead of failing);
     ``provider_options`` passes provider-specific params through as-is,
@@ -259,6 +313,7 @@ def llm_transcribe(payload: dict) -> dict:
         timeout_seconds=payload.get("timeout_seconds"),
         keyterms=payload.get("keyterms"),
         provider_options=payload.get("provider_options"),
+        **_identity_kwargs(payload),
     )
 
 
@@ -295,6 +350,7 @@ DIARIZE_SCHEMA = {
             "specifics without a core release. Unknown keys go to the "
             "provider as-is.",
         },
+        **IDENTITY_PROPERTIES,
     },
     "required": ["audio_url"],
     "additionalProperties": False,
@@ -306,7 +362,8 @@ def llm_diarize(payload: dict) -> dict:
     """Speaker diarization — same result dict as ``POST api/v1/llm/diarize``.
 
     Payload: ``{"audio_url": str, "num_speakers"?: int, "provider"?,
-    "timeout_seconds"?, "provider_options"?: {...}}``. Returns
+    "timeout_seconds"?, "provider_options"?: {...}, "user_id"?: str,
+    "workspace_id"?: str}``. Returns
     ``{"status": "ok", "diarization": {"provider", "duration_seconds",
     "turns": [{"speaker", "start", "end", "confidence"}],
     "speakers_detected", "raw"}, "provider_used": str}`` or ``{"status":
@@ -322,6 +379,7 @@ def llm_diarize(payload: dict) -> dict:
         provider=payload.get("provider"),
         timeout_seconds=payload.get("timeout_seconds"),
         provider_options=payload.get("provider_options"),
+        **_identity_kwargs(payload),
     )
 
 
@@ -366,6 +424,7 @@ EMBED_SCHEMA = {
             "specifics without a core release. Unknown keys go to the "
             "provider as-is.",
         },
+        **IDENTITY_PROPERTIES,
     },
     "required": ["texts"],
     "additionalProperties": False,
@@ -377,7 +436,8 @@ def llm_embed(payload: dict) -> dict:
     """Text embeddings — same result dict as ``POST api/v1/llm/embed``.
 
     Payload: ``{"texts": [str, ...], "model"?, "provider"?,
-    "timeout_seconds"?, "provider_options"?: {...}}``. ``model`` is a
+    "timeout_seconds"?, "provider_options"?: {...}, "user_id"?: str,
+    "workspace_id"?: str}``. ``model`` is a
     concrete model name (unlike ``llm.complete``'s size alias) that
     overrides the registration pin / configured default — vector-index
     callers pin the model their stored space was built with. Returns
@@ -396,6 +456,7 @@ def llm_embed(payload: dict) -> dict:
         provider=payload.get("provider"),
         timeout_seconds=payload.get("timeout_seconds"),
         provider_options=payload.get("provider_options"),
+        **_identity_kwargs(payload),
     )
 
 
@@ -439,6 +500,7 @@ RERANK_SCHEMA = {
             "specifics without a core release. Unknown keys go to the "
             "provider as-is.",
         },
+        **IDENTITY_PROPERTIES,
     },
     "required": ["query", "documents"],
     "additionalProperties": False,
@@ -450,7 +512,8 @@ def llm_rerank(payload: dict) -> dict:
     """Rerank — same result dict as ``POST api/v1/llm/rerank``.
 
     Payload: ``{"query": str, "documents": [str, ...], "top_n"?,
-    "provider"?, "timeout_seconds"?, "provider_options"?: {...}}``.
+    "provider"?, "timeout_seconds"?, "provider_options"?: {...},
+    "user_id"?: str, "workspace_id"?: str}``.
     Returns ``{"status": "ok", "rerank": {"provider", "model",
     "results": [{"index", "score"}, ...], "usage", "raw"},
     "provider_used": str}`` (results sorted by score descending, index =
@@ -467,6 +530,7 @@ def llm_rerank(payload: dict) -> dict:
         provider=payload.get("provider"),
         timeout_seconds=payload.get("timeout_seconds"),
         provider_options=payload.get("provider_options"),
+        **_identity_kwargs(payload),
     )
 
 
@@ -502,7 +566,8 @@ def llm_summarize(payload: dict) -> dict:
     """Summarization — same result dict as ``POST api/v1/llm/summarize``.
 
     Payload carries exactly one of ``text`` / ``transcript`` (a
-    NormalizedTranscript dict). Returns ``{"status": "ok", "summary":
+    NormalizedTranscript dict), plus the optional ``user_id`` /
+    ``workspace_id`` attribution pair. Returns ``{"status": "ok", "summary":
     str, "usage": {...}}`` or ``{"status": "failure", "reason": str}``.
     """
     from . import services
@@ -512,6 +577,7 @@ def llm_summarize(payload: dict) -> dict:
         language=payload.get("language"),
         model_size=payload.get("model") or "medium",
         provider=payload.get("provider"),
+        **_identity_kwargs(payload),
     )
 
 
@@ -543,6 +609,7 @@ GENERATE_IMAGE_SCHEMA = {
             "minimum": 1,
             "description": "Hard cap on the generation request.",
         },
+        **IDENTITY_PROPERTIES,
     },
     "required": ["prompt"],
     "additionalProperties": False,
@@ -555,7 +622,8 @@ def llm_generate_image(payload: dict) -> dict:
     ``POST api/v1/llm/generate-image``.
 
     Payload: ``{"prompt": str, "size"?: str, "n"?: int, "provider"?:
-    str, "timeout_seconds"?: int}``. Returns ``{"status": "ok", "images":
+    str, "timeout_seconds"?: int, "user_id"?: str,
+    "workspace_id"?: str}``. Returns ``{"status": "ok", "images":
     [{"url"? | "data_b64"?, "mime"}], "provider_used": str}`` or
     ``{"status": "failure", "reason": str}``. Storing results into
     CDN/asset libraries is the caller's job — this function returns raw
@@ -569,6 +637,7 @@ def llm_generate_image(payload: dict) -> dict:
         n=int(payload.get("n") or 1),
         provider=payload.get("provider"),
         timeout_seconds=payload.get("timeout_seconds"),
+        **_identity_kwargs(payload),
     )
 
 

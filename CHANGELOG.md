@@ -5,6 +5,108 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-08-21
+
+### Added — the prompt ledger becomes a meter
+
+A cost study of a product built on this package found that per-user cost
+attribution was **structurally impossible**, and not for want of data. The
+token columns had been complete since 7.16. Three separate holes kept the
+table from answering the one question a credits system asks — "what did this
+customer cost us this month" — and each of them was invisible on its own.
+
+**1. Identity could not cross the bus.** `PromptLog.user_id` existed and the
+HTTP views filled it. But product traffic reaches this package only over
+comm, the `llm.*` schemas are `additionalProperties: false`, and none of them
+carried an id. Every row written by a real pipeline stage read
+`user_id = NULL`. A meter with no subject.
+
+Every `llm.*` function that writes a row — `complete`, `translate`,
+`transcribe`, `diarize`, `embed`, `rerank`, `summarize`, `generate_image` —
+now accepts `user_id` and `workspace_id`. `llm.stt_catalog` does not: it
+writes no row, so it has nobody to attribute. `workspace_id` is a new column
+alongside `user_id`, because a team wallet and a person's usage are different
+questions, and erasure drops the person while accounting keeps the tenant.
+
+Both fields are **optional**, which is a compatibility promise rather than
+indecision: a payload that omits them stays valid and no existing host
+breaks. Both are **recorded only** — nothing here authorises, entitles,
+debits or rate-limits on them. Metering is not billing, and a library that
+quietly started enforcing on an id handed to it for accounting would be the
+worse surprise.
+
+**2. The cost was computed and thrown away.** `pricing.cost_fields()` already
+returned `{cost_usd, cost_basis}` on every completion and attached it to the
+response. Nothing stored it. New columns `cost_usd` (Decimal — these get
+SUMmed over a billing period) and `cost_basis` now persist it, from the same
+single computation that fills the caller's `usage`, so a dashboard and an
+invoice cannot disagree about one call.
+
+`cost_basis` is the part that matters: `provider_ticks` when the provider
+reported its own charge, `pricing_estimate` from the rate card, `unpriced`
+when neither. Without it, 0.0 means "free" and "we have no idea" at once, and
+only one of those is good news. The stored figure is **as computed at call
+time** and never revisited — re-pricing a year-old row against today's card
+would quietly restate history. That was already `pricing.py`'s stated
+discipline; now it is the schema's too.
+
+**3. An STT row could not be reconstructed.** A transcribe row held
+`prompt = "url:<host>"` and a `duration_ms` measuring how long *we* waited.
+STT bills per hour of *audio*. In an audio product that is the largest single
+spend path — 82 % of the cost of processing one hour, in the study that
+prompted this — and it was unauditable.
+
+A successful transcription now stores `audio_duration_ms`, the provider's own
+reported audio length, and prices it: through the run's model config when the
+catalog has one (so Deepgram's multilingual variant and hybrid diarization
+stages are included, because the invoice will include them), through the
+provider's bare rate card otherwise — which is how a host-registered adapter
+gets priced at all. `metadata.priced_by` names the card that produced the
+number, so it stays falsifiable a quarter later. Diarization records its
+billable audio in the same column; pricing that surface is a separate step.
+
+Every road to "we do not know" now logs. The silent zero was the defect.
+
+### Added — rate cards that were missing
+
+`pricing.py` gained `claude-opus-5`, `claude-fable-5`, `claude-mythos-5`,
+`claude-opus-4-7`, `claude-opus-4-6` and `claude-opus-4-5`, verified against
+the published list on 21 Aug 2026. Each was reachable from a running
+deployment while unpriced, and an unpriced model does not stay isolated — it
+sums into a total someone acts on. At Fable's $10/$50 one silent month is
+real money.
+
+**Claude Sonnet 5 keeps $2/$10, and now says why.** The entry carried a
+comment describing that price as introductory "through 31 Aug 2026", with
+$3/$15 scheduled for 1 September. That increase was **cancelled**: the
+current price list states $2/$10 "is now the standard price" and that the
+scheduled increase "will not occur". So this release adds no effective-date
+machinery — a dated entry that flipped to $3/$15 next week would make every
+row computed after August *wrong*, which is the opposite of what an
+effective-date pair was wanted for. The number was already right; the comment
+was not. A test now pins both the price and the absence of a clock in the
+module.
+
+`stt/pricing/xiaomi_mimo.py` is a new rate card: **$0.074 per hour of audio**
+for `mimo-v2.5-asr` (overseas list; ¥0.5/h domestic, carried as a constant
+and deliberately never converted — which list an account bills against is a
+property of the account, and a pinned FX rate would produce a plausible
+number for the wrong customers). This closes a live, key-configured, paid
+`zh` route that was priced at nothing. The card is **not** in
+`BUILTIN_STT_PRICING_MODULES`, because that map's keys are providers this
+package registers and the MiMo adapter is host-side; a host wires the two
+together with `register_stt_pricing_module("xiaomi_mimo", ...)`.
+
+### Migration
+
+`0006_promptlog_metering` — four nullable columns (`audio_duration_ms`,
+`cost_usd`, `cost_basis`, `workspace_id`) and one index on
+`(workspace_id, -created_at)`, the meter's own query. Purely additive; no
+backfill, because there is nothing honest to backfill with. Rows written
+before this release have no cost and never will: the price in force when they
+were made is not recoverable from the row, and inventing one would be the
+same fabrication the `unpriced` basis exists to prevent.
+
 ## [0.11.0] — 2026-08-21
 
 ### Added — an unfillable audio allowlist is loud at boot (`stapel_agent.W015`)
