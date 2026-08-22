@@ -69,7 +69,7 @@ def check_providers(app_configs, **kwargs):
     # entry-check id (also W009, introduced two days earlier: 0.4.0 vs 0.6.2).
     # SILENCED_SYSTEM_CHECKS on either check silenced both. Renumbered to
     # W016 (the next free id) in 0.13.1; embeddings kept W009 as the older,
-    # already-referenced id (darom fleet deploy, 2026-08-22).
+    # already-referenced id (a client fleet deploy, 2026-08-22).
     default_target = effective.get(default)
     if default_target is not None:
         try:

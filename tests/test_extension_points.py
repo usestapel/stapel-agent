@@ -228,7 +228,7 @@ class TestCheckIdsAreUnique:
     "default provider unusable" warning and `check_embedding_providers`'s
     entry-check both used ``stapel_agent.W009`` (introduced two days apart,
     0.6.2 and 0.4.0) — `SILENCED_SYSTEM_CHECKS` on either silenced both,
-    invisibly, per the darom fleet's 2026-08-22 deploy.
+    invisibly, per a client fleet's 2026-08-22 deploy.
 
     Static, not a settings-driven run of every check: a check id is a
     string constant passed as ``id=``/``entry_check_id=``/

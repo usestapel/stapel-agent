@@ -21,7 +21,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   A setting, not model-name sniffing: the dialect is a deployment fact.
   Any other value is a `W016`.
 
-Filed from the darom fleet: the owner's provider is OpenAI behind a
+Filed from a client fleet: the owner's provider is OpenAI behind a
 mandatory SOCKS5 proxy, and `gpt-5.2` needs the new parameter spelling.
 
 ## [0.13.1] — 2026-08-22
@@ -34,7 +34,7 @@ mandatory SOCKS5 proxy, and `gpt-5.2` needs the new parameter spelling.
   2026-07-26) and `check_embedding_providers`'s "an `EMBEDDING_PROVIDERS`
   entry cannot be imported / is not an `EmbeddingProvider` subclass"
   warning (added in 0.4.0, 2026-07-24, so the older and unchanged holder of
-  the id). Found by the darom fleet deploy:
+  the id). Found by a client fleet deploy:
   `SILENCED_SYSTEM_CHECKS = ["stapel_agent.W009"]`, meant to quiet one of
   the two, silently silenced BOTH — including the unusable-default-provider
   warning the deploy still needed. The LLM-provider check now reports as
