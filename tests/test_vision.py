@@ -92,7 +92,7 @@ class TestOpenAICompatMapping:
                     "usage": {"prompt_tokens": 1, "completion_tokens": 1},
                 }
 
-        def fake_post(url, json=None, headers=None, timeout=None):
+        def fake_post(url, json=None, headers=None, timeout=None, proxies=None):
             captured.update(url=url, json=json)
             return FakeResponse()
 

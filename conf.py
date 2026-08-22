@@ -122,6 +122,14 @@ agent_settings = AppSettings(
         # e.g. {"small": "gpt-4o-mini", "medium": "gpt-4o"}. Missing sizes
         # fall back to MODELS[size].
         "OPENAI_COMPAT_MODELS": {},
+        # Outbound proxy for the openai-compat provider ONLY (not a
+        # process-wide HTTPS_PROXY, which would drag every other fetch
+        # through it): "socks5h://host:port" or "http://host:port".
+        # SOCKS needs the `socks` extra (PySocks); W016 says so at boot.
+        "OPENAI_COMPAT_PROXY": "",
+        # "max_tokens" (most compatible hosts) or "max_completion_tokens"
+        # (OpenAI's reasoning-era models reject the former with HTTP 400).
+        "OPENAI_COMPAT_MAX_TOKENS_PARAM": "max_tokens",
         # Claude Code CLI provider (opt-in only, never the default).
         "CLI_BINARY": "claude",
         "CLI_TIMEOUT": 120,

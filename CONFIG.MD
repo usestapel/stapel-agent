@@ -27,6 +27,8 @@ consuming project.
 | OPENAI_COMPAT_BASE_URL | env | any OpenAI-compatible /chat/completions endpoint. | no | (empty) |
 | OPENAI_COMPAT_API_KEY | vault | key for the OpenAI-compatible endpoint. | no | (empty) |
 | OPENAI_COMPAT_MODELS | env | size→model-name map for the openai-compat provider. | no | {} |
+| OPENAI_COMPAT_PROXY | env | outbound proxy for the openai-compat provider only (`socks5h://…` needs `stapel-agent[socks]`, `http://…`). | no | (empty) |
+| OPENAI_COMPAT_MAX_TOKENS_PARAM | env | `max_tokens` or `max_completion_tokens` (OpenAI reasoning-era models reject `max_tokens`). | no | max_tokens |
 | CLI_BINARY | env | Claude Code CLI binary (opt-in provider). | no | claude |
 | CLI_TIMEOUT | env | CLI provider timeout, seconds. | no | 120 |
 | MAX_TOKENS | env | max output tokens per completion. | no | 4096 |

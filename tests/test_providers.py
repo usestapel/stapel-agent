@@ -57,7 +57,7 @@ class TestOpenAICompat:
             def json(self):
                 return payload
 
-        def fake_post(url, json=None, headers=None, timeout=None):
+        def fake_post(url, json=None, headers=None, timeout=None, proxies=None):
             if exc is not None:
                 raise exc
             captured.update(url=url, json=json, headers=headers, timeout=timeout)
@@ -332,3 +332,82 @@ class TestAnthropic:
         self._fake_sdk(monkeypatch, create=boom)
         with pytest.raises(ProviderError, match="rate limited"):
             AnthropicProvider().complete(prompt="p", model="m")
+
+
+class TestOpenAICompatProxyAndTokenParam:
+    """0.13.2: OPENAI_COMPAT_PROXY / OPENAI_COMPAT_MAX_TOKENS_PARAM."""
+
+    def _capture_post(self, monkeypatch):
+        captured = {}
+
+        class FakeResponse:
+            status_code = 200
+            text = "{}"
+
+            def json(self):
+                return {"choices": [{"message": {"content": "ok"}}], "usage": {}}
+
+        def fake_post(url, json=None, headers=None, timeout=None, proxies=None):
+            captured.update(url=url, json=json, proxies=proxies)
+            return FakeResponse()
+
+        monkeypatch.setattr(
+            "stapel_agent.providers.openai_compat.requests.post", fake_post
+        )
+        return captured
+
+    def test_default_is_max_tokens_and_no_proxy(self, settings, monkeypatch):
+        settings.STAPEL_AGENT = {"OPENAI_COMPAT_BASE_URL": "https://x.test/v1"}
+        captured = self._capture_post(monkeypatch)
+        OpenAICompatProvider().complete(prompt="p", model="m", max_tokens=7)
+        assert captured["json"]["max_tokens"] == 7
+        assert "max_completion_tokens" not in captured["json"]
+        assert captured["proxies"] is None
+
+    def test_proxy_and_max_completion_tokens_go_out(self, settings, monkeypatch):
+        settings.STAPEL_AGENT = {
+            "OPENAI_COMPAT_BASE_URL": "https://x.test/v1",
+            "OPENAI_COMPAT_PROXY": "socks5h://proxy.test:2000",
+            "OPENAI_COMPAT_MAX_TOKENS_PARAM": "max_completion_tokens",
+        }
+        captured = self._capture_post(monkeypatch)
+        OpenAICompatProvider().complete(prompt="p", model="m", max_tokens=7)
+        assert captured["json"]["max_completion_tokens"] == 7
+        assert "max_tokens" not in captured["json"]
+        assert captured["proxies"] == {
+            "http": "socks5h://proxy.test:2000",
+            "https": "socks5h://proxy.test:2000",
+        }
+
+    def test_bad_token_param_is_a_configuration_error(self, settings):
+        settings.STAPEL_AGENT = {
+            "OPENAI_COMPAT_BASE_URL": "https://x.test/v1",
+            "OPENAI_COMPAT_MAX_TOKENS_PARAM": "max_output_tokens",
+        }
+        err = OpenAICompatProvider.configuration_error()
+        assert err and "OPENAI_COMPAT_MAX_TOKENS_PARAM" in err
+
+    def test_socks_without_pysocks_is_a_configuration_error(self, settings, monkeypatch):
+        import builtins
+
+        real_import = builtins.__import__
+
+        def no_socks(name, *a, **kw):
+            if name == "socks":
+                raise ImportError("no PySocks")
+            return real_import(name, *a, **kw)
+
+        monkeypatch.setattr(builtins, "__import__", no_socks)
+        settings.STAPEL_AGENT = {
+            "OPENAI_COMPAT_BASE_URL": "https://x.test/v1",
+            "OPENAI_COMPAT_PROXY": "socks5h://proxy.test:2000",
+        }
+        err = OpenAICompatProvider.configuration_error()
+        assert err and "stapel-agent[socks]" in err
+
+    def test_http_proxy_needs_no_extra(self, settings):
+        settings.STAPEL_AGENT = {
+            "OPENAI_COMPAT_BASE_URL": "https://x.test/v1",
+            "OPENAI_COMPAT_PROXY": "http://proxy.test:3128",
+        }
+        assert OpenAICompatProvider.configuration_error() is None

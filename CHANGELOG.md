@@ -5,6 +5,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.13.2] — 2026-08-22
+
+### Added
+
+- **`OPENAI_COMPAT_PROXY`** — an outbound proxy for the openai-compat
+  provider alone (`socks5h://host:port` or `http://host:port`), passed as
+  `proxies=` on that one request rather than as a process-wide
+  `HTTPS_PROXY` that would also route every other fetch the service makes.
+  SOCKS needs PySocks: new extra `stapel-agent[socks]`; a SOCKS URL without
+  it is reported by `W016` at boot instead of failing on the first call.
+- **`OPENAI_COMPAT_MAX_TOKENS_PARAM`** — `max_tokens` (default, what most
+  compatible hosts accept) or `max_completion_tokens` (OpenAI's
+  reasoning-era models — gpt-5.x — reject `max_tokens` with HTTP 400).
+  A setting, not model-name sniffing: the dialect is a deployment fact.
+  Any other value is a `W016`.
+
+Filed from the darom fleet: the owner's provider is OpenAI behind a
+mandatory SOCKS5 proxy, and `gpt-5.2` needs the new parameter spelling.
+
 ## [0.13.1] — 2026-08-22
 
 ### Fixed

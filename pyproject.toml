@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-agent"
-version = "0.13.1"
+version = "0.13.2"
 description = "LLM facade Django app for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -67,7 +67,9 @@ Issues = "https://github.com/usestapel/stapel-agent/issues"
 
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.34"]
-all = ["stapel-agent[anthropic]"]
+# SOCKS for OPENAI_COMPAT_PROXY — requests learns socks5h:// only from PySocks.
+socks = ["PySocks>=1.7"]
+all = ["stapel-agent[anthropic,socks]"]
 
 [tool.setuptools]
 package-dir = {"stapel_agent" = "."}

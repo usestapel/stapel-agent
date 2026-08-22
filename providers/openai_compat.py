@@ -13,6 +13,15 @@ from ..conf import agent_settings
 from .base import LlmProvider, ProviderError, ProviderResult, ProviderTimeout
 
 
+# The token ceiling is spelled two ways across OpenAI-dialect endpoints:
+# `max_tokens` (the original, still what most compatible hosts accept) and
+# `max_completion_tokens` (OpenAI's own reasoning-era models reject the
+# former with HTTP 400). A setting, not sniffing: the endpoint's dialect is
+# a deployment fact, and guessing it from the model name is how a renamed
+# model breaks production.
+_MAX_TOKENS_PARAMS = frozenset({"max_tokens", "max_completion_tokens"})
+
+
 class OpenAICompatProvider(LlmProvider):
     name = "openai-compat"
     supports_images = True
@@ -30,7 +39,29 @@ class OpenAICompatProvider(LlmProvider):
                 "STAPEL_AGENT['OPENAI_COMPAT_BASE_URL'] to a "
                 "/chat/completions-compatible endpoint"
             )
+        proxy = (agent_settings.OPENAI_COMPAT_PROXY or "").strip()
+        if proxy.startswith("socks"):
+            # requests only learns SOCKS from PySocks; without it every call
+            # dies with InvalidSchema at request time. Say so at boot instead.
+            try:
+                import socks  # noqa: F401  (PySocks)
+            except ImportError:
+                return (
+                    "OPENAI_COMPAT_PROXY is a SOCKS URL but PySocks is not "
+                    "installed — install stapel-agent[socks]"
+                )
+        param = agent_settings.OPENAI_COMPAT_MAX_TOKENS_PARAM
+        if param not in _MAX_TOKENS_PARAMS:
+            return (
+                f"OPENAI_COMPAT_MAX_TOKENS_PARAM={param!r} is not one of "
+                f"{sorted(_MAX_TOKENS_PARAMS)}"
+            )
         return None
+
+    @staticmethod
+    def _proxies() -> dict | None:
+        proxy = (agent_settings.OPENAI_COMPAT_PROXY or "").strip()
+        return {"http": proxy, "https": proxy} if proxy else None
 
     def resolve_model(self, model_size: str, default: str) -> str:
         models = agent_settings.OPENAI_COMPAT_MODELS or {}
@@ -72,7 +103,9 @@ class OpenAICompatProvider(LlmProvider):
         payload = {
             "model": model,
             "messages": messages,
-            "max_tokens": int(max_tokens or agent_settings.MAX_TOKENS),
+            agent_settings.OPENAI_COMPAT_MAX_TOKENS_PARAM: int(
+                max_tokens or agent_settings.MAX_TOKENS
+            ),
         }
         if schema:
             # The OpenAI-flavoured spelling of constrained decoding.
@@ -104,6 +137,7 @@ class OpenAICompatProvider(LlmProvider):
                 json=payload,
                 headers=headers,
                 timeout=int(agent_settings.CLI_TIMEOUT),
+                proxies=self._proxies(),
             )
         except requests.Timeout as exc:
             raise ProviderTimeout("Execution timed out") from exc
