@@ -270,9 +270,15 @@ class TestImportLockDiscipline:
         root = pathlib.Path(stapel_agent.__file__).parent
         offenders = []
         for init in sorted(root.rglob("__init__.py")):
+            parts = init.relative_to(root).parts
             # A source checkout keeps stale copies under build/ and dist/ —
-            # they are not the shipped package.
-            if {"build", "dist"} & set(init.relative_to(root).parts):
+            # they are not the shipped package. Nor is anything under a dot
+            # directory: a checkout with its own `.venv/` made this gate
+            # report every third-party package on disk, which is how a gate
+            # gets switched off (tests/test_packaging.py skips them too).
+            if {"build", "dist"} & set(parts):
+                continue
+            if any(part.startswith(".") for part in parts):
                 continue
             pkg = init.parent
             submodules = {p.stem for p in pkg.glob("*.py")} | {

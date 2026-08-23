@@ -242,12 +242,17 @@ class TestRetentionIsScheduled:
         }
         assert self._ids() == []
 
-    def test_a_beat_schedule_that_runs_something_else_still_warns(self, settings):
+    def test_a_beat_schedule_that_runs_something_else_is_W017s_finding(
+        self, settings
+    ):
+        """Same gap, more specific warning: a process that runs beat gets
+        the entry it is missing named (W017), not a second copy of this
+        one. See tests/test_erasure.py::TestBeatScheduleIsRegistered."""
         settings.STAPEL_AGENT = {}
         settings.CELERY_BEAT_SCHEDULE = {
             "other": {"task": "myapp.tasks.send_digest", "schedule": 60}
         }
-        assert self._ids() == ["stapel_agent.W014"]
+        assert self._ids() == []
 
     def test_retention_switched_off_is_a_decision_not_a_gap(self, settings):
         settings.STAPEL_AGENT = {"PROMPT_LOG_RETENTION_DAYS": None}
@@ -275,23 +280,24 @@ class TestGDPRProvider:
         exported = AgentGDPRProvider().export(7)
         assert [p["prompt"] for p in exported["prompts"]] == ["mine"]
 
-    def test_anonymize_matches_delete(self):
-        """Nothing personal survives a scrub, so there is no separate
-        retained-content case: the retained part is numbers."""
+    def test_anonymize_drops_the_person_and_keeps_the_numbers(self):
+        """The ledger argument lives here, and only here (0.14.0): the
+        text goes, the subject link goes, the counters stay."""
         row = _row(user_id="7")
         AgentGDPRProvider().anonymize(7)
         row.refresh_from_db()
         assert (row.prompt, row.response, row.user_id) == ("", None, None)
         assert row.input_tokens == 7
 
-    def test_delete_scrubs_content_and_unlinks_the_subject(self):
-        row = _row(user_id="7")
+    def test_delete_removes_the_rows(self):
+        """0.14.0: erasure deletes. Through 0.13.x this scrubbed and kept
+        the row — which meant an account erasure meant one thing over comm
+        and another in a monolith. It is one operation now
+        (``gdpr.erase_subject``), and a host that wants the numbers
+        without the person calls ``anonymize``."""
+        _row(user_id="7")
         other = _row(user_id="8")
         AgentGDPRProvider().delete(7)
-        row.refresh_from_db()
         other.refresh_from_db()
-        assert row.prompt == ""
-        assert row.response is None
-        assert row.user_id is None
-        assert row.input_tokens == 7
+        assert list(PromptLog.objects.values_list("user_id", flat=True)) == ["8"]
         assert other.prompt == "secret prompt"  # untouched

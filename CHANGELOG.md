@@ -5,6 +5,100 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-08-23
+
+The prompt ledger becomes an erasure owner that can be *reached*. Pre-1.0,
+so a minor is where a changed default and a new public surface live: this
+release changes `PROMPT_LOG_RETENTION_DAYS`, changes what `delete()` means,
+and adds three comm handlers, a task module and a system check.
+
+### Breaking
+
+- **`PROMPT_LOG_RETENTION_DAYS` default 90 → 30.** The deletion-lifecycle
+  spec puts every subject's purge SLA at 30 days; a library default that
+  keeps customer content three times longer than the platform's own promise
+  is a default that quietly breaks it. A deployment that wants the old
+  window states `STAPEL_AGENT["PROMPT_LOG_RETENTION_DAYS"] = 90` — and now
+  owns that number where a reviewer can see it. Text older than 30 days is
+  scrubbed on the first purge run after the bump.
+- **`AgentGDPRProvider.delete()` deletes the rows** instead of scrubbing the
+  text and unlinking the subject. Erasure now means one thing on both paths
+  (the comm subscriber below and the in-process provider run the same
+  `gdpr.erase_subject`), where before an account erasure removed rows over
+  comm and kept them in a monolith. **The metering columns of an erased
+  subject's calls go with the row** — that cost leaves the ledger, and the
+  trade is deliberate: an erasure request is a request to be gone.
+  `AgentGDPRProvider.anonymize()` is unchanged and still does exactly what
+  `delete()` used to do (scrub the text, drop `user_id`, keep the tenant and
+  the counters) — that is the call for a host that wants the numbers without
+  the person, and it is no longer a synonym for `delete`.
+
+### Added — the erasure path is consumed, not merely declared
+
+`actions.py` (this package shipped none) subscribes:
+
+- **`gdpr.erasure.requested`** — deletes the `PromptLog` rows of the named
+  subject and replies `gdpr.section.erased {owner, subject_type, subject_key,
+  correlation_id, receipt_id, counts: {prompt_logs}}` in the same transaction
+  as the delete, so a rollback takes the receipt with it. Idempotent: a
+  redelivery removes nothing, receipts `0`, and repeats the same derived
+  `receipt_id`.
+- **`gdpr.owner.probe`** → **`gdpr.owner.alive {owner, subject_types}`**, from
+  the same module as the erasure handler. That co-location is the whole
+  evidence: an answer proves the erasure subscriber is consumed, not that a
+  container is running (`gdpr.W006` and `GET /owners/health` read it).
+- **`user.deleted`** — the deprecated account signal stapel-gdpr keeps
+  emitting for one minor, routed through the same erase call. When it goes,
+  no erasure logic goes with it.
+
+**Subject types claimed: `account`, `workspace`** — declare
+`STAPEL_GDPR["DATA_OWNERS"] = {"agent": ["account", "workspace"], ...}`.
+
+**`meeting` is deliberately not claimed**, though the spec's table lists it
+for this library. That row assumes the 0.12.0 metering columns carry a
+meeting/recording correlation; they carry `user_id`, `workspace_id`,
+`cost_usd`, `cost_basis` and `audio_duration_ms`, and no `llm.*` payload
+accepts an entity id at all (the schemas are `additionalProperties: false`),
+while `metadata` is written by this package, not the caller. There is no key
+a meeting erasure could match on here, and an owner that claims a subject
+type it cannot erase turns the health table into a false green. A real
+meeting key means a nullable column plus a new optional field on every
+`llm.*` schema — its own release, and it needs the host side to pass one.
+
+Emits and consumes are declared in `schemas/emits/` and `schemas/consumes/`
+(the fleet's comm-contract canon); MODULE.md gains an "Erasure" section.
+
+### Added — the retention job in schedulable form
+
+- **`tasks.py`**: `purge_prompt_logs` (a plain callable, additionally a
+  celery `shared_task` under the stable name `stapel_agent.tasks.
+  purge_prompt_logs` when celery is installed — it is NOT a dependency) and
+  **`get_agent_beat_schedule()`**, the entry a host splices into
+  `CELERY_BEAT_SCHEDULE` (canon: `stapel_gdpr.tasks.get_gdpr_beat_schedule`).
+  The retention window and the management command have existed since the
+  AGENT-02 audit; nothing shipped that a scheduler could reference.
+- **`stapel_agent.W017`** — this process runs beat and has no entry for the
+  purge. The ironmemo finding was not a wrong cadence but no entry at all,
+  and a beat schedule that runs *something* looks exactly like one that runs
+  *this*. `W014` narrows to its complement (no scheduler known at all), so
+  the two never fire together: one gap, one warning, and W017's hint names
+  `get_agent_beat_schedule()` instead of "wire something somewhere". Both
+  are still silenced by `PROMPT_LOG_RETENTION_SCHEDULED = True` (an external
+  cron) or `PROMPT_LOG_RETENTION_DAYS = None` (a stated decision).
+
+### Fixed
+
+- `tests/test_public_api.py`'s import-lock gate skipped `build/` and `dist/`
+  but not dot directories, so a checkout with its own `.venv/` made it
+  report every third-party package on disk — a gate that cries wolf gets
+  switched off. It now skips them, as `tests/test_packaging.py` already did.
+
+### Docs
+
+- CONFIG.MD: the new `PROMPT_LOG_RETENTION_DAYS` default, plus a row for
+  `PROMPT_LOG_RETENTION_SCHEDULED`, which the code has read since 0.9 and
+  the registry never listed.
+
 ## [0.13.3] — 2026-08-22
 
 ### Added

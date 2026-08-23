@@ -21,6 +21,13 @@ class AgentConfig(AppConfig):
         if "agent" not in gdpr_registry.sections:
             gdpr_registry.register(AgentGDPRProvider())
 
+        # Erasure over comm (gdpr.erasure.requested / gdpr.owner.probe /
+        # the deprecated user.deleted). The in-process provider above is
+        # only reachable in a monolith; a service that consumes actions
+        # participates through this module — and answering the probe from
+        # the same module is what makes "alive" evidence.
+        from . import actions  # noqa: F401
+
         # Django system checks (provider registry / DEFAULT_PROVIDER
         # misconfiguration) — registered on import.
         from . import checks  # noqa: F401

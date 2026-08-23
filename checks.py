@@ -10,8 +10,12 @@ Registered from ``AgentConfig.ready()``. IDs:
   not an ``LlmProvider`` subclass.
 - ``stapel_agent.W016`` — the default LLM provider is registered but not
   usable (missing credential/binary/package).
-- ``stapel_agent.W014`` — ``PROMPT_LOG_RETENTION_DAYS`` is configured but
-  nothing is known to run the purge.
+- ``stapel_agent.W014`` — ``PROMPT_LOG_RETENTION_DAYS`` is configured and
+  *no scheduler at all* is known to this process.
+- ``stapel_agent.W017`` — this process HAS a beat schedule and this
+  package's retention task is not in it. The specific half of W014's
+  question, with the specific answer (``get_agent_beat_schedule()``);
+  the two never fire together.
 - ``stapel_agent.W015`` — the STT audio-download allowlist is empty and
   no wildcard is declared, so every URL AudioRef is refused.
 
@@ -370,20 +374,38 @@ def check_rerank_providers(app_configs, **kwargs):
 
 
 #: Substring that identifies the retention job in a beat schedule — the
-#: management command's name, which is also what a Celery task wrapping it
-#: is invariably called.
+#: management command's name, which is also the tail of the shipped task
+#: name (``stapel_agent.tasks.purge_prompt_logs``), so both spellings of
+#: "this entry runs the purge" are recognised by one test.
 PURGE_JOB_NAME = "purge_prompt_logs"
+
+
+def _beat_schedule():
+    """The host's ``CELERY_BEAT_SCHEDULE``, or ``{}`` when it has none."""
+    from django.conf import settings
+
+    return getattr(settings, "CELERY_BEAT_SCHEDULE", None) or {}
+
+
+def _beat_runs_the_purge(schedule) -> bool:
+    for entry in schedule.values():
+        if PURGE_JOB_NAME in str((entry or {}).get("task", "")):
+            return True
+        if PURGE_JOB_NAME in str((entry or {}).get("args", "")):
+            return True
+    return False
 
 
 @checks.register("stapel_agent")
 def check_prompt_log_retention_is_scheduled(app_configs, **kwargs):
     """W014: the retention window is set and nothing is known to enforce it.
 
-    ``PROMPT_LOG_RETENTION_DAYS`` defaults to 90, but the only executor
-    this package ships is the ``purge_prompt_logs`` management command.
-    Nothing in ``AgentConfig.ready()`` schedules it, so unless the host
-    wired a cron entry the prompts, system prompts and full responses in
-    ``PromptLog`` are kept forever while the configuration states 90 days
+    ``PROMPT_LOG_RETENTION_DAYS`` has a default (30 since 0.14.0), but the
+    executors this package ships — the ``purge_prompt_logs`` management
+    command and, since 0.14.0, ``stapel_agent.tasks.purge_prompt_logs`` —
+    are not scheduled by ``AgentConfig.ready()``. Unless the host wired
+    one of them the prompts, system prompts and full responses in
+    ``PromptLog`` are kept forever while the configuration states a window
     — a retention policy that exists only as a number (audit AGENT-02).
 
     A process cannot see the host's crontab, so the operator declares it:
@@ -393,24 +415,23 @@ def check_prompt_log_retention_is_scheduled(app_configs, **kwargs):
     but silence was the wrong default, since an unenforced retention
     policy looks exactly like an enforced one from the settings file.
 
+    When the process DOES run beat and simply left this package out, the
+    finding is W017's — same gap, but a specific hint instead of "wire
+    something somewhere", and one warning rather than two.
+
     ``PROMPT_LOG_RETENTION_DAYS = None`` is not reported here: keeping the
     text forever is then a stated decision, not an accident.
     """
-    from django.conf import settings
-
     from .conf import agent_settings, prompt_log_retention_scheduled
 
     if agent_settings.PROMPT_LOG_RETENTION_DAYS is None:
         return []
     if prompt_log_retention_scheduled():
         return []
-
-    schedule = getattr(settings, "CELERY_BEAT_SCHEDULE", None) or {}
-    for entry in schedule.values():
-        if PURGE_JOB_NAME in str((entry or {}).get("task", "")):
-            return []
-        if PURGE_JOB_NAME in str((entry or {}).get("args", "")):
-            return []
+    if _beat_schedule():
+        # This process runs beat: whether the entry is there or not, the
+        # finding belongs to W017, which can name the fix.
+        return []
 
     return [
         checks.Warning(
@@ -427,6 +448,60 @@ def check_prompt_log_retention_is_scheduled(app_configs, **kwargs):
                 "that this deployment keeps the text indefinitely."
             ),
             id="stapel_agent.W014",
+        )
+    ]
+
+
+@checks.register("stapel_agent")
+def check_agent_beat_schedule_is_registered(app_configs, **kwargs):
+    """W017: this process runs beat and this package is not in the schedule.
+
+    The ironmemo finding was not a wrong cadence, it was **no entry at
+    all**: a service with a working ``CELERY_BEAT_SCHEDULE`` for the other
+    libraries, and nothing running the agent retention purge — so the
+    prompts and full model responses accumulated behind a setting that
+    said otherwise. Nothing could see it, because a beat schedule that
+    runs *something* looks exactly like a beat schedule that runs *this*.
+
+    Fires only when a beat schedule exists (a process with none has no
+    entry to be missing, and W014 covers "no scheduler is known at all")
+    and only when a retention window is configured — the same two escapes
+    W014 honours: ``PROMPT_LOG_RETENTION_SCHEDULED = True`` for a host
+    that purges from cron, ``PROMPT_LOG_RETENTION_DAYS = None`` for a host
+    that states it keeps the text.
+
+    Since 0.14.0 the same beat entry is also the erasure module's only
+    scheduled work, so its absence is a retention *and* a hygiene gap.
+    """
+    from .conf import agent_settings, prompt_log_retention_scheduled
+    from .tasks import PURGE_TASK_NAME
+
+    if agent_settings.PROMPT_LOG_RETENTION_DAYS is None:
+        return []
+    if prompt_log_retention_scheduled():
+        return []
+    schedule = _beat_schedule()
+    if not schedule:
+        return []
+    if _beat_runs_the_purge(schedule):
+        return []
+
+    return [
+        checks.Warning(
+            "CELERY_BEAT_SCHEDULE has no entry for "
+            f"{PURGE_TASK_NAME}: this process runs beat for other work, "
+            "but nothing scrubs PromptLog, so prompts, system prompts and "
+            "full responses are kept for as long as the row exists "
+            "regardless of STAPEL_AGENT['PROMPT_LOG_RETENTION_DAYS'] = "
+            f"{agent_settings.PROMPT_LOG_RETENTION_DAYS!r}.",
+            hint=(
+                "CELERY_BEAT_SCHEDULE = {**get_agent_beat_schedule(), ...} "
+                "(stapel_agent.tasks) — or run `manage.py "
+                f"{PURGE_JOB_NAME}` from cron and set "
+                "STAPEL_AGENT['PROMPT_LOG_RETENTION_SCHEDULED'] = True to "
+                "declare it."
+            ),
+            id="stapel_agent.W017",
         )
     ]
 

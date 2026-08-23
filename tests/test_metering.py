@@ -399,17 +399,27 @@ class TestXiaomiMimoRateCard:
 
 @pytest.mark.django_db
 class TestErasureKeepsTheAccounting:
-    def test_the_subject_goes_and_the_numbers_stay(self, fake_provider):
-        """Deleting the rows outright would destroy the ledger finance
-        reads; the tenant is not personal data and stays with them."""
+    def test_anonymize_drops_the_subject_and_keeps_the_numbers(self, fake_provider):
+        """The ledger finance reads survives an *anonymisation*: the
+        tenant is not personal data and stays with the counters."""
         from stapel_agent.gdpr import AgentGDPRProvider
 
         services.complete("p", "medium", provider="fake", user_id=11, workspace_id=99)
-        AgentGDPRProvider().delete(11)
+        AgentGDPRProvider().anonymize(11)
         row = PromptLog.objects.get()
         assert row.user_id is None
         assert row.workspace_id == "99"
         assert row.cost_usd is not None
+
+    def test_an_erasure_takes_the_row_metering_columns_and_all(self, fake_provider):
+        """0.14.0: an erasure request is a request to be gone. The cost of
+        that call leaves the ledger with it — stated here so the trade is
+        a decision on the record, not a surprise in a month-end query."""
+        from stapel_agent.gdpr import AgentGDPRProvider
+
+        services.complete("p", "medium", provider="fake", user_id=11, workspace_id=99)
+        AgentGDPRProvider().delete(11)
+        assert PromptLog.objects.count() == 0
 
     def test_the_export_survives_a_decimal(self, fake_provider):
         """``json.dumps`` refuses a Decimal outright — a column added for

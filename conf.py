@@ -305,7 +305,11 @@ agent_settings = AppSettings(
         # response, error) is scrubbed by ``purge_prompt_logs`` — the row
         # and its token counters stay for accounting. None = no retention
         # limit, and the host owes the regulator an explanation.
-        "PROMPT_LOG_RETENTION_DAYS": 90,
+        # 30 since 0.14.0 (was 90): the deletion-lifecycle spec puts every
+        # subject's purge SLA at 30 days, and a library default that keeps
+        # content three times longer than the platform's own promise is a
+        # default that quietly breaks it. A host that needs 90 states 90.
+        "PROMPT_LOG_RETENTION_DAYS": 30,
         # The host declares that its scheduler runs `purge_prompt_logs`
         # (cron, systemd timer, k8s CronJob — anything this process cannot
         # see). False = checks.check_prompt_log_retention_is_scheduled

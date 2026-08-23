@@ -547,9 +547,20 @@ translate and summarize responses ARE typed, so they get the full seam.
 Transport-agnostic via `stapel_core.comm` (in-process in a monolith, NATS/HTTP in
 microservices — same code). JSON Schemas live in `schemas/functions/`.
 
-**Emits:** none.
+**Emits** (schemas in `schemas/emits/`):
 
-**Consumes:** none.
+| Action | Payload | When |
+|---|---|---|
+| `gdpr.section.erased` | `owner: "agent"`, `subject_type`, `subject_key`, `correlation_id`, `receipt_id`, `counts: {prompt_logs}` | This module finished erasing one subject — see "Erasure" below. Emitted inside the delete's transaction |
+| `gdpr.owner.alive` | `owner: "agent"`, `subject_types`, `correlation_id` | Answer to `gdpr.owner.probe`, from the same subscriber that erases |
+
+**Consumes** (schemas in `schemas/consumes/`):
+
+| Action | Handler | What it does |
+|---|---|---|
+| `gdpr.erasure.requested` | `actions.handle_erasure_requested` | Deletes the `PromptLog` rows of the named subject, receipts with counts. Subject types not claimed are ignored |
+| `gdpr.owner.probe` | `actions.handle_owner_probe` | Answers `gdpr.owner.alive` |
+| `user.deleted` | `actions.handle_user_deleted` | DEPRECATED account signal (stapel-gdpr drops it in its 0.6.0); routed through the same erase call |
 
 **Functions provided** (`functions.py`, registered in `AgentConfig.ready()`):
 
@@ -571,6 +582,66 @@ because these schemas are `additionalProperties: false` and product traffic
 arrives over comm, so before 0.12.0 every row written by a real pipeline
 stage had `user_id = NULL` and the token ledger had no subject to attribute
 to. `llm.stt_catalog` writes no row and therefore has nobody to attribute.
+
+### Erasure
+
+`PromptLog` holds prompts, system prompts and full model responses, so this
+module is a **data owner** in the stapel-gdpr sense. It participates two ways,
+and both run the same code (`gdpr.erase_subject`) — an erasure cannot mean one
+thing over comm and another in a monolith:
+
+| Path | Entry point | Reached from |
+|---|---|---|
+| in-process provider | `gdpr.AgentGDPRProvider` (registered in `AgentConfig.ready()`) | a monolith where the gdpr orchestrator runs providers directly |
+| comm subscriber | `actions.py` (`gdpr.erasure.requested`) | any deployment that runs `consume_actions` — the only path a service has |
+
+**Subject types claimed: `account`, `workspace`.** Declare them in the host's
+`STAPEL_GDPR["DATA_OWNERS"]`:
+
+```python
+STAPEL_GDPR = {"DATA_OWNERS": {"agent": ["account", "workspace"], ...}}
+```
+
+`account` deletes every row with that `user_id` (in every workspace — a
+`workspace_id` on an account request is a partition hint for owners that need
+one, and narrowing by it would leave the subject's rows in every other tenant);
+`workspace` deletes every row with that `workspace_id`, including the rows no
+user was attributed to. The receipt carries `counts: {"prompt_logs": n}` — what
+was actually removed. Handlers are idempotent: a redelivery removes nothing and
+receipts `0` rather than claiming the work twice.
+
+**`meeting` is NOT claimed**, though the deletion-lifecycle spec's table lists
+it here. That row assumes the 0.12.0 metering columns carry a meeting or
+recording correlation; they do not. 0.12.0 added `user_id`, `workspace_id`,
+`cost_usd`, `cost_basis` and `audio_duration_ms`, and no `llm.*` payload accepts
+an entity id at all (`additionalProperties: false`), while `metadata` is written
+by this package and holds provider details. There is no key a meeting erasure
+could match on, and an owner that claims a subject type it cannot erase turns
+the health table into a false green. Giving this module a real meeting key means
+a nullable column plus a new optional field on every `llm.*` schema — its own
+release.
+
+**Erasure deletes; retention scrubs.** Since 0.14.0 an erasure request removes
+the rows outright, metering columns included. Through 0.13.x `delete()` emptied
+the text and kept the counters; that behaviour still exists under its own name,
+`AgentGDPRProvider.anonymize()`, which is what a host calls when it wants the
+numbers without the person. `retention.purge_prompt_logs` is unchanged and still
+scrubs: a retention window is not an erasure request.
+
+**Scheduled work.** `tasks.get_agent_beat_schedule()` is the beat entry for the
+retention purge (canon: same shape as `stapel_gdpr.tasks.get_gdpr_beat_schedule`):
+
+```python
+from stapel_agent.tasks import get_agent_beat_schedule
+
+CELERY_BEAT_SCHEDULE = {**get_agent_beat_schedule(), ...}
+```
+
+Celery is optional — `tasks.purge_prompt_logs` is a plain callable any scheduler
+can invoke, and `PROMPT_LOG_RETENTION_SCHEDULED = True` declares that one does.
+A process that runs beat without this entry is reported by `stapel_agent.W017`
+at boot; a process with no scheduler known at all by `stapel_agent.W014`. One
+gap, one warning — they never fire together.
 
 ### Admin categories (`stapel_core.access`, admin-suite AS-5)
 

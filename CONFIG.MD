@@ -89,6 +89,7 @@ consuming project.
 | CACHE_LOOKUP | env | per-source cache-by-prompt toggle {source: bool}. | no | {llm_facade: false, translate: true, summarize: false} |
 | CACHE_TTL | env | seconds; cached rows older than this are ignored. | no | 604800 |
 | CACHE_ALLOW_UNSCOPED | env | sources declared non-personal, so a call without user_id may use the shared cache; empty = an unscoped call skips the cache. | no | [] |
-| PROMPT_LOG_RETENTION_DAYS | env | age after which `purge_prompt_logs` scrubs a ledger row's text (counters kept); None = no limit. | no | 90 |
+| PROMPT_LOG_RETENTION_DAYS | env | age after which `purge_prompt_logs` scrubs a ledger row's text (counters kept); None = no limit. **0.14.0: default 90 → 30**, matching the platform's 30-day purge SLA — a host that needs 90 states 90. | no | 30 |
+| PROMPT_LOG_RETENTION_SCHEDULED | env | the operator declares that a scheduler this process cannot see (cron, systemd timer, CronJob) runs the purge. False + no beat entry = `stapel_agent.W014`/`W017` at boot. A beat entry for `stapel_agent.tasks.purge_prompt_logs` is detected and needs no declaration. | no | False |
 | MODEL_SIZE_CEILING_ENTITLEMENT | env | entitlement key (STAPEL_BILLING plan catalog) that caps how far up the `MODELS` size ladder a caller's plan reaches; unset = seam closed, no billing lookup at all. | no | (none) |
 | CACHE_POLICY | env | dotted path to a CachePolicy subclass (the cache seam). | no | stapel_agent.cache.PromptLogCachePolicy |
