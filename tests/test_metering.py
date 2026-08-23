@@ -404,13 +404,15 @@ class TestErasureKeepsTheAccounting:
     stays and the person stops being nameable on it."""
 
     def test_the_bill_survives_the_erasure_without_the_person(self, fake_provider):
+        """An account erasure pseudonymizes the person and leaves the
+        tenant: the workspace is alive and did not ask to be erased."""
         from stapel_agent.gdpr import AgentGDPRProvider, pseudonymize
 
         services.complete("p", "medium", provider="fake", user_id=11, workspace_id=99)
         AgentGDPRProvider().delete(11)
         row = PromptLog.objects.get()
         assert row.user_id == pseudonymize("11")
-        assert row.workspace_id == pseudonymize("99")
+        assert row.workspace_id == "99"
         assert row.cost_usd is not None
         assert row.cost_basis is not None
         assert row.input_tokens is not None
@@ -427,17 +429,45 @@ class TestErasureKeepsTheAccounting:
         row = PromptLog.objects.get()
         assert row.prompt == "" and row.cost_usd is not None
 
-    def test_a_months_spend_still_adds_up_after_an_erasure(self, fake_provider):
-        """The reason the row stays: a cost query asks what March cost,
-        not whether the account still exists."""
+    def test_the_tenants_month_still_adds_up_queried_by_its_own_id(
+        self, fake_provider
+    ):
+        """The reason the row stays, and the reason the tenant keeps its
+        id: a cost query asks what workspace 99 spent in March, not
+        whether one of its members still has an account. So the sum is
+        taken the way a bill is taken — `filter(workspace_id="99")`."""
         from stapel_agent.gdpr import AgentGDPRProvider
 
         services.complete("p", "medium", provider="fake", user_id=11, workspace_id=99)
         services.complete("q", "medium", provider="fake", user_id=12, workspace_id=99)
-        before = sum(r.cost_usd for r in PromptLog.objects.all())
+        billed = PromptLog.objects.filter(workspace_id="99")
+        before = sum(r.cost_usd for r in billed)
+        assert before > 0
+
         AgentGDPRProvider().delete(11)
-        assert sum(r.cost_usd for r in PromptLog.objects.all()) == before
-        assert PromptLog.objects.count() == 2
+
+        after = PromptLog.objects.filter(workspace_id="99")
+        assert after.count() == 2
+        assert sum(r.cost_usd for r in after) == before
+
+    def test_erasing_the_tenant_takes_its_members_rows_with_it(
+        self, fake_provider
+    ):
+        """The other half of the rule: rows inside an erased workspace have
+        no tenant left to belong to, so the person goes too — while the
+        same person's rows in a live tenant are untouched."""
+        from stapel_agent.gdpr import erase_subject, pseudonymize
+
+        services.complete("p", "medium", provider="fake", user_id=11, workspace_id=99)
+        services.complete("q", "medium", provider="fake", user_id=11, workspace_id=77)
+        erase_subject("workspace", "99")
+
+        erased = PromptLog.objects.get(workspace_id=pseudonymize("99"))
+        assert erased.user_id == pseudonymize("11")
+        assert erased.cost_usd is not None
+        survivor = PromptLog.objects.get(workspace_id="77")
+        assert survivor.user_id == "11"
+        assert survivor.prompt != ""
 
     def test_the_export_survives_a_decimal(self, fake_provider):
         """``json.dumps`` refuses a Decimal outright — a column added for

@@ -81,14 +81,40 @@ class TestEraseSubject:
         assert row.audio_duration_ms == 3_600_000
         assert row.model == "m" and row.created_at is not None
 
-    def test_both_ids_become_stable_pseudonyms(self):
+    def test_an_account_erasure_pseudonymizes_the_person_only(self):
+        """Exactly the ids that NAME the subject. The workspace is a living
+        tenant that did not ask to be erased, and its bill has to stay
+        queryable by its own id — one member leaving must not erase a third
+        party's ability to read its own ledger."""
         row = _row(user_id="u-1", workspace_id="ws-1")
         erase_subject("account", "u-1")
         row.refresh_from_db()
         assert row.user_id == pseudonymize("u-1")
-        assert row.workspace_id == pseudonymize("ws-1")
         assert row.user_id.startswith(PSEUDONYM_PREFIX)
         assert "u-1" not in row.user_id
+        assert row.workspace_id == "ws-1"
+
+    def test_a_workspace_erasure_pseudonymizes_the_tenant_and_its_people(self):
+        """The rows inside an erased tenant have no tenant left to belong
+        to. The people keep their accounts elsewhere — those rows are not
+        touched — but this tenant's ledger loses the person too."""
+        inside = _row(user_id="u-1", workspace_id="ws-1")
+        elsewhere = _row(user_id="u-1", workspace_id="ws-2")
+        erase_subject("workspace", "ws-1")
+        inside.refresh_from_db()
+        elsewhere.refresh_from_db()
+        assert inside.workspace_id == pseudonymize("ws-1")
+        assert inside.user_id == pseudonymize("u-1")
+        assert (elsewhere.workspace_id, elsewhere.user_id) == ("ws-2", "u-1")
+
+    def test_the_columns_an_erasure_rewrites_are_declared(self):
+        from stapel_agent.gdpr import PSEUDONYMIZED_COLUMNS
+
+        assert PSEUDONYMIZED_COLUMNS == {
+            "account": ("user_id",),
+            "workspace": ("workspace_id", "user_id"),
+        }
+        assert set(PSEUDONYMIZED_COLUMNS) == set(SUBJECT_TYPES)
 
     def test_the_pseudonym_is_keyed_not_a_plain_digest(self, settings):
         """A bare sha256 of a user id is a rainbow table away from being
@@ -137,6 +163,10 @@ class TestEraseSubject:
         }
         assert PromptLog.objects.filter(user_id="u-1").count() == 0
         assert PromptLog.objects.filter(prompt="").count() == 2
+        # Both tenants are alive and still name themselves.
+        assert sorted(
+            PromptLog.objects.values_list("workspace_id", flat=True)
+        ) == ["ws-1", "ws-2"]
 
     def test_workspace_takes_the_tenants_rows_including_unattributed_ones(self):
         _row(user_id="u-1", workspace_id="ws-1")
@@ -149,6 +179,12 @@ class TestEraseSubject:
         assert PromptLog.objects.filter(
             workspace_id=pseudonymize("ws-1")
         ).count() == 2
+        # The unattributed row had no user_id to rewrite and still has none.
+        assert sorted(
+            r.user_id or "" for r in PromptLog.objects.filter(
+                workspace_id=pseudonymize("ws-1")
+            )
+        ) == ["", pseudonymize("u-1")]
 
     def test_metadata_keeps_the_accounting_keys_and_drops_the_rest(self):
         """`audio` carries AudioRef.describe() — the URL of the person's
@@ -220,6 +256,10 @@ class TestErasureRequested:
         assert PromptLog.objects.filter(user_id="u-1").count() == 0
         assert PromptLog.objects.filter(prompt="").count() == 2
         assert PromptLog.objects.get(user_id="u-2").prompt == "secret prompt"
+        # The tenant was not the subject and still names itself.
+        assert set(PromptLog.objects.values_list("workspace_id", flat=True)) == {
+            "ws-1"
+        }
         name, payload = m_emit.call_args.args
         assert name == "gdpr.section.erased"
         assert payload["owner"] == OWNER == "agent"

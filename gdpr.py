@@ -16,9 +16,12 @@ subscriber in :mod:`stapel_agent.actions`:
   error) and ``metadata`` is cut down to the accounting keys this package
   writes — an audio ref, a caller's annotation or a provider's extra dict
   is content too;
-* ``user_id`` and ``workspace_id`` are **pseudonymized** — a keyed HMAC,
+* the ids that **name the subject** are **pseudonymized** — a keyed HMAC,
   irreversible without the deployment's ``SECRET_KEY``, stable so the
-  rows of one subject stay one subject;
+  rows of one subject stay one subject. An account erasure rewrites
+  ``user_id`` and leaves the tenant alone; a workspace erasure rewrites
+  ``workspace_id`` and the ``user_id`` of the rows inside it
+  (:data:`PSEUDONYMIZED_COLUMNS`);
 * the economics stay untouched: ``cost_usd``, ``cost_basis``,
   ``audio_duration_ms``, the token counters, the model, the timestamps.
 
@@ -130,6 +133,23 @@ SUBJECT_TYPES = ("account", "workspace")
 #: ``stapel_video.presence.pseudonymize_user``.
 PSEUDONYM_PREFIX = "erased:"
 
+#: Which id columns an erasure pseudonymizes, per subject type. The rule:
+#: **exactly the ids that name the subject.**
+#:
+#: * ``account`` — ``user_id`` only. The workspace is a living tenant that
+#:   did not ask to be erased, and its bill has to stay queryable by its
+#:   own id; pseudonymizing it would erase a third party's ability to read
+#:   its own ledger as a side effect of one member leaving.
+#: * ``workspace`` — ``workspace_id`` **and** ``user_id``. The rows inside
+#:   an erased tenant have no tenant left to belong to; the people keep
+#:   their accounts elsewhere, but this tenant's ledger loses the person
+#:   too, because a row nobody can attribute to a tenant must not stay
+#:   attributable to a named human.
+PSEUDONYMIZED_COLUMNS = {
+    "account": ("user_id",),
+    "workspace": ("workspace_id", "user_id"),
+}
+
 #: The ``metadata`` keys this package writes for accounting and audit — the
 #: dimensions a bill is computed from and the card that priced it. Erasure
 #: keeps these and drops everything else, because everything else is either
@@ -212,23 +232,17 @@ def erase_subject(subject_type: str, subject_key, *, workspace_id=None) -> dict 
     """Erase one subject from the prompt ledger: content out, bill kept.
 
     Scrubs the content columns, cuts ``metadata`` to the accounting keys,
-    and pseudonymizes ``user_id`` and ``workspace_id`` on every row
-    touched. The economics columns are not read and not written.
+    and pseudonymizes exactly the ids that **name the subject** (see
+    :data:`PSEUDONYMIZED_COLUMNS`). The economics columns are not read and
+    not written.
 
     Returns ``{"prompt_logs": n}`` — rows **touched**, which is what the
     receipt carries — or ``None`` when *subject_type* is not one this
     module claims (the caller then owes no receipt: gdpr never created a
     part for it).
 
-    Idempotent: the ids are gone from the subject's key after the first
-    run, so a redelivery matches nothing and reports ``0``.
-
-    Note the consequence of pseudonymizing BOTH ids: a row that carried an
-    erased person's workspace can no longer be looked up by that workspace
-    id either. Per-tenant totals still add up (the pseudonym is stable),
-    but the link back to a living tenant is cut along with the link to the
-    person — which is what "without the person" costs on a row that names
-    both.
+    Idempotent: the subject's own id is a pseudonym after the first run,
+    so a redelivery matches nothing and reports ``0``.
     """
     from .models import PromptLog
     from .retention import scrub_queryset
@@ -257,7 +271,9 @@ def erase_subject(subject_type: str, subject_key, *, workspace_id=None) -> dict 
 
     scrub_queryset(rows)
     _strip_metadata(rows)
-    for column in ("user_id", "workspace_id"):
+    for column in PSEUDONYMIZED_COLUMNS[subject_type]:
+        # One UPDATE per distinct value: the digest is computed once per
+        # id, and the groups are disjoint, so the order does not matter.
         values = {v for v in rows.values_list(column, flat=True) if v}
         for value in values:
             pseudonym = pseudonymize(value)
@@ -269,6 +285,7 @@ def erase_subject(subject_type: str, subject_key, *, workspace_id=None) -> dict 
 __all__ = [
     "LEDGER_METADATA_KEYS",
     "OWNER",
+    "PSEUDONYMIZED_COLUMNS",
     "PSEUDONYM_PREFIX",
     "SUBJECT_TYPES",
     "AgentGDPRProvider",

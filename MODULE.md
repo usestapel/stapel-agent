@@ -617,19 +617,23 @@ On every selected row:
 |---|---|
 | `prompt`, `system_prompt`, `response`, `error_message` | scrubbed (the same operation retention performs) |
 | `metadata` | cut to `gdpr.LEDGER_METADATA_KEYS` — an allowlist of the accounting dimensions this package writes (`provider`, `priced_by`, `model`, `size`, `n`, `batch_size`, `language`, …). Everything else goes: a caller's annotation, a provider's extra dict, and `audio` (which carries `AudioRef.describe()`, i.e. the URL of the subject's own recording) |
-| `user_id`, `workspace_id` | **pseudonymized** — `gdpr.pseudonymize`, an HMAC-SHA256 under the deployment's `SECRET_KEY`, prefixed `erased:`. The fleet's one scheme (`stapel_video.presence.pseudonymize_user`), never a plain digest: a bare hash of a user id is a rainbow table away from being the id again |
+| the ids that **name the subject** (`gdpr.PSEUDONYMIZED_COLUMNS`) | **pseudonymized** — `gdpr.pseudonymize`, an HMAC-SHA256 under the deployment's `SECRET_KEY`, prefixed `erased:`. The fleet's one scheme (`stapel_video.presence.pseudonymize_user`), never a plain digest: a bare hash of a user id is a rainbow table away from being the id again |
 | `cost_usd`, `cost_basis`, `audio_duration_ms`, token counters, `model`, `duration_ms`, `status`, `created_at` | **untouched** |
 
+**Which ids get rewritten — exactly the ones that name the subject:**
+
+| Subject | Rewritten | Left alone | Why |
+|---|---|---|---|
+| `account` | `user_id` | `workspace_id` | The workspace is a living tenant that did not ask to be erased, and its bill must stay queryable by its own id. One member leaving must not erase a third party's ability to read its own ledger |
+| `workspace` | `workspace_id` **and** `user_id` | rows in other tenants | Rows inside an erased tenant have no tenant left to belong to. The people keep their accounts elsewhere — those rows are untouched — but this tenant's ledger loses the person too |
+
 The rows are not deleted, because deleting them would silently restate closed
-reporting periods: "what did March cost" is not a question about whether the
-account still exists. The pseudonym is stable, so one subject's rows stay one
-subject and per-subject totals keep their arithmetic; it is irreversible
-without the key. Two consequences worth stating: rotating `SECRET_KEY` changes
-future pseudonyms (a subject erased on both sides of a rotation gets two), and
-pseudonymizing *both* ids means a row that named an erased person's workspace
-can no longer be looked up by that workspace id either — per-tenant totals
-still add up, but the link back to a living tenant is cut along with the link
-to the person.
+reporting periods: "what did workspace 99 spend in March" is not a question
+about whether one of its members still has an account. The pseudonym is
+stable, so one subject's rows stay one subject and per-subject totals keep
+their arithmetic; it is irreversible without the key. One consequence worth
+stating: rotating `SECRET_KEY` changes future pseudonyms, so a subject erased
+on both sides of a rotation gets two.
 
 `AgentGDPRProvider.anonymize` **is** `AgentGDPRProvider.delete` (the same
 function object): after the scrub the row is numbers plus a pseudonym, which is

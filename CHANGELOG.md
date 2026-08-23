@@ -5,6 +5,36 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.14.3] — 2026-08-23
+
+### Fixed — an erasure pseudonymizes exactly the ids that NAME the subject
+
+0.14.2 rewrote both id columns on every erasure, whatever the subject. That
+made one member's account closure erase a **living tenant's** ability to read
+its own ledger: the workspace never asked to be erased, and after the pass its
+rows no longer answered to its own id. New `gdpr.PSEUDONYMIZED_COLUMNS` states
+the rule per subject type:
+
+| Subject | Rewritten | Left alone |
+|---|---|---|
+| `account` | `user_id` | `workspace_id` — the tenant is alive and its bill stays queryable by its own id |
+| `workspace` | `workspace_id` **and** `user_id` | rows in every other tenant |
+
+A workspace erasure takes the person too, because rows inside an erased tenant
+have no tenant left to belong to; the people keep their accounts elsewhere and
+those rows are untouched. Everything else is unchanged from 0.14.2 — content
+scrubbed, `metadata` cut to the accounting keys, economics columns never read
+or written, receipt counts = rows touched, idempotent because the subject's own
+id is a pseudonym after the first run.
+
+The metering test that sums a month's spend now takes the sum the way a bill
+is taken — `filter(workspace_id="99")` after erasing one of its members — so
+the tenant's link is asserted by the query it exists for, not by an equality
+on a column.
+
+Patch: no public surface removed, no setting changed. `PSEUDONYMIZED_COLUMNS`
+is exported so a host can read the rule instead of inferring it.
+
 ## [0.14.2] — 2026-08-23
 
 ### Changed — the rule, stated once
