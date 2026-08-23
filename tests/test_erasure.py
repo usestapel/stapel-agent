@@ -303,14 +303,24 @@ class TestDeprecatedUserDeleted:
 class TestBeatSchedule:
     """The retention job in schedulable form — the half that was missing."""
 
+    def test_the_task_name_is_stable(self):
+        """A beat entry references the task by name, so the name is the
+        contract — renaming the function must not silently unschedule
+        every host's retention job."""
+        from stapel_agent.tasks import PURGE_TASK_NAME
+
+        assert PURGE_TASK_NAME == "stapel_agent.tasks.purge_prompt_logs"
+
     def test_the_factory_names_the_shipped_task(self):
+        """The factory builds a `crontab`, so it needs celery — which this
+        package does not depend on (the callable below does not)."""
+        pytest.importorskip("celery")
         from stapel_agent.tasks import (
             PURGE_BEAT_KEY, PURGE_TASK_NAME, get_agent_beat_schedule,
         )
 
         schedule = get_agent_beat_schedule()
         assert schedule[PURGE_BEAT_KEY]["task"] == PURGE_TASK_NAME
-        assert PURGE_TASK_NAME == "stapel_agent.tasks.purge_prompt_logs"
 
     @pytest.mark.django_db
     def test_the_task_runs_the_retention_job(self, settings):
@@ -346,7 +356,22 @@ class TestBeatScheduleIsRegistered:
         }
         assert self._ids() == ["stapel_agent.W017"]
 
+    def test_an_entry_for_the_purge_task_silences_it(self, settings):
+        from stapel_agent.tasks import PURGE_TASK_NAME
+
+        settings.STAPEL_AGENT = {}
+        settings.CELERY_BEAT_SCHEDULE = {
+            "other": {"task": "myapp.tasks.send_digest", "schedule": 60},
+            "agent-prompt-log-retention": {
+                "task": PURGE_TASK_NAME, "schedule": 86400,
+            },
+        }
+        assert self._ids() == []
+
     def test_the_shipped_factory_silences_it(self, settings):
+        """The same thing, through the entry a host actually writes —
+        `crontab` needs celery, which is optional here."""
+        pytest.importorskip("celery")
         from stapel_agent.tasks import get_agent_beat_schedule
 
         settings.STAPEL_AGENT = {}

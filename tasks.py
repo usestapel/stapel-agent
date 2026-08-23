@@ -50,7 +50,14 @@ def purge_prompt_logs(*, older_than_days: int | None = None) -> int:
 
 
 def get_agent_beat_schedule() -> dict:
-    """Beat entry for the retention purge. Add to `CELERY_BEAT_SCHEDULE`."""
+    """Beat entry for the retention purge. Add to `CELERY_BEAT_SCHEDULE`.
+
+    The entry's schedule is a `crontab`, so this call needs celery
+    installed — a host with a beat schedule has it by definition. Without
+    celery, schedule the callable above (or `manage.py
+    purge_prompt_logs`) from cron and declare it with
+    ``PROMPT_LOG_RETENTION_SCHEDULED = True``.
+    """
     from celery.schedules import crontab
 
     return {

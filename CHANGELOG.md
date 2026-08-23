@@ -5,7 +5,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-## [0.14.0] — 2026-08-23
+## [0.14.1] — 2026-08-23
+
+Re-cut of 0.14.0, which was tagged and never published: its release job
+failed on two of the new tests, which called `get_agent_beat_schedule()`
+without celery installed. Celery is optional here and CI does not install
+it, so the tests `importorskip` it now and the W017 coverage runs from a
+literal beat entry on every matrix leg. The 0.14.0 content follows
+unchanged.
 
 The prompt ledger becomes an erasure owner that can be *reached*. Pre-1.0,
 so a minor is where a changed default and a new public surface live: this
