@@ -5,6 +5,63 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.14.2] — 2026-08-23
+
+### Changed — the rule, stated once
+
+**Erasure removes what a person wrote; the bill stays, without the person.**
+
+0.14.0/0.14.1 deleted the `PromptLog` rows of an erased subject, and that was
+the wrong half of the trade: deleting them silently restates closed reporting
+periods, and "what did March cost" is not a question about whether the account
+still exists. `gdpr.erase_subject` now, on every row it selects:
+
+- **scrubs the content** — `prompt`, `system_prompt`, `response`,
+  `error_message` (the same operation retention performs);
+- **cuts `metadata`** to `gdpr.LEDGER_METADATA_KEYS`, an allowlist of the
+  accounting dimensions this package writes (`provider`, `priced_by`, `model`,
+  `size`, `n`, `batch_size`, `language`, …). Everything else goes: a caller's
+  annotation, a provider's extra dict, and `audio`, which carries
+  `AudioRef.describe()` — the URL of the subject's own recording. An allowlist
+  and not a denylist, so a key nobody anticipated falls on the erasing side;
+- **pseudonymizes `user_id` and `workspace_id`** — new `gdpr.pseudonymize`,
+  an HMAC-SHA256 under the deployment's `SECRET_KEY`, prefixed `erased:`. This
+  mirrors `stapel_video.presence.pseudonymize_user` exactly (one keyed funnel
+  for the fleet, never a plain hash: a bare digest of a user id is a rainbow
+  table away from being the id again). Stable, so one subject's rows stay one
+  subject and per-subject totals keep their arithmetic; irreversible without
+  the key; idempotent, so a redelivery cannot mint a second pseudonym and split
+  a subject's history in two;
+- **leaves the economics alone** — `cost_usd`, `cost_basis`,
+  `audio_duration_ms`, the token counters, the model, the timestamps.
+
+`counts` in the `gdpr.section.erased` receipt is now rows **touched** (it was
+rows deleted). Idempotency is unchanged in kind: after the first run the
+subject key matches nothing, so a redelivery receipts `0`.
+
+**`AgentGDPRProvider.anonymize` is now `delete`** — the same function object,
+not a copy. After the scrub the row is numbers plus a pseudonym, which is what
+an anonymisation produces; `delete` is the implementation and `anonymize` the
+alias, so nobody goes looking for a second one. (0.14.0 had split them, with
+`anonymize` keeping the old scrub-and-unlink behaviour.)
+
+`retention.purge_prompt_logs` is **unchanged**: it still only scrubs text on a
+timer, and it does not touch ids — an old row still belongs to a live customer.
+
+Two consequences, stated rather than discovered: rotating `SECRET_KEY` changes
+future pseudonyms (a subject erased on both sides of a rotation gets two), and
+pseudonymizing *both* ids means a row that named an erased person's workspace
+can no longer be looked up by that workspace id either — per-tenant totals
+still add up, but the link back to a living tenant is cut with the link to the
+person.
+
+Patch, not minor: no public surface is added or removed (`erase_subject`,
+`OWNER`, `SUBJECT_TYPES` and the three handlers keep their signatures) and no
+setting changes. What changes is what 0.14.1 did to a row, and 0.14.1 is a day
+old. `gdpr.pseudonymize`, `gdpr.PSEUDONYM_PREFIX` and
+`gdpr.LEDGER_METADATA_KEYS` are exported so a host can read a pseudonymized
+ledger without re-deriving the scheme.
+
 ## [0.14.1] — 2026-08-23
 
 Re-cut of 0.14.0, which was tagged and never published: its release job

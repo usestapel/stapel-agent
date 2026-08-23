@@ -12,6 +12,7 @@ comes from the same module — an ``alive`` emitted from anywhere else
 would prove only that a container is running.
 """
 import types
+from decimal import Decimal
 
 import pytest
 from unittest.mock import patch
@@ -21,7 +22,13 @@ from stapel_agent.actions import (
     handle_owner_probe,
     handle_user_deleted,
 )
-from stapel_agent.gdpr import OWNER, SUBJECT_TYPES, erase_subject
+from stapel_agent.gdpr import (
+    OWNER,
+    PSEUDONYM_PREFIX,
+    SUBJECT_TYPES,
+    erase_subject,
+    pseudonymize,
+)
 from stapel_agent.models import PromptLog, PromptSource, PromptStatus
 
 
@@ -50,13 +57,74 @@ def _event(**payload):
 
 @pytest.mark.django_db
 class TestEraseSubject:
-    """Delete, not scrub: an erasure request is not a retention window."""
+    """Erasure removes what a person wrote; the bill stays, without them.
 
-    def test_account_takes_the_rows_of_that_person_only(self):
+    Deleting the rows would silently restate closed reporting periods —
+    "what did March cost" is not a question about whether the account
+    still exists. So: content scrubbed, ids pseudonymized, economics
+    untouched.
+    """
+
+    def test_the_content_goes_and_the_bill_stays(self):
+        row = _row(
+            user_id="u-1", input_tokens=7, output_tokens=11,
+            cost_usd=Decimal("0.00012345"), cost_basis="provider_ticks",
+            audio_duration_ms=3_600_000,
+        )
+        assert erase_subject("account", "u-1") == {"prompt_logs": 1}
+        row.refresh_from_db()
+        assert (row.prompt, row.system_prompt, row.response) == ("", None, None)
+        assert row.error_message is None
+        assert row.input_tokens == 7 and row.output_tokens == 11
+        assert row.cost_usd == Decimal("0.00012345")
+        assert row.cost_basis == "provider_ticks"
+        assert row.audio_duration_ms == 3_600_000
+        assert row.model == "m" and row.created_at is not None
+
+    def test_both_ids_become_stable_pseudonyms(self):
+        row = _row(user_id="u-1", workspace_id="ws-1")
+        erase_subject("account", "u-1")
+        row.refresh_from_db()
+        assert row.user_id == pseudonymize("u-1")
+        assert row.workspace_id == pseudonymize("ws-1")
+        assert row.user_id.startswith(PSEUDONYM_PREFIX)
+        assert "u-1" not in row.user_id
+
+    def test_the_pseudonym_is_keyed_not_a_plain_digest(self, settings):
+        """A bare sha256 of a user id is a rainbow table away from being
+        the id again; the fleet's scheme is HMAC under SECRET_KEY."""
+        import hashlib
+        import hmac
+
+        plain = hashlib.sha256(b"u-1").hexdigest()[:32]
+        assert pseudonymize("u-1") != f"{PSEUDONYM_PREFIX}{plain}"
+        expected = hmac.new(
+            str(settings.SECRET_KEY).encode(), b"u-1", hashlib.sha256
+        ).hexdigest()[:32]
+        assert pseudonymize("u-1") == f"{PSEUDONYM_PREFIX}{expected}"
+
+    def test_pseudonymizing_a_pseudonym_changes_nothing(self):
+        """Otherwise a redelivered erasure would mint a second pseudonym
+        for one subject and split its history in two."""
+        once = pseudonymize("u-1")
+        assert pseudonymize(once) == once
+
+    def test_one_subjects_rows_stay_one_subject(self):
+        """Stability is what keeps per-subject aggregates addable after an
+        erasure: three rows, one pseudonym, the same three-row total."""
+        for _ in range(3):
+            _row(user_id="u-1", input_tokens=5)
+        erase_subject("account", "u-1")
+        pseudonyms = set(PromptLog.objects.values_list("user_id", flat=True))
+        assert pseudonyms == {pseudonymize("u-1")}
+        assert sum(PromptLog.objects.values_list("input_tokens", flat=True)) == 15
+
+    def test_account_touches_the_rows_of_that_person_only(self):
         _row(user_id="u-1")
         _row(user_id="u-2")
         assert erase_subject("account", "u-1") == {"prompt_logs": 1}
-        assert [r.user_id for r in PromptLog.objects.all()] == ["u-2"]
+        survivor = PromptLog.objects.get(user_id="u-2")
+        assert survivor.prompt == "secret prompt"
 
     def test_an_account_is_erased_across_every_workspace(self):
         """A workspace_id on an account request is a partition hint for
@@ -67,14 +135,45 @@ class TestEraseSubject:
         assert erase_subject("account", "u-1", workspace_id="ws-1") == {
             "prompt_logs": 2
         }
-        assert PromptLog.objects.count() == 0
+        assert PromptLog.objects.filter(user_id="u-1").count() == 0
+        assert PromptLog.objects.filter(prompt="").count() == 2
 
     def test_workspace_takes_the_tenants_rows_including_unattributed_ones(self):
         _row(user_id="u-1", workspace_id="ws-1")
         _row(user_id=None, workspace_id="ws-1")
-        _row(user_id="u-1", workspace_id="ws-2")
+        other = _row(user_id="u-1", workspace_id="ws-2")
         assert erase_subject("workspace", "ws-1") == {"prompt_logs": 2}
-        assert [r.workspace_id for r in PromptLog.objects.all()] == ["ws-2"]
+        other.refresh_from_db()
+        assert other.workspace_id == "ws-2"
+        assert other.prompt == "secret prompt"
+        assert PromptLog.objects.filter(
+            workspace_id=pseudonymize("ws-1")
+        ).count() == 2
+
+    def test_metadata_keeps_the_accounting_keys_and_drops_the_rest(self):
+        """`audio` carries AudioRef.describe() — the URL of the person's
+        own recording — and a caller's annotation is content too. The
+        allowlist is what a bill is computed and justified from."""
+        row = _row(user_id="u-1", metadata={
+            "provider": "whisper-http",
+            "priced_by": "deepgram:nova-3",
+            "language": "ru",
+            "audio": "url:files.example/meeting-with-alice.wav",
+            "customer_note": "Alice asked about her divorce",
+        })
+        erase_subject("account", "u-1")
+        row.refresh_from_db()
+        assert row.metadata == {
+            "provider": "whisper-http",
+            "priced_by": "deepgram:nova-3",
+            "language": "ru",
+        }
+
+    def test_a_row_with_no_metadata_survives_the_strip(self):
+        row = _row(user_id="u-1", metadata=None)
+        assert erase_subject("account", "u-1") == {"prompt_logs": 1}
+        row.refresh_from_db()
+        assert row.metadata is None
 
     def test_a_subject_type_this_module_does_not_own_is_not_erased(self):
         """`meeting` is in the spec's table for this lib on the assumption
@@ -84,18 +183,21 @@ class TestEraseSubject:
         _row()
         assert erase_subject("meeting", "m-1") is None
         assert erase_subject("recording", "r-1") is None
-        assert PromptLog.objects.count() == 1
+        assert PromptLog.objects.get().prompt == "secret prompt"
 
     def test_an_empty_subject_key_erases_nothing(self):
         _row()
         assert erase_subject("account", "") is None
         assert erase_subject("account", None) is None
-        assert PromptLog.objects.count() == 1
+        assert PromptLog.objects.get().prompt == "secret prompt"
 
-    def test_a_second_run_reports_the_zero_it_removed(self):
+    def test_a_second_run_reports_the_zero_it_touched(self):
+        """The id is a pseudonym after the first run, so the subject key
+        matches nothing — idempotent without a tombstone to remember."""
         _row(user_id="u-1")
         erase_subject("account", "u-1")
         assert erase_subject("account", "u-1") == {"prompt_logs": 0}
+        assert PromptLog.objects.count() == 1
 
     def test_the_claimed_types_are_the_ones_that_work(self):
         for subject_type in SUBJECT_TYPES:
@@ -106,7 +208,7 @@ class TestEraseSubject:
 
 @pytest.mark.django_db
 class TestErasureRequested:
-    def test_the_rows_go_and_the_receipt_says_how_many(self):
+    def test_the_content_goes_and_the_receipt_says_how_many(self):
         _row(user_id="u-1")
         _row(user_id="u-1")
         _row(user_id="u-2")
@@ -115,7 +217,9 @@ class TestErasureRequested:
                 request_id=5, correlation_id="corr-1",
                 subject_type="account", subject_key="u-1",
             ))
-        assert PromptLog.objects.count() == 1
+        assert PromptLog.objects.filter(user_id="u-1").count() == 0
+        assert PromptLog.objects.filter(prompt="").count() == 2
+        assert PromptLog.objects.get(user_id="u-2").prompt == "secret prompt"
         name, payload = m_emit.call_args.args
         assert name == "gdpr.section.erased"
         assert payload["owner"] == OWNER == "agent"
@@ -139,7 +243,7 @@ class TestErasureRequested:
         )
         assert payload["counts"] == {"prompt_logs": 1}
 
-    def test_redelivery_erases_nothing_and_says_so(self):
+    def test_redelivery_touches_nothing_and_says_so(self):
         """At-least-once delivery: the second receipt reports 0 rather
         than claiming the work twice — and carries the SAME receipt_id, so
         an audit following it back lands on one erasure."""
@@ -166,7 +270,7 @@ class TestErasureRequested:
                 subject_type="meeting", subject_key="m-1",
             ))
         m_emit.assert_not_called()
-        assert PromptLog.objects.count() == 1
+        assert PromptLog.objects.get().prompt == "secret prompt"
 
     @pytest.mark.parametrize("payload", [
         {"correlation_id": "c", "subject_type": "account"},          # no key
@@ -178,7 +282,7 @@ class TestErasureRequested:
         with patch("stapel_core.comm.emit") as m_emit:
             handle_erasure_requested(_event(**payload))
         m_emit.assert_not_called()
-        assert PromptLog.objects.count() == 1
+        assert PromptLog.objects.get().prompt == "secret prompt"
 
     def test_the_receipt_validates_against_the_committed_schema(self):
         """No mock: the emit goes through comm with VALIDATE_SCHEMAS on,
@@ -255,7 +359,8 @@ class TestDeprecatedUserDeleted:
         _row(user_id="u-2")
         with patch("stapel_core.comm.emit"):
             handle_user_deleted(_event(user_id="u-1", correlation_id="corr-6"))
-        assert [r.user_id for r in PromptLog.objects.all()] == ["u-2"]
+        assert PromptLog.objects.get(user_id=pseudonymize("u-1")).prompt == ""
+        assert PromptLog.objects.get(user_id="u-2").prompt == "secret prompt"
 
     def test_the_receipt_carries_the_account_subject_pair(self):
         _row(user_id="u-1")
@@ -276,14 +381,14 @@ class TestDeprecatedUserDeleted:
         with patch("stapel_core.comm.emit") as m_emit:
             handle_user_deleted(_event(user_id="u-1"))
         m_emit.assert_not_called()
-        assert PromptLog.objects.count() == 0
+        assert PromptLog.objects.get().user_id == pseudonymize("u-1")
 
     def test_an_event_without_a_user_id_erases_nothing(self):
         _row()
         with patch("stapel_core.comm.emit") as m_emit:
             handle_user_deleted(_event(correlation_id="corr-8"))
         m_emit.assert_not_called()
-        assert PromptLog.objects.count() == 1
+        assert PromptLog.objects.get().prompt == "secret prompt"
 
     def test_both_events_for_one_account_are_safe_together(self):
         """0.5.0 emits `gdpr.erasure.requested` AND `user.deleted` for an

@@ -12,7 +12,8 @@ thirty days for the request to time out.
 
 Three handlers, one module, on purpose:
 
-* ``gdpr.erasure.requested`` — erase the subject, reply
+* ``gdpr.erasure.requested`` — erase the subject (content out, bill kept
+  — see :func:`stapel_agent.gdpr.erase_subject`), reply
   ``gdpr.section.erased`` with the counts.
 * ``gdpr.owner.probe`` — reply ``gdpr.owner.alive``. It sits **beside**
   the erasure handler because that co-location is the whole evidence:
@@ -67,7 +68,7 @@ def handle_erasure_requested(event):
     """Erase this module's slice of one subject and confirm it.
 
     Erasure and confirmation are one transaction (outbox discipline): the
-    receipt leaves iff the delete committed, so an owner can never report
+    receipt leaves iff the erasure committed, so an owner can never report
     an erasure a rollback undid.
 
     A subject type this module does not claim is ignored without a
@@ -101,7 +102,8 @@ def handle_erasure_requested(event):
             return
         _emit_receipt(str(correlation_id), subject_type, str(subject_key), counts)
     logger.info(
-        "agent erased %s prompt log row(s) for %s %s",
+        "agent erased %s prompt log row(s) for %s %s "
+        "(content scrubbed, ids pseudonymized, ledger kept)",
         counts["prompt_logs"], subject_type, subject_key,
     )
 
@@ -132,8 +134,8 @@ def handle_user_deleted(event):
 
     stapel-gdpr 0.5.0 emits `gdpr.erasure.requested` and `user.deleted`
     side by side for an account, and drops the latter in 0.6.0. Both land
-    here; the second one deletes nothing and receipts ``0``, which is
-    what an idempotent handler looks like. When this handler goes, no
+    here; the second one finds nothing left to erase and receipts ``0``,
+    which is what an idempotent handler looks like. When this handler goes, no
     erasure logic goes with it — it holds none.
     """
     from django.db import transaction

@@ -399,27 +399,45 @@ class TestXiaomiMimoRateCard:
 
 @pytest.mark.django_db
 class TestErasureKeepsTheAccounting:
-    def test_anonymize_drops_the_subject_and_keeps_the_numbers(self, fake_provider):
-        """The ledger finance reads survives an *anonymisation*: the
-        tenant is not personal data and stays with the counters."""
-        from stapel_agent.gdpr import AgentGDPRProvider
+    """The 0.12.0 rule, in its pseudonymized form (0.14.2): deleting the
+    rows would silently restate a closed reporting period, so the bill
+    stays and the person stops being nameable on it."""
 
-        services.complete("p", "medium", provider="fake", user_id=11, workspace_id=99)
-        AgentGDPRProvider().anonymize(11)
-        row = PromptLog.objects.get()
-        assert row.user_id is None
-        assert row.workspace_id == "99"
-        assert row.cost_usd is not None
-
-    def test_an_erasure_takes_the_row_metering_columns_and_all(self, fake_provider):
-        """0.14.0: an erasure request is a request to be gone. The cost of
-        that call leaves the ledger with it — stated here so the trade is
-        a decision on the record, not a surprise in a month-end query."""
-        from stapel_agent.gdpr import AgentGDPRProvider
+    def test_the_bill_survives_the_erasure_without_the_person(self, fake_provider):
+        from stapel_agent.gdpr import AgentGDPRProvider, pseudonymize
 
         services.complete("p", "medium", provider="fake", user_id=11, workspace_id=99)
         AgentGDPRProvider().delete(11)
-        assert PromptLog.objects.count() == 0
+        row = PromptLog.objects.get()
+        assert row.user_id == pseudonymize("11")
+        assert row.workspace_id == pseudonymize("99")
+        assert row.cost_usd is not None
+        assert row.cost_basis is not None
+        assert row.input_tokens is not None
+        assert row.prompt == ""
+
+    def test_anonymize_is_the_same_operation(self, fake_provider):
+        """One mechanism, two names: after the scrub the row holds numbers
+        and a pseudonym, which is what an anonymisation produces."""
+        from stapel_agent.gdpr import AgentGDPRProvider
+
+        assert AgentGDPRProvider.anonymize is AgentGDPRProvider.delete
+        services.complete("p", "medium", provider="fake", user_id=11, workspace_id=99)
+        AgentGDPRProvider().anonymize(11)
+        row = PromptLog.objects.get()
+        assert row.prompt == "" and row.cost_usd is not None
+
+    def test_a_months_spend_still_adds_up_after_an_erasure(self, fake_provider):
+        """The reason the row stays: a cost query asks what March cost,
+        not whether the account still exists."""
+        from stapel_agent.gdpr import AgentGDPRProvider
+
+        services.complete("p", "medium", provider="fake", user_id=11, workspace_id=99)
+        services.complete("q", "medium", provider="fake", user_id=12, workspace_id=99)
+        before = sum(r.cost_usd for r in PromptLog.objects.all())
+        AgentGDPRProvider().delete(11)
+        assert sum(r.cost_usd for r in PromptLog.objects.all()) == before
+        assert PromptLog.objects.count() == 2
 
     def test_the_export_survives_a_decimal(self, fake_provider):
         """``json.dumps`` refuses a Decimal outright — a column added for

@@ -14,8 +14,10 @@ keeps its counters. ``PROMPT_LOG_RETENTION_DAYS = None`` disables the
 cut-off entirely — an explicit decision a host has to make, not a
 default that quietly keeps everything.
 
-The same scrub is what the GDPR provider performs on erasure, one user
-at a time; see :mod:`stapel_agent.gdpr`.
+The same scrub is the first half of an erasure — which then also cuts
+``metadata`` to the accounting keys and pseudonymizes the id columns; see
+:func:`stapel_agent.gdpr.erase_subject`. Retention stops at the scrub on
+purpose: an old row still belongs to a live customer, so its ids stay.
 """
 from __future__ import annotations
 

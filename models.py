@@ -116,8 +116,9 @@ class PromptLog(models.Model):
     )
     user_id = models.CharField(max_length=64, null=True, blank=True, db_index=True)
     #: The tenant the call was made for. Separate from ``user_id`` because
-    #: a team wallet and a person's usage are different questions, and the
-    #: erasure path drops the person while the accounting keeps the tenant.
+    #: a team wallet and a person's usage are different questions. Erasure
+    #: pseudonymizes both columns (``gdpr.erase_subject``): the counters
+    #: and the cost survive, the person and the tenant stop being nameable.
     workspace_id = models.CharField(
         max_length=64, null=True, blank=True, db_index=True
     )

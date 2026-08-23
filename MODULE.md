@@ -551,14 +551,14 @@ microservices — same code). JSON Schemas live in `schemas/functions/`.
 
 | Action | Payload | When |
 |---|---|---|
-| `gdpr.section.erased` | `owner: "agent"`, `subject_type`, `subject_key`, `correlation_id`, `receipt_id`, `counts: {prompt_logs}` | This module finished erasing one subject — see "Erasure" below. Emitted inside the delete's transaction |
+| `gdpr.section.erased` | `owner: "agent"`, `subject_type`, `subject_key`, `correlation_id`, `receipt_id`, `counts: {prompt_logs}` | This module finished erasing one subject — see "Erasure" below. Emitted inside the erasure's transaction |
 | `gdpr.owner.alive` | `owner: "agent"`, `subject_types`, `correlation_id` | Answer to `gdpr.owner.probe`, from the same subscriber that erases |
 
 **Consumes** (schemas in `schemas/consumes/`):
 
 | Action | Handler | What it does |
 |---|---|---|
-| `gdpr.erasure.requested` | `actions.handle_erasure_requested` | Deletes the `PromptLog` rows of the named subject, receipts with counts. Subject types not claimed are ignored |
+| `gdpr.erasure.requested` | `actions.handle_erasure_requested` | Erases the named subject from the `PromptLog` rows — content scrubbed, ids pseudonymized, ledger kept — and receipts with counts. Subject types not claimed are ignored |
 | `gdpr.owner.probe` | `actions.handle_owner_probe` | Answers `gdpr.owner.alive` |
 | `user.deleted` | `actions.handle_user_deleted` | DEPRECATED account signal (stapel-gdpr drops it in its 0.6.0); routed through the same erase call |
 
@@ -602,31 +602,40 @@ thing over comm and another in a monolith:
 STAPEL_GDPR = {"DATA_OWNERS": {"agent": ["account", "workspace"], ...}}
 ```
 
-`account` deletes every row with that `user_id` (in every workspace — a
+`account` selects every row with that `user_id` (in every workspace — a
 `workspace_id` on an account request is a partition hint for owners that need
 one, and narrowing by it would leave the subject's rows in every other tenant);
-`workspace` deletes every row with that `workspace_id`, including the rows no
-user was attributed to. The receipt carries `counts: {"prompt_logs": n}` — what
-was actually removed. Handlers are idempotent: a redelivery removes nothing and
-receipts `0` rather than claiming the work twice.
+`workspace` selects every row with that `workspace_id`, including the rows no
+user was attributed to. The receipt carries `counts: {"prompt_logs": n}` — rows
+touched. Handlers are idempotent: after the first run the subject key matches
+nothing, so a redelivery receipts `0`.
 
-**`meeting` is NOT claimed**, though the deletion-lifecycle spec's table lists
-it here. That row assumes the 0.12.0 metering columns carry a meeting or
-recording correlation; they do not. 0.12.0 added `user_id`, `workspace_id`,
-`cost_usd`, `cost_basis` and `audio_duration_ms`, and no `llm.*` payload accepts
-an entity id at all (`additionalProperties: false`), while `metadata` is written
-by this package and holds provider details. There is no key a meeting erasure
-could match on, and an owner that claims a subject type it cannot erase turns
-the health table into a false green. Giving this module a real meeting key means
-a nullable column plus a new optional field on every `llm.*` schema — its own
-release.
+**Erasure removes what a person wrote; the bill stays, without the person.**
+On every selected row:
 
-**Erasure deletes; retention scrubs.** Since 0.14.0 an erasure request removes
-the rows outright, metering columns included. Through 0.13.x `delete()` emptied
-the text and kept the counters; that behaviour still exists under its own name,
-`AgentGDPRProvider.anonymize()`, which is what a host calls when it wants the
-numbers without the person. `retention.purge_prompt_logs` is unchanged and still
-scrubs: a retention window is not an erasure request.
+| Column | What erasure does |
+|---|---|
+| `prompt`, `system_prompt`, `response`, `error_message` | scrubbed (the same operation retention performs) |
+| `metadata` | cut to `gdpr.LEDGER_METADATA_KEYS` — an allowlist of the accounting dimensions this package writes (`provider`, `priced_by`, `model`, `size`, `n`, `batch_size`, `language`, …). Everything else goes: a caller's annotation, a provider's extra dict, and `audio` (which carries `AudioRef.describe()`, i.e. the URL of the subject's own recording) |
+| `user_id`, `workspace_id` | **pseudonymized** — `gdpr.pseudonymize`, an HMAC-SHA256 under the deployment's `SECRET_KEY`, prefixed `erased:`. The fleet's one scheme (`stapel_video.presence.pseudonymize_user`), never a plain digest: a bare hash of a user id is a rainbow table away from being the id again |
+| `cost_usd`, `cost_basis`, `audio_duration_ms`, token counters, `model`, `duration_ms`, `status`, `created_at` | **untouched** |
+
+The rows are not deleted, because deleting them would silently restate closed
+reporting periods: "what did March cost" is not a question about whether the
+account still exists. The pseudonym is stable, so one subject's rows stay one
+subject and per-subject totals keep their arithmetic; it is irreversible
+without the key. Two consequences worth stating: rotating `SECRET_KEY` changes
+future pseudonyms (a subject erased on both sides of a rotation gets two), and
+pseudonymizing *both* ids means a row that named an erased person's workspace
+can no longer be looked up by that workspace id either — per-tenant totals
+still add up, but the link back to a living tenant is cut along with the link
+to the person.
+
+`AgentGDPRProvider.anonymize` **is** `AgentGDPRProvider.delete` (the same
+function object): after the scrub the row is numbers plus a pseudonym, which is
+what an anonymisation produces, and a second implementation would only drift.
+`retention.purge_prompt_logs` is unchanged and still only scrubs text on a
+timer: an old row still belongs to a live customer, so its ids stay.
 
 **Scheduled work.** `tasks.get_agent_beat_schedule()` is the beat entry for the
 retention purge (canon: same shape as `stapel_gdpr.tasks.get_gdpr_beat_schedule`):

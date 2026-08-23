@@ -280,24 +280,24 @@ class TestGDPRProvider:
         exported = AgentGDPRProvider().export(7)
         assert [p["prompt"] for p in exported["prompts"]] == ["mine"]
 
-    def test_anonymize_drops_the_person_and_keeps_the_numbers(self):
-        """The ledger argument lives here, and only here (0.14.0): the
-        text goes, the subject link goes, the counters stay."""
-        row = _row(user_id="7")
-        AgentGDPRProvider().anonymize(7)
-        row.refresh_from_db()
-        assert (row.prompt, row.response, row.user_id) == ("", None, None)
-        assert row.input_tokens == 7
+    def test_delete_scrubs_the_content_and_pseudonymizes_the_subject(self):
+        """0.14.2: erasure removes what a person wrote; the bill stays,
+        without the person. One operation (``gdpr.erase_subject``) whether
+        it is reached in a monolith through this provider or over comm."""
+        from stapel_agent.gdpr import pseudonymize
 
-    def test_delete_removes_the_rows(self):
-        """0.14.0: erasure deletes. Through 0.13.x this scrubbed and kept
-        the row — which meant an account erasure meant one thing over comm
-        and another in a monolith. It is one operation now
-        (``gdpr.erase_subject``), and a host that wants the numbers
-        without the person calls ``anonymize``."""
-        _row(user_id="7")
+        row = _row(user_id="7")
         other = _row(user_id="8")
         AgentGDPRProvider().delete(7)
+        row.refresh_from_db()
         other.refresh_from_db()
-        assert list(PromptLog.objects.values_list("user_id", flat=True)) == ["8"]
+        assert (row.prompt, row.system_prompt, row.response) == ("", None, None)
+        assert row.user_id == pseudonymize("7")
+        assert row.input_tokens == 7  # the ledger survives the erasure
         assert other.prompt == "secret prompt"  # untouched
+        assert other.user_id == "8"
+
+    def test_anonymize_is_the_same_operation_under_another_name(self):
+        """No second implementation to drift: after the scrub the row is
+        numbers plus a pseudonym, which is what an anonymisation makes."""
+        assert AgentGDPRProvider.anonymize is AgentGDPRProvider.delete
