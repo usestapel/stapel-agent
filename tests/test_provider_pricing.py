@@ -117,28 +117,44 @@ class TestDeepgramPricing:
         estimate_cost = _deepgram_estimate_cost
         row = NOVA3_PRICING["nova-3"]
         assert row["source"] == "https://deepgram.com/pricing"
-        assert row["verified_date"] == "2026-07-09"
-        # P69 rate card: mono $0.0048/min + diarization ADD-ON $0.0020/min.
-        # Our adapter always sends diarize_model -> the default estimate includes
-        # the add-on: 1 minute -> $0.0068.
-        assert estimate_cost(60_000) == pytest.approx(0.0068, abs=1e-9)
-        # without diarization the base rate only
-        assert estimate_cost(60_000, diarization=False) == pytest.approx(0.0048, abs=1e-9)
+        assert row["verified_date"] == "2026-08-28"
+        # 2026-08-28 card: mono $0.0043/min, Speaker Diarization INCLUDED on
+        # pre-recorded (the $0.0020/min add-on is charged on streaming). Our
+        # adapter always sends diarize_model, so the default estimate is the
+        # base rate: 1 minute -> $0.0043.
+        assert estimate_cost(60_000) == pytest.approx(0.0043, abs=1e-9)
+        # and asking for it without diarization costs exactly the same
+        assert estimate_cost(60_000, diarization=False) == pytest.approx(0.0043, abs=1e-9)
         # pro-rating: half a minute is exactly half the effective rate
-        assert estimate_cost(30_000) == pytest.approx(0.0034, abs=1e-9)
-        # multilingual variant: $0.0058 + $0.0020 = $0.0078/min ($0.468/hr)
-        assert estimate_cost(60_000, multilingual=True) == pytest.approx(0.0078, abs=1e-9)
-        assert estimate_cost(3_600_000, multilingual=True) == pytest.approx(0.468, abs=1e-6)
-        # Growth tier prices both the base and the add-on at the Growth column
+        assert estimate_cost(30_000) == pytest.approx(0.00215, abs=1e-9)
+        # multilingual variant: $0.0052/min ($0.312/hr)
+        assert estimate_cost(60_000, multilingual=True) == pytest.approx(0.0052, abs=1e-9)
+        assert estimate_cost(3_600_000, multilingual=True) == pytest.approx(0.312, abs=1e-6)
+        # Growth tier prices the base at the Growth column
         assert estimate_cost(60_000, tier="growth", diarization=False) == \
-            pytest.approx(0.0042, abs=1e-9)
-        assert estimate_cost(60_000, tier="growth") == pytest.approx(0.0059, abs=1e-9)
+            pytest.approx(0.0036, abs=1e-9)
+        assert estimate_cost(60_000, tier="growth") == pytest.approx(0.0036, abs=1e-9)
         # hourly convenience constants
-        assert NOVA3_BATCH_PRICE_PER_HOUR == pytest.approx(0.288, abs=1e-6)
-        # effective default (mono + diar) over one hour
-        assert estimate_cost(3_600_000) == pytest.approx(0.408, abs=1e-6)
+        assert NOVA3_BATCH_PRICE_PER_HOUR == pytest.approx(0.258, abs=1e-6)
+        # effective default (mono, diarization included) over one hour
+        assert estimate_cost(3_600_000) == pytest.approx(0.258, abs=1e-6)
         # unknown model -> None, never a fabricated 0
         assert estimate_cost(60_000, model="nova-9") is None
+
+    def test_the_streaming_diarization_addon_never_reaches_a_batch_estimate(self):
+        """The defect this file now guards. Between 2026-07-09 and 2026-08-28
+        this module added a $0.0020/min diarization add-on to every batch
+        estimate; the add-on is a STREAMING line, and a diarized monolingual
+        hour was overstated by 58% ($0.408 against $0.258)."""
+        from stapel_agent.stt.pricing.deepgram import (
+            NOVA3_DIARIZATION_ADDON_STREAMING_PER_MIN,
+        )
+
+        estimate_cost = _deepgram_estimate_cost
+        assert NOVA3_DIARIZATION_ADDON_STREAMING_PER_MIN == pytest.approx(0.0020)
+        assert NOVA3_PRICING["nova-3"]["diarization_batch_included"] is True
+        assert estimate_cost(3_600_000, diarization=True) == \
+            estimate_cost(3_600_000, diarization=False)
 
     # -- pricing (test_p116_deepgram_keyterm.py) ---------------------------
 
@@ -149,6 +165,12 @@ class TestDeepgramPricing:
         with_kt = estimate_cost(60_000, keyterm=True)
         assert with_kt == pytest.approx(base + 0.0013)
         assert estimate_cost(60_000) == pytest.approx(base)   # default unchanged
+        # The Growth keyterm rate IS published on the 2026-08-28 card
+        # ($0.0012/min); before it was, this module charged PAYG on Growth
+        # rather than invent a discount.
+        growth_base = estimate_cost(60_000, tier="growth")
+        assert estimate_cost(60_000, tier="growth", keyterm=True) == \
+            pytest.approx(growth_base + 0.0012)
 
 
 # =============================================================================

@@ -1,7 +1,7 @@
 """Xiaomi MiMo ASR pricing (published rate card, per hour of input audio).
 
 Source: https://mimo.mi.com/docs/en-US/price/pay-as-you-go, fetched
-21 Aug 2026. The ASR series is billed on the duration of the INPUT AUDIO —
+21 Aug 2026 and re-verified 28 Aug 2026 (both prices unchanged). The ASR series is billed on the duration of the INPUT AUDIO —
 "duration statistics are accurate to the second, and ultimately converted to
 hourly billing" — which is the same shape as every other card in this package.
 
@@ -35,7 +35,8 @@ plausible number for the wrong customers; a host on the domestic list
 registers its own module with ``MIMO_V25_ASR_PRICE_PER_HOUR_CNY`` converted at
 the rate its finance team uses. The constant is exported for exactly that.
 
-Version: 1.0 · Date: 21 Aug 2026
+Version: 1.1 · Date: 28 Aug 2026 (re-verification sweep; rates unchanged)
+Verified: 2026-08-28
 """
 
 from __future__ import annotations

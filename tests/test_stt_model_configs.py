@@ -77,7 +77,6 @@ from stapel_agent.stt.pricing.assemblyai import (
 )
 from stapel_agent.stt.pricing.deepgram import (
     NOVA3_BATCH_PRICE_PER_HOUR,
-    NOVA3_DIARIZATION_ADDON_PER_HOUR,
     NOVA3_MULTI_PRICE_PER_HOUR,
     RATE_CARD_VERSION,
 )
@@ -232,17 +231,20 @@ class TestPricingFromPricingModules:
         assert (hourly_rate(get_config("elevenlabs_scribe_v2_default"))
                 == SCRIBE_V2_PRICE_PER_HOUR)
 
-    def test_deepgram_mono_includes_the_diarization_addon(self):
-        # Diarization became a paid add-on and our adapter always sends
-        # diarize_model — the card must carry the rate we actually incur.
-        assert hourly_rate(get_config("deepgram_nova3_default")) == round(
-            NOVA3_BATCH_PRICE_PER_HOUR + NOVA3_DIARIZATION_ADDON_PER_HOUR, 6)
-        assert hourly_rate(get_config("deepgram_nova3_default")) == 0.408
+    def test_deepgram_mono_prices_diarization_as_included(self):
+        # Our adapter always sends diarize_model, and on the 2026-08-28 card
+        # pre-recorded diarization is Included — so the diarized rate a run
+        # actually incurs IS the base batch rate. The literal is here because
+        # the line above it would also pass against a card that quietly
+        # reintroduced an add-on.
+        assert (hourly_rate(get_config("deepgram_nova3_default"))
+                == NOVA3_BATCH_PRICE_PER_HOUR)
+        assert hourly_rate(get_config("deepgram_nova3_default")) == 0.258
 
     def test_deepgram_multi_is_its_own_variant(self):
-        assert hourly_rate(get_config("deepgram_nova3_multi")) == round(
-            NOVA3_MULTI_PRICE_PER_HOUR + NOVA3_DIARIZATION_ADDON_PER_HOUR, 6)
-        assert hourly_rate(get_config("deepgram_nova3_multi")) == 0.468
+        assert (hourly_rate(get_config("deepgram_nova3_multi"))
+                == NOVA3_MULTI_PRICE_PER_HOUR)
+        assert hourly_rate(get_config("deepgram_nova3_multi")) == 0.312
 
     def test_assemblyai_universal2(self):
         assert hourly_rate(get_config("assemblyai_universal2_default")) == round(
@@ -312,11 +314,11 @@ class TestPriceVariantChannel:
     def test_estimate_prices_dg_multi_by_its_variant(self):
         """The runner-wiring test, at the seam a runner would call."""
         assert (estimate_cost(get_config("deepgram_nova3_multi"), 5000)
-                == round(5000 / HOUR_MS * 0.468, 6))
+                == round(5000 / HOUR_MS * 0.312, 6))
 
     def test_estimate_prices_dg_mono_unchanged(self):
         assert (estimate_cost(get_config("deepgram_nova3_default"), 5000)
-                == round(5000 / HOUR_MS * 0.408, 6))
+                == round(5000 / HOUR_MS * 0.258, 6))
 
     def test_rate_and_estimate_are_one_computation(self):
         """Mirrors ``test_every_card_rate_equals_its_module_hour_estimate``.

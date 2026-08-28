@@ -5,6 +5,97 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-08-28
+
+### Fixed — the Deepgram rate card was seven weeks stale and 58% high
+
+`stt/pricing/deepgram.py` was dated 2026-07-09 and priced a diarized
+monolingual batch hour at **$0.408**. Re-read on 2026-08-28,
+https://deepgram.com/pricing says **$0.258**:
+
+| | card as shipped | page on 2026-08-28 |
+|---|---|---|
+| Nova-3 mono, pre-recorded, PAYG | $0.0048 / min | **$0.0043 / min** |
+| Nova-3 mono, pre-recorded, Growth | $0.0042 / min | **$0.0036 / min** |
+| Nova-3 multi, pre-recorded, PAYG | $0.0058 / min | **$0.0052 / min** |
+| Nova-3 multi, pre-recorded, Growth | $0.0050 / min | **$0.0043 / min** |
+| Speaker Diarization, pre-recorded | paid add-on $0.0020 / min | **Included** |
+| Keyterm Prompting, Growth | not published (PAYG charged) | **$0.0012 / min** |
+
+Two independent things were wrong, and they compounded: the base rate was
+high, and a Speaker Diarization add-on was added on top of every batch
+estimate. That add-on is a **streaming** line — the Pre-Recorded column reads
+"Included" for both tiers — and our adapter always sends `diarize_model`, so
+every diarized run this package priced carried it. `hourly_rate` for
+`deepgram_nova3_default` goes 0.408 → **0.258**, and for
+`deepgram_nova3_multi` 0.468 → **0.312**.
+
+The card now records that this page has moved **twice** in seven weeks, in
+opposite directions (2026-07-04 $0.0043 + included → 2026-07-09 $0.0048 +
+add-on → 2026-08-28 $0.0043 + included). Each reading matched the page on its
+day; the conclusion is that this vendor restates its public card between
+quarters and the diarization line moves, so the constants are dated, not
+authoritative.
+
+**Breaking (0.x minor).** `NOVA3_DIARIZATION_ADDON_PER_MIN` and
+`NOVA3_DIARIZATION_ADDON_PER_HOUR` are renamed
+`NOVA3_DIARIZATION_ADDON_STREAMING_PER_MIN` / `_PER_HOUR` — same $0.0020/min
+value, a name that says which product it bills. An unqualified constant for an
+add-on this workload does not pay is how the overstatement stayed invisible.
+`NOVA3_PRICING["nova-3"]` drops `diarization_addon_per_min_usd` /
+`diarization_addon_growth_per_min_usd` (the Growth column reads "—" on the
+current card, so there is no honest Growth streaming rate to carry) and gains
+`diarization_batch_included`, `diarization_addon_streaming_per_min_usd` and
+`keyterm_addon_growth_per_min_usd`.
+
+`estimate_cost(..., diarization=...)` is KEPT and is now a no-op on the batch
+rates — the caller and `ModelConfig.pricing_kwargs` should not have to change
+with the vendor's packaging, and this line has already moved twice. It reads
+`diarization_batch_included`, so a card that moves the add-on back changes one
+boolean, not the arithmetic. `keyterm=True` on `tier="growth"` now bills the
+published Growth rate instead of PAYG.
+
+`RATE_CARD_VERSION` moves `deepgram_2026-07-09` → `deepgram_2026-08-28`, which
+is what that string is for: an A/B whose arms were priced on the two cards is
+machine-detectable.
+
+### Changed — every other STT rate card re-verified, provenance stated per number
+
+The sibling cards were last checked 2026-07-09..11. Each was re-read against
+its vendor page on 2026-08-28:
+
+- **AssemblyAI** — unchanged ($0.15/hr universal-2, $0.21/hr
+  universal-3-5-pro, +$0.02/hr diarization). `universal-3-pro` is no longer on
+  the page; the key stays priced at its last verified rate and now says so.
+- **Soniox** — unchanged ($0.10/hr async, $0.12/hr real-time, diarization and
+  LID bundled).
+- **xAI** — unchanged ($0.10/hr REST, $0.20/hr streaming), re-read on
+  https://docs.x.ai/docs/models rather than the WAF'd pricing page.
+- **Xiaomi MiMo** — unchanged ($0.074/hr overseas, ¥0.5/hr domestic).
+- **Gladia** — rates unchanged ($0.61/hr async, $0.75/hr real-time,
+  diarization included), but the **free allowance changed**: the card said "the
+  first 10 h per month are free" and the page now grants a one-time €50 credit
+  with no monthly reset. Nothing is planned around it, but a recurring
+  allowance that became one-time is exactly the drift that surprises a
+  forecast.
+- **Speechmatics** — Melia 1 $0.129/hr and Standard $0.24/hr re-confirmed;
+  **Enhanced $0.40/hr and the "diarization included on all plans" claim were
+  NOT** — that part of the page still renders only interactively and
+  docs.speechmatics.com has no pricing chapter. The two rates now carry
+  different verification dates in the file rather than one date that would
+  imply both were read.
+- **ElevenLabs** — `elevenlabs.io/pricing/api` answers **302 to a
+  country-restriction help article** from here, so the price table could not be
+  read. $0.22/hr is unchanged and its provenance is downgraded in the file to
+  "last read on the official page 2026-07-01; not re-confirmable 2026-08-28".
+  The official docs confirm only the shape (per audio-hour, Scribe v2);
+  secondary write-ups agreeing on $0.22 are corroboration, not verification,
+  and the file says so. A reader planning spend needs an invoice or a
+  permitted region.
+
+`SttProvider.cost_per_hour` for the Deepgram adapter follows the card
+(0.288 → 0.258). It remains a registry ballpark; `stt/pricing/` is the number.
+
 ## [0.14.3] — 2026-08-23
 
 ### Fixed — an erasure pseudonymizes exactly the ids that NAME the subject

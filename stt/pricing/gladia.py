@@ -1,10 +1,16 @@
 """Gladia pre-recorded (async) pricing — rate card, dated and sourced.
 
-VERIFIED 2026-07-09 on the live pricing page (https://www.gladia.io/pricing):
-  - Starter (pay-as-you-go): "Async at $0.61/hr" (real-time is $0.75/hr — a
-    DIFFERENT product, do not confuse); the first 10 h per month are free.
+RE-VERIFIED 2026-08-28 on the live pricing page (https://www.gladia.io/pricing):
+  - Starter (pay-as-you-go): "$0.61/hr" async (real-time is $0.75/hr — a
+    DIFFERENT product, do not confuse). Both rates unchanged since 2026-07-09.
   - Speaker diarization is INCLUDED in the async price (a "core capability" on
     every plan) — unlike AssemblyAI, where diarization is a +$0.02/hr add-on.
+  - THE FREE ALLOWANCE CHANGED. The 2026-07-09 card recorded "the first 10 h
+    per month are free"; the 2026-08-28 page grants "50 EUR in free credits, a
+    one-time grant with no monthly reset" (~80 h of pre-recorded at the rate
+    above). Nothing here is planned around it — the rate card is the planning
+    source — but a recurring monthly allowance that is now one-time is exactly
+    the kind of drift that turns a forecast into a surprise.
   - The rate is per MODEL-agnostic async hour: the page prices "async"
     transcription once, with no solaria-1 vs solaria-3 differentiation.
   - Growth ("as low as $0.20/hr") and Enterprise are negotiated commit plans —
@@ -22,7 +28,10 @@ Costs are pro-rated to the second, mirroring the other pricing modules. The
 shared P65 contract: ``estimate_cost(duration_ms, *, model=...) -> float | None``
 — an unknown model returns ``None`` (never a fabricated 0).
 
-Version: 1.0 · Date: 09 Jul 2026 (P66)
+Version: 1.1 · Date: 28 Aug 2026 (re-verification sweep: rates unchanged,
+free allowance corrected from a monthly 10 h to a one-time EUR 50 credit)
+Source: https://www.gladia.io/pricing
+Verified: 2026-08-28
 """
 
 from __future__ import annotations

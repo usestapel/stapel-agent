@@ -298,7 +298,7 @@ surface and a broken entry degrades to `status: "failure"` per request.
 ### STT model configs + rate cards — two more open registries
 
 A provider name does not identify a run, and therefore cannot price one.
-Deepgram bills $0.408/hr monolingual and $0.468/hr multilingual over the *same*
+Deepgram bills $0.258/hr monolingual and $0.312/hr multilingual over the *same*
 wire model `nova-3`; AssemblyAI is $0.17/hr on Universal-2 and $0.23/hr on
 Universal-3.5 Pro. `stt/model_configs.py` names those combinations:
 
@@ -308,7 +308,7 @@ from stapel_agent.stt.model_configs import (
     register_stt_model_config, resolve_config,
 )
 
-hourly_rate(get_config("deepgram_nova3_multi"))        # 0.468
+hourly_rate(get_config("deepgram_nova3_multi"))        # 0.312
 estimate_cost(get_config("deepgram_nova3_multi"), 5000)  # USD for 5 s
 resolve_config("deepgram", "multi").model_config_id    # attribute a legacy
                                                        # provider-only run

@@ -39,10 +39,12 @@ does not publish its tokenizer, so the cap is enforced on an estimate —
 duplicates and legacy-syntax terms are TRUNCATED (counted in
 ``NormalizedTranscript.biasing``), never errors.
 
-Pricing (rate card 2026-07-09, estimates only): Nova-3 mono batch PAYG
-$0.0048/min ($0.288/hr); Speaker Diarization add-on $0.0020/min; Keyterm
-Prompting add-on $0.0013/min — billed ONLY when the request actually
-carries ``keyterm`` params.
+Pricing (rate card 2026-08-28, estimates only): Nova-3 mono batch PAYG
+$0.0043/min ($0.258/hr), Speaker Diarization INCLUDED on pre-recorded (the
+$0.0020/min add-on is charged on streaming); Keyterm Prompting add-on
+$0.0013/min — billed ONLY when the request actually carries ``keyterm``
+params. The page is volatile: see ``stt/pricing/deepgram.py`` for the
+provenance and re-read it before planning spend.
 
 Settings: ``DEEPGRAM_API_KEY`` (required), ``DEEPGRAM_BASE_URL``,
 ``DEEPGRAM_MODEL`` (default ``nova-3``).
@@ -120,9 +122,11 @@ class DeepgramProvider(SttProvider):
     name = "deepgram"
     supports_diarization = True
     supports_keyterms = True
-    # Nova-3 mono batch PAYG $0.288/hr; diarization add-on +$0.12/hr and
-    # keyterm add-on +$0.078/hr are billed only when requested.
-    cost_per_hour = 0.288
+    # Nova-3 mono batch PAYG $0.258/hr, diarization included (rate card
+    # 2026-08-28); the keyterm add-on +$0.078/hr is billed only when
+    # requested. The precise number is stt/pricing/deepgram.py's job — this
+    # attribute is the registry's ballpark.
+    cost_per_hour = 0.258
 
     def default_speech_model(self) -> Optional[str]:
         return agent_settings.DEEPGRAM_MODEL

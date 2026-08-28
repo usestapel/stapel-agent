@@ -1,6 +1,7 @@
 """Soniox async STT pricing — rate card, dated and sourced.
 
-VERIFIED 2026-07-09 (P68, soniox.com/pricing) and kept as the planning rate:
+RE-VERIFIED 2026-08-28 (soniox.com/pricing) — every number below unchanged
+since the 2026-07-09 reading, and kept as the planning rate:
   - Async STT effective $0.10 per audio-hour. Token-based underneath:
     $1.50 / 1M audio-input tokens (~30k tokens per audio-hour) +
     $3.50 / 1M text-output tokens (~15k tokens per speech-hour) — the page's
@@ -18,7 +19,9 @@ The shared P65 contract: ``estimate_cost(duration_ms, *, model=...) ->
 float | None`` — an unknown model returns ``None`` (never a fabricated 0).
 Prices are volatile — re-check the pricing page on the day of use.
 
-Version: 1.0 · Date: 10 Jul 2026 (P76)
+Version: 1.1 · Date: 28 Aug 2026 (re-verification sweep; rates unchanged)
+Source: https://soniox.com/pricing
+Verified: 2026-08-28
 """
 
 from __future__ import annotations

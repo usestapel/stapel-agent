@@ -1,9 +1,10 @@
 """xAI Grok STT pricing — rate card, dated and sourced.
 
-VERIFIED from two independent primary sources:
-  - docs.x.ai/developers/pricing ("Last updated: July 3, 2026"; page opens
-    ONLY via scrapling stealthy_fetch — WAF): Speech to Text REST $0.10/hr,
-    Streaming $0.20/hr.
+RE-VERIFIED 2026-08-28 on https://docs.x.ai/docs/models — Speech to Text
+"REST $0.10 / hr", "Streaming $0.20 / hr", unchanged. Two earlier primary
+readings agree:
+  - docs.x.ai/developers/pricing ("Last updated: July 3, 2026"; that page
+    opens ONLY via scrapling stealthy_fetch — WAF): same two rates.
   - Igor's console capture (console.x.ai models page, captured 2026-07-11):
     "Speech to Text — REST $0.10 / hr · Streaming $0.20 / hr" — identical.
 
@@ -17,12 +18,14 @@ The shared P65 contract: ``estimate_cost(duration_ms, *, model=...) ->
 float | None`` — an unknown key returns ``None`` (never a fabricated 0).
 Prices are volatile — re-check the pricing page on the day of use.
 
-Version: 1.0 · Date: 10 Jul 2026 (P76)
+Version: 1.1 · Date: 28 Aug 2026 (re-verification sweep; rates unchanged)
+Source: https://docs.x.ai/docs/models
+Verified: 2026-08-28
 """
 
 from __future__ import annotations
 
-#: PAYG rates, USD per audio-hour (docs.x.ai pricing, verified 2026-07-10).
+#: PAYG rates, USD per audio-hour (docs.x.ai/docs/models, verified 2026-08-28).
 STT_REST_PRICE_PER_HOUR = 0.10
 STT_STREAMING_PRICE_PER_HOUR = 0.20   # WebSocket; not wired in this adapter
 

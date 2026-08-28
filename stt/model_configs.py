@@ -1,7 +1,7 @@
 """Named, priced, reproducible ways to call one STT provider.
 
-A provider name alone does not identify a run. "deepgram" bills $0.408/hr
-monolingual and $0.468/hr multilingual over the SAME wire model ``nova-3``;
+A provider name alone does not identify a run. "deepgram" bills $0.258/hr
+monolingual and $0.312/hr multilingual over the SAME wire model ``nova-3``;
 "assemblyai" is $0.17/hr on Universal-2 and $0.23/hr on Universal-3.5 Pro;
 "gladia" is one rate over two models that differ by 7 WER points. So the unit a
 caller picks, a ledger attributes and a comparison compares is not the provider
