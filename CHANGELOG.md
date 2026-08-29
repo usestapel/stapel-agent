@@ -5,6 +5,45 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-08-30
+
+### Added — a merged guest keeps their prompt history
+
+This package subscribed `user.deleted` and nothing else, so it had a
+silent, wrong answer for the opposite event. `user.merged` (stapel-auth
+0.30.0) fires when a guest account is folded into an account that already
+exists on sign-in: `from_user_id` stops existing, and every row that named
+it belongs to `into_user_id` now. Nothing is erased. Until this release the
+guest's `PromptLog` rows kept pointing at an id that can no longer sign in
+— invisible to the person who wrote them, and beyond the reach of any
+erasure they could later request, because nobody ever requests an erasure
+for an id nobody holds.
+
+The failure had no symptom at the seam: nothing raised, nothing retried,
+nothing was logged. `stapel_core.lifecycle.E001` (stapel-core 0.52.1)
+reports exactly that silence, and `tests/test_user_merged.py` keeps the
+check wired to this suite so the answer cannot go missing again.
+
+**Merge policy — re-point, keep everything.** `actions.handle_user_merged`
+moves `PromptLog.user_id` from the merged account to the survivor and
+changes nothing else. A prompt log row is a metering record as much as a
+content record — it carries the tokens and the cost the deployment already
+paid for — so the survivor inherits the rows whole rather than a summary of
+them. `workspace_id` is deliberately untouched: a merge joins two people,
+not two tenants.
+
+Idempotent by construction: the re-point filters on `from_user_id`, which
+matches nothing once it has run, so the second delivery of an at-least-once
+event moves 0 rows instead of doing the work twice. A payload missing an
+id, naming one account twice, or carrying an id no column can parse is
+logged and dropped — a raise would make the bus redeliver a message that
+can never succeed. `ValidationError` is caught beside `ValueError` and
+`TypeError` on purpose: a UUID column rejects a malformed key with
+`ValidationError`, which is not a `ValueError`, and a handler that caught
+only the latter would raise into the bus.
+
+Contract: `schemas/consumes/user.merged.json`.
+
 ## [0.15.0] — 2026-08-28
 
 ### Fixed — the Deepgram rate card was seven weeks stale and 58% high

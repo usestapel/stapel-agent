@@ -561,6 +561,7 @@ microservices — same code). JSON Schemas live in `schemas/functions/`.
 | `gdpr.erasure.requested` | `actions.handle_erasure_requested` | Erases the named subject from the `PromptLog` rows — content scrubbed, ids pseudonymized, ledger kept — and receipts with counts. Subject types not claimed are ignored |
 | `gdpr.owner.probe` | `actions.handle_owner_probe` | Answers `gdpr.owner.alive` |
 | `user.deleted` | `actions.handle_user_deleted` | DEPRECATED account signal (stapel-gdpr drops it in its 0.6.0); routed through the same erase call |
+| `user.merged` | `actions.handle_user_merged` | The other half of an account's life cycle (stapel-auth 0.30.0). **Merge policy: re-point, keep everything** — `PromptLog.user_id` moves from `from_user_id` to `into_user_id`; content, tokens, cost and `workspace_id` are untouched, because a prompt log row is metering the deployment already paid for and a merge joins two people, not two tenants. Idempotent (a redelivery re-points 0 rows). Answering only `user.deleted` is `stapel_core.lifecycle.E001` |
 
 **Functions provided** (`functions.py`, registered in `AgentConfig.ready()`):
 
