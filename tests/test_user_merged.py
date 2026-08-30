@@ -122,5 +122,13 @@ def test_lifecycle_pair_check_is_green():
     the suite rather than to a one-time audit.
     """
     from stapel_core.comm.lifecycle_checks import check_lifecycle_pairs
+    from stapel_core.comm.registry import action_registry
 
+    # Asserted first, because the check reads the registry: a process with
+    # no subscribers at all would report [] too, and a green gate that is
+    # blind to the thing it gates proves nothing.
+    subscribed = {
+        getattr(h, "__module__", "") for h in action_registry.handlers("user.merged")
+    }
+    assert "stapel_agent.actions" in subscribed
     assert check_lifecycle_pairs() == []
