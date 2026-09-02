@@ -43,6 +43,17 @@ from ..base import (
 class OpenAIEmbeddingsProvider(EmbeddingProvider):
     name = "openai-embeddings"
 
+    @staticmethod
+    def _proxies() -> dict | None:
+        # EMBEDDINGS_PROXY, falling back to OPENAI_COMPAT_PROXY — the
+        # same wire the LLM provider already rides. Applied to the one
+        # request this adapter makes, so nothing else the host fetches
+        # goes through it.
+        proxy = (
+            agent_settings.EMBEDDINGS_PROXY or agent_settings.OPENAI_COMPAT_PROXY or ""
+        ).strip()
+        return {"http": proxy, "https": proxy} if proxy else None
+
     def default_embedding_model(self) -> Optional[str]:
         return agent_settings.EMBEDDINGS_MODEL
 
@@ -94,6 +105,7 @@ class OpenAIEmbeddingsProvider(EmbeddingProvider):
                 json=body,
                 headers=headers,
                 timeout=timeout,
+                proxies=self._proxies(),
             )
         except requests.Timeout as exc:
             raise RetryableEmbeddingError(

@@ -5,6 +5,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.16.1] — 2026-09-02
+
+### Fixed — the embeddings request now rides the proxy the LLM request rides
+
+`OPENAI_COMPAT_PROXY` was honored by the LLM provider (`proxies=` on the
+one request it makes, 0.13.3) and silently ignored by the OpenAI-compatible
+EMBEDDINGS provider — a deployment whose OpenAI account is reachable only
+through a proxy got working completions and unreachable embeddings from the
+same settings block. The embeddings adapter now sends its one request with
+`proxies=` too, reading the new `EMBEDDINGS_PROXY` (falling back to
+`OPENAI_COMPAT_PROXY`, so a host already configured for the LLM wire
+configures nothing extra). Same scope rule as the LLM side: the proxy rides
+that request only, never a process-wide `HTTPS_PROXY`; `socks*` URLs need
+`stapel-agent[socks]`.
+
 ## [0.16.0] — 2026-08-30
 
 ### Added — a merged guest keeps their prompt history

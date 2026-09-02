@@ -251,6 +251,13 @@ agent_settings = AppSettings(
         # stack configures nothing extra.
         "EMBEDDINGS_BASE_URL": "",
         "EMBEDDINGS_API_KEY": "",
+        # Proxy for the ONE request the embeddings provider makes
+        # (`proxies=`, never a process-wide HTTPS_PROXY — same reasoning
+        # as OPENAI_COMPAT_PROXY, which this falls back to, so a host
+        # whose LLM traffic already rides a proxy gets the embeddings on
+        # the same wire without a second setting). socks* URLs need
+        # stapel-agent[socks].
+        "EMBEDDINGS_PROXY": "",
         "EMBEDDINGS_MODEL": "text-embedding-3-small",
         # Generic self-hosted embeddings server (POST {base}/embed,
         # {"texts": [...]} → {"vectors": [[...]]}; model fixed

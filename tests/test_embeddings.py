@@ -102,9 +102,15 @@ class FakeResponse:
 def mock_post(monkeypatch, module, responses, captured):
     queue = list(responses)
 
-    def fake_post(url, json=None, headers=None, timeout=None):
+    def fake_post(url, json=None, headers=None, timeout=None, proxies=None):
         captured.append(
-            {"url": url, "json": json, "headers": headers, "timeout": timeout}
+            {
+                "url": url,
+                "json": json,
+                "headers": headers,
+                "timeout": timeout,
+                "proxies": proxies,
+            }
         )
         step = queue.pop(0)
         if isinstance(step, Exception):
@@ -160,6 +166,43 @@ class TestOpenAIEmbeddings:
         OpenAIEmbeddingsProvider().embed(texts=["a", "b"])
         assert captured[0]["url"] == "https://compat.test/v1/embeddings"
         assert captured[0]["headers"]["Authorization"] == "Bearer compat-key"
+
+    def test_proxy_reaches_the_one_request(self, settings, monkeypatch):
+        """EMBEDDINGS_PROXY rides the request the provider makes — and ONLY
+        that request, exactly like the LLM provider's OPENAI_COMPAT_PROXY
+        (`proxies=`, never a process-wide HTTPS_PROXY)."""
+        settings.STAPEL_AGENT = {
+            "EMBEDDINGS_BASE_URL": "https://api.openai.test/v1",
+            "EMBEDDINGS_PROXY": "http://45.67.130.45:2000",
+        }
+        captured = []
+        mock_post(monkeypatch, "openai_compat", [FakeResponse(OPENAI_BODY)], captured)
+        OpenAIEmbeddingsProvider().embed(texts=["a", "b"])
+        assert captured[0]["proxies"] == {
+            "http": "http://45.67.130.45:2000",
+            "https": "http://45.67.130.45:2000",
+        }
+
+    def test_proxy_falls_back_to_openai_compat_proxy(self, settings, monkeypatch):
+        """A host whose LLM traffic already rides OPENAI_COMPAT_PROXY gets
+        the embeddings on the same wire without a second setting."""
+        settings.STAPEL_AGENT = {
+            "OPENAI_COMPAT_BASE_URL": "https://compat.test/v1",
+            "OPENAI_COMPAT_PROXY": "socks5h://127.0.0.1:1080",
+        }
+        captured = []
+        mock_post(monkeypatch, "openai_compat", [FakeResponse(OPENAI_BODY)], captured)
+        OpenAIEmbeddingsProvider().embed(texts=["a", "b"])
+        assert captured[0]["proxies"] == {
+            "http": "socks5h://127.0.0.1:1080",
+            "https": "socks5h://127.0.0.1:1080",
+        }
+
+    def test_no_proxy_means_no_proxies_kwarg_value(self, configured, monkeypatch):
+        result, captured = self._run(
+            monkeypatch, [FakeResponse(OPENAI_BODY)], texts=["a", "b"]
+        )
+        assert captured[0]["proxies"] is None
 
     def test_happy_path_exact_request_shape(self, configured, monkeypatch):
         result, captured = self._run(
