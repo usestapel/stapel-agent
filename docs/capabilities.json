@@ -1,6 +1,6 @@
 {
   "module": "stapel-agent",
-  "version": "0.16.1",
+  "version": "0.16.2",
   "provides": "LLM facade: JSON completion, translation, transcription and summarization in front of swappable model / speech-to-text / image-generation providers (Anthropic, OpenAI-compatible, Claude Code CLI, whisper-http, ElevenLabs, AssemblyAI, openai-images), with a prompt cache and a per-call token ledger. Python port of a prior NestJS service — same HTTP paths/contracts, plus an in-process comm surface for monolith deployments.",
   "axes": [
     {

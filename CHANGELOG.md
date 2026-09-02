@@ -5,6 +5,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.16.2] — 2026-09-02
+
+### Fixed — the LLM's proxy no longer leaks onto a different embeddings endpoint
+
+0.16.1 made `EMBEDDINGS_PROXY` fall back to `OPENAI_COMPAT_PROXY`
+unconditionally. The proxy belongs to the ENDPOINT: when
+`EMBEDDINGS_BASE_URL` is explicitly set (a local TEI, a self-hosted vLLM),
+riding the LLM's tunnel to it is exactly backwards — a deployment whose
+OpenAI account needs a proxy found its local embedder unreachable through
+that same proxy. The fallback now applies only while the base URL is also
+falling back to `OPENAI_COMPAT_BASE_URL`; an explicit `EMBEDDINGS_PROXY`
+always wins.
+
 ## [0.16.1] — 2026-09-02
 
 ### Fixed — the embeddings request now rides the proxy the LLM request rides

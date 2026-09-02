@@ -45,13 +45,16 @@ class OpenAIEmbeddingsProvider(EmbeddingProvider):
 
     @staticmethod
     def _proxies() -> dict | None:
-        # EMBEDDINGS_PROXY, falling back to OPENAI_COMPAT_PROXY — the
-        # same wire the LLM provider already rides. Applied to the one
-        # request this adapter makes, so nothing else the host fetches
-        # goes through it.
-        proxy = (
-            agent_settings.EMBEDDINGS_PROXY or agent_settings.OPENAI_COMPAT_PROXY or ""
-        ).strip()
+        # EMBEDDINGS_PROXY, falling back to OPENAI_COMPAT_PROXY — but the
+        # fallback belongs to the ENDPOINT fallback: OPENAI_COMPAT_PROXY is
+        # the wire to OPENAI_COMPAT_BASE_URL, so it rides only when the
+        # embeddings ride that same endpoint. A deployment that points
+        # EMBEDDINGS_BASE_URL somewhere else (a local TEI, a self-hosted
+        # vLLM) must not find its embedder unreachable through the LLM's
+        # tunnel. Applied to the one request this adapter makes.
+        proxy = (agent_settings.EMBEDDINGS_PROXY or "").strip()
+        if not proxy and not (agent_settings.EMBEDDINGS_BASE_URL or "").strip():
+            proxy = (agent_settings.OPENAI_COMPAT_PROXY or "").strip()
         return {"http": proxy, "https": proxy} if proxy else None
 
     def default_embedding_model(self) -> Optional[str]:

@@ -198,6 +198,33 @@ class TestOpenAIEmbeddings:
             "https": "socks5h://127.0.0.1:1080",
         }
 
+    def test_the_llm_proxy_never_leaks_onto_a_different_endpoint(
+        self, settings, monkeypatch
+    ):
+        """OPENAI_COMPAT_PROXY belongs to the endpoint the LLM rides. When
+        EMBEDDINGS_BASE_URL points somewhere ELSE (a local TEI, say), the
+        fallback proxy must not ride along — a deployment whose LLM needs a
+        tunnel would find its local embedder unreachable through it."""
+        settings.STAPEL_AGENT = {
+            "OPENAI_COMPAT_BASE_URL": "https://api.openai.com/v1",
+            "OPENAI_COMPAT_PROXY": "http://45.67.130.45:2000",
+            "EMBEDDINGS_BASE_URL": "http://embedder:3000/v1",
+        }
+        captured = []
+        mock_post(monkeypatch, "openai_compat", [FakeResponse(OPENAI_BODY)], captured)
+        OpenAIEmbeddingsProvider().embed(texts=["a", "b"])
+        assert captured[0]["proxies"] is None
+
+    def test_an_explicit_embeddings_proxy_always_wins(self, settings, monkeypatch):
+        settings.STAPEL_AGENT = {
+            "EMBEDDINGS_BASE_URL": "http://embedder:3000/v1",
+            "EMBEDDINGS_PROXY": "http://tunnel:1",
+        }
+        captured = []
+        mock_post(monkeypatch, "openai_compat", [FakeResponse(OPENAI_BODY)], captured)
+        OpenAIEmbeddingsProvider().embed(texts=["a", "b"])
+        assert captured[0]["proxies"] == {"http": "http://tunnel:1", "https": "http://tunnel:1"}
+
     def test_no_proxy_means_no_proxies_kwarg_value(self, configured, monkeypatch):
         result, captured = self._run(
             monkeypatch, [FakeResponse(OPENAI_BODY)], texts=["a", "b"]
