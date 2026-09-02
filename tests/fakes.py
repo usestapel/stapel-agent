@@ -50,6 +50,11 @@ class FakeProvider(LlmProvider):
     calls: list[dict] = []
     result = ProviderResult(text='{"answer": 42}')
     error: Exception | None = None
+    #: Optional per-call hook, for the tests where the SECOND answer has to
+    #: differ from the first (a rejected answer and its revision). Takes the
+    #: same kwargs as ``complete`` and returns a ``ProviderResult``; when it
+    #: is None the flat ``result``/``error`` pair answers every call.
+    responder = None
 
     @classmethod
     def reset(cls):
@@ -63,6 +68,7 @@ class FakeProvider(LlmProvider):
             cache_write_tokens=3,
         )
         cls.error = None
+        cls.responder = None
 
     def complete(self, *, prompt, model, system_prompt=None, images=None,
                  max_tokens=None, schema=None):
@@ -79,6 +85,15 @@ class FakeProvider(LlmProvider):
         )
         if cls.error is not None:
             raise cls.error
+        if cls.responder is not None:
+            return cls.responder(
+                prompt=prompt,
+                model=model,
+                system_prompt=system_prompt,
+                images=images,
+                max_tokens=max_tokens,
+                schema=schema,
+            )
         return cls.result
 
 

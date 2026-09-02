@@ -42,6 +42,13 @@ MODEL_SIZE_RANK = {name: i + 1 for i, name in enumerate(MODEL_SIZES)}
 #: ``reason`` strings, since this failure IS an entitlement verdict.
 REASON_MODEL_SIZE_CEILING = "model_size_ceiling_exceeded"
 
+#: ``complete_json``'s answer survived the schema but failed the caller's
+#: ``validate`` callback, and the allowed revisions are spent. A distinct
+#: reason because it degrades differently from a provider failure: nothing
+#: is wrong with the transport, the model is answering in a register the
+#: caller has declared unusable, and retrying the same call will not help.
+REASON_OUTPUT_REJECTED = "output_rejected"
+
 
 class ModelSizeCeilingExceeded(Exception):
     """*model_size* is above what *user_id*'s plan entitles (see
@@ -597,6 +604,8 @@ def complete_json(
     images: list | None = None,
     max_tokens: int | None = None,
     schema: dict | None = None,
+    validate=None,
+    max_revisions: int = 0,
 ) -> dict:
     """The ``llm.complete`` surface shared by the HTTP view and the comm
     function: prepend the JSON-API system prompt (unless the caller brings
@@ -611,6 +620,23 @@ def complete_json(
     with a constraint in force it only spends tokens restating what the
     decoder already enforces. A provider that cannot constrain output
     fails the call rather than silently answering the prose way.
+
+    Pass *validate* — ``(result) -> Sequence[str]`` of violation codes,
+    empty for a pass — to check the answer's CONTENT after its shape has
+    been validated. The schema constrains what the answer looks like; it
+    says nothing about whether the prose inside it is the document that was
+    asked for or a chat turn about it, and the two are indistinguishable to
+    a decoder (see ``stapel_agent.safety.prose``). The validator runs on
+    the same object the caller will receive — the typed instance when a
+    pydantic model was given.
+
+    *max_revisions* is how many times a rejected answer is sent BACK to the
+    model with its violations named, rather than merely re-rolled: telling
+    it what was wrong is the difference between a revision and a retry. The
+    default 0 keeps every existing caller's single call. When the revisions
+    run out and the answer is still rejected the call FAILS with
+    :data:`REASON_OUTPUT_REJECTED` and the violations attached — the caller
+    never receives prose this function has already established is wrong.
     """
     schema, model = _resolve_schema(schema)
 
@@ -619,59 +645,109 @@ def complete_json(
     else:
         effective_system_prompt = system_prompt or JSON_API_SYSTEM_PROMPT
 
-    raw = complete(
-        prompt,
-        model_size,
-        system_prompt=effective_system_prompt,
-        provider=provider,
-        source=PromptSource.LLM_FACADE,
-        user_id=user_id,
-        workspace_id=workspace_id,
-        metadata=metadata,
-        images=images,
-        max_tokens=max_tokens,
-        schema=schema,
-    )
-    if raw["status"] == "failure":
-        return _drop_none(
-            {
-                "status": "failure",
-                "reason": raw.get("reason"),
-                "usage": raw.get("usage"),
-                "ceiling": raw.get("ceiling"),
-                "requested_size": raw.get("requested_size"),
-            }
+    attempt_prompt = prompt
+    violations: tuple = ()
+    # One attempt, plus one more per allowed revision.
+    for attempt in range(int(max_revisions) + 1):
+        raw = complete(
+            attempt_prompt,
+            model_size,
+            system_prompt=effective_system_prompt,
+            provider=provider,
+            source=PromptSource.LLM_FACADE,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            metadata=metadata,
+            images=images,
+            max_tokens=max_tokens,
+            schema=schema,
         )
-
-    result, comment = parse_json_response(raw.get("result") or "")
-    if result is None:
-        return _drop_none(
-            {
-                "status": "failure",
-                "reason": "Failed to parse JSON from LLM response",
-                "comment": comment,
-                "usage": raw.get("usage"),
-            }
-        )
-    if model is not None:
-        from pydantic import ValidationError
-
-        try:
-            result = model.model_validate(result)
-        except ValidationError as exc:
-            # The decoder was constrained and the answer still does not fit
-            # the type. That is worth surfacing rather than handing back a
-            # dict the caller will index into and trust.
+        if raw["status"] == "failure":
             return _drop_none(
                 {
                     "status": "failure",
-                    "reason": f"Response did not validate against {model.__name__}: {exc}",
+                    "reason": raw.get("reason"),
+                    "usage": raw.get("usage"),
+                    "ceiling": raw.get("ceiling"),
+                    "requested_size": raw.get("requested_size"),
+                }
+            )
+
+        result, comment = parse_json_response(raw.get("result") or "")
+        if result is None:
+            return _drop_none(
+                {
+                    "status": "failure",
+                    "reason": "Failed to parse JSON from LLM response",
+                    "comment": comment,
+                    "usage": raw.get("usage"),
+                }
+            )
+        if model is not None:
+            from pydantic import ValidationError
+
+            try:
+                result = model.model_validate(result)
+            except ValidationError as exc:
+                # The decoder was constrained and the answer still does not fit
+                # the type. That is worth surfacing rather than handing back a
+                # dict the caller will index into and trust.
+                return _drop_none(
+                    {
+                        "status": "failure",
+                        "reason": f"Response did not validate against {model.__name__}: {exc}",
+                        "usage": raw.get("usage"),
+                    }
+                )
+
+        if validate is None:
+            violations = ()
+        else:
+            violations = tuple(validate(result) or ())
+        if not violations:
+            return _drop_none(
+                {
+                    "status": "ok",
+                    "result": result,
+                    "comment": comment,
                     "usage": raw.get("usage"),
                 }
             )
 
+        logger.info(
+            "stapel-agent: output rejected (attempt %s/%s): %s",
+            attempt + 1,
+            int(max_revisions) + 1,
+            ", ".join(violations),
+        )
+        attempt_prompt = _revision_prompt(prompt, violations)
+
     return _drop_none(
-        {"status": "ok", "result": result, "comment": comment, "usage": raw.get("usage")}
+        {
+            "status": "failure",
+            "reason": REASON_OUTPUT_REJECTED,
+            "violations": list(violations),
+            "usage": raw.get("usage"),
+        }
+    )
+
+
+def _revision_prompt(prompt: str, violations) -> str:
+    """The original request, plus what was wrong with the last answer.
+
+    Naming the violations is the whole point. Re-sending the same prompt
+    samples the same distribution and mostly reproduces the same defect; a
+    model told which rule it broke usually does not break it twice.
+    """
+    listed = "\n".join(f"- {code}" for code in violations)
+    return (
+        f"{prompt}\n\n"
+        "Your previous answer was REJECTED and is not acceptable. "
+        "It broke these rules:\n"
+        f"{listed}\n\n"
+        "Write a new answer that breaks none of them. Do not apologise, "
+        "do not explain, do not mention this correction — return only the "
+        "corrected answer."
     )
 
 

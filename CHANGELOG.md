@@ -5,6 +5,57 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-09-03
+
+### Added — the schema constrains the shape; now something can constrain the register
+
+A constrained decoder guarantees that `description` is a string. It
+guarantees nothing about whether that string is the document the product
+asked for or a chat turn about it, and from the caller's side the two are
+indistinguishable — both are well-formed strings in the right field.
+
+Observed on a live client fleet's listing composer, which asks a vision
+model for a sale description: what came back was a caption of the
+photograph («on the photo you can see three cameras and a lidar»), an
+assessment hedged to the image rather than the item, and a closing offer to
+keep the conversation going («if you need any more details from the photo,
+I'll tell you»). Every one of those answers validated against its pydantic
+model. None of them is a listing. A prompt asking for better is a request,
+not a mechanism — the model declines it often enough to matter.
+
+So `complete_json` grows two parameters. `validate` is a
+`(result) -> Sequence[str]` returning violation codes, run on the object
+the caller will actually receive (the typed instance when a model was
+given) after pydantic has passed it. `max_revisions` is how many times a
+rejected answer goes BACK to the model with its violations named — telling
+it which rule it broke, which is the difference between a revision and a
+re-roll of the same distribution. Both default to off, so every existing
+call is byte-for-byte the call it was.
+
+When the revisions run out and the answer is still rejected, the call fails
+with the new `REASON_OUTPUT_REJECTED` and the violations attached. It is a
+distinct reason because it degrades differently from a provider failure:
+the transport is fine, the model is answering in a register the caller has
+declared unusable, and retrying will not help.
+
+`stapel_agent.safety.prose` ships the contract the composer case needed —
+`ProseContract(max_chars, banned_phrases, reject_trailing_question,
+banned_endings)` and `check_prose(text, contract) -> tuple[str, ...]`.
+Matching folds case and «ё»→«е», because «ё» is optional in written Russian
+and a banned phrase that misses half its spellings is a check that reports
+clean because it cannot see. `max_chars` counts CHARACTERS: a one-line
+title on a storefront is bounded by glyphs, and a Cyrillic title is not two
+thirds the length of its Latin equivalent. `banned_endings` is separate
+from `banned_phrases` on purpose — an offer to keep talking is a defect
+only where it closes the text; the same words mid-sentence are ordinary
+prose.
+
+What is deliberately NOT here: any actual phrase list. The contract is a
+mechanism and belongs in the library; the phrases are a fact about a
+product's language and market and belong in the caller's settings. A
+library shipping a banned-phrase list in Russian has guessed at somebody's
+product.
+
 ## [0.16.2] — 2026-09-02
 
 ### Fixed — the LLM's proxy no longer leaks onto a different embeddings endpoint
