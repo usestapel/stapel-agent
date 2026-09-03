@@ -598,7 +598,6 @@ def check_configured_models_are_priced(app_configs, **kwargs):
     """
     from .conf import agent_settings
     from .pricing import is_priced
-    from .providers.base import ProviderError
     from .services import get_provider
 
     models = agent_settings.MODELS or {}
@@ -607,9 +606,13 @@ def check_configured_models_are_priced(app_configs, **kwargs):
 
     try:
         backend = get_provider(agent_settings.DEFAULT_PROVIDER)
-    except (ProviderError, ImportError):
-        # E001/W001 own this finding, and without a provider there is no
-        # resolve_model to ask.
+    except Exception:  # noqa: BLE001
+        # E001/W001/W016 own this finding, and without a provider there is no
+        # resolve_model to ask. Deliberately every exception, not just
+        # ProviderError/ImportError: PROVIDERS is an open extension point, a
+        # host-registered class may raise anything at all from its
+        # constructor, and a system check that takes `manage.py check` down
+        # with it blocks the deploy it was added to inform.
         return []
 
     unpriced: dict[str, list[str]] = {}

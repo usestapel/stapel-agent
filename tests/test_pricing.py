@@ -314,6 +314,25 @@ class TestTheDeploymentsOwnModelsAreChecked:
         settings.STAPEL_AGENT = {"DEFAULT_PROVIDER": "nope"}
         assert self._ids() == []
 
+    def test_a_provider_that_explodes_on_construction_does_not_break_check(
+        self, settings
+    ):
+        """PROVIDERS is an open extension point: a host-registered class may
+        raise anything at all from its constructor. A system check that goes
+        down with it blocks the very deploy it was added to inform — and the
+        broken provider is already W001/W002/W016's finding, not this one's."""
+
+        class Exploding:
+            def __init__(self):
+                raise RuntimeError("no credentials, and I am rude about it")
+
+        settings.STAPEL_AGENT = {
+            "DEFAULT_PROVIDER": "boom",
+            "PROVIDERS": {"boom": Exploding},
+            "MODELS": {"small": "no-such-model-9"},
+        }
+        assert self._ids() == []
+
     def test_it_is_registered(self):
         from django.core.checks.registry import registry
 

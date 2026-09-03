@@ -3,6 +3,17 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.19.1] — 2026-09-03
+
+### Fixed
+
+- `W018` no longer takes `manage.py check` down with a provider that raises
+  from its constructor. `PROVIDERS` is an open extension point, so a
+  host-registered class may raise anything at all; the check caught only
+  `ProviderError`/`ImportError`. A system check that dies blocks the deploy it
+  was added to inform — and a broken provider is already W001/W002/W016's
+  finding, not this one's. Every exception is now a clean "not my finding".
+
 ## [0.19.0] — 2026-09-03
 
 ### Added — the rate card is now checked against the configuration, not only against itself
