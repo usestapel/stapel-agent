@@ -3,6 +3,59 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.19.0] — 2026-09-03
+
+### Added — the rate card is now checked against the configuration, not only against itself
+
+`stapel_agent.W018`: a Django system check that resolves the models THIS
+deployment is configured to call and names any the rate card has never heard
+of, at `manage.py check` time.
+
+The defect it closes was live. A client fleet's AI composer pointed all three
+ladder rungs at `gpt-5.2` through `OPENAI_COMPAT_MODELS`; the model was not in
+`PRICES_USD_PER_MTOK`, so every call — vision draft, category descent,
+characteristic filling — stored `cost_basis=unpriced` and `cost_usd=0.0`. That
+storage was correct and did exactly its job: it said *unknown*, not *free*.
+`services.complete()` even logged a warning naming the model. Both are per
+call, inside a worker, on the same line every time — 352 rows in a single day,
+and metering that could not cost the feature at all.
+
+`test_the_default_large_model_is_priced` was green throughout, because the
+shipped ladder is not what the deployment called. A gate that proves the
+library's defaults right proves nothing about a settings file that overrides
+them. W018 asks the deployment's own question instead, and asks it once, before
+the first call rather than after each one.
+
+Models resolve through `backend.resolve_model()` — the same seam `complete()`
+uses — so an `openai-compat` overlay is what gets checked, and a provider that
+overrides model resolution is covered without this check knowing about it.
+Warning, not Error: a deployment may not care what its calls cost, and a
+provider that reports its own charge never consults the table. An unknown
+`DEFAULT_PROVIDER` is left to E001, which already names it.
+
+Also: `check_agent_beat_schedule_is_registered` was missing from `__all__`.
+
+### Added — rate cards for the models a live deployment was calling
+
+- `gpt-5.2` — $1.75 / $14.00 per MTok
+- `gpt-5.2-pro` — $21.00 / $168.00 per MTok
+
+Verified against https://developers.openai.com/api/docs/pricing and the model's
+own page, both fetched 3 Sep 2026, STANDARD tier — which is what this facade
+calls. The page lists Batch and Flex separately at exactly half ($0.875/$7.00)
+and third-party aggregators were quoting that half as OpenAI's standard price:
+the same trap the `grok-4.20` entry already records, and the same answer, the
+primary source wins.
+
+### Fixed — snapshot ids in the other provider's spelling were unpriced
+
+`_DATE_SUFFIX` stripped only Anthropic's `-YYYYMMDD`. OpenAI dates its
+snapshots `-YYYY-MM-DD` (the published id is `gpt-5.2-2025-12-11`), so an
+echoed snapshot id missed the table even once the base alias was in it — a
+missing rate card one string away from a present one. Both spellings now
+normalize; nothing else does, so `gpt-5.2-turbo` still cannot borrow
+`gpt-5.2`'s price.
+
 ## [0.18.0] — 2026-09-03
 
 ### Added

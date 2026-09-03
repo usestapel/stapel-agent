@@ -31,7 +31,7 @@ registries). Everything below is verifiable against the code in this repo.
 | Cache (`cache.py`) | `CachePolicy` ABC (`should_cache` / `lookup` / optional `store`) + `PromptLogCachePolicy` default (PromptLog rows + `CACHE_LOOKUP`/`CACHE_TTL`) |
 | Privacy & retention (`gdpr.py`, `retention.py`, `management/`) | `AgentGDPRProvider` (section `agent`; registered into `stapel_core.gdpr.gdpr_registry` from `AgentConfig.ready()`, so subject export/erasure reaches the prompt ledger), `purge_prompt_logs()` + `scrub_queryset()` (scrub the text, keep the counters), management command `purge_prompt_logs [--days N] [--dry-run]` — the job a deployment schedules |
 | Safety (`safety/`) | `redaction_gate` (provider keys/env secrets never reach a durable artifact), `detect_pwned_markers` / `redact_markers` / `sanitize_for_rag` (prompt-injection flag+escape split), `detect_structured_output_leak` (structured-output scaffolding leaking into a plain answer) |
-| System checks (`checks.py`) | `stapel_agent.E001` (DEFAULT_PROVIDER not in the effective registry), `W001` (unimportable provider path), `W002` (entry is not an `LlmProvider` subclass), `W003`/`W004` (the STT equivalents), `W005`/`W006` (the image-registry equivalents) — registered from `AgentConfig.ready()` |
+| System checks (`checks.py`) | `stapel_agent.E001` (DEFAULT_PROVIDER not in the effective registry), `W001` (unimportable provider path), `W002` (entry is not an `LlmProvider` subclass), `W003`/`W004` (the STT equivalents), `W005`/`W006` (the image-registry equivalents), `W018` (a model this deployment is configured to call has no rate card, so its calls store `cost_basis=unpriced`) — registered from `AgentConfig.ready()` |
 | Public API (`__init__.py`, PEP 562 lazy) | `__all__ = ["AudioRef", "CachePolicy", "GeneratedImage", "ImageGenProvider", "ImageRef", "LlmProvider", "NormalizedTranscript", "ProviderResult", "SttProvider", "agent_settings", "complete", "generate_image", "register_image_provider", "register_provider", "register_stt_provider", "registered_image_providers", "registered_providers", "registered_stt_providers", "summarize", "transcribe", "translate"]` — Django-free at import |
 
 ## Extension points (fork-free)
@@ -200,6 +200,17 @@ hybrid diarization stages are included; the bare card otherwise, which is how
 a host-registered adapter gets priced). A provider that reports no duration,
 or one with no rate card, leaves the row `unpriced` and says so in the log —
 unknown, never free.
+
+`unpriced` is honest, and honest is not the same as visible. The warning is one
+line per call, in a worker, identical every time: a client fleet ran a whole
+composer feature that way and metering could not cost it at all. So the rate
+card is also checked against the configuration, not just against itself —
+`stapel_agent.W018` resolves the models this deployment will actually call
+(through the provider's own `resolve_model`, so an `OPENAI_COMPAT_MODELS`
+overlay is what gets checked, not the ladder underneath it) and names any that
+`pricing.PRICES_USD_PER_MTOK` has never heard of, at `manage.py check` time,
+before the first call. A test that guards the shipped ladder is green about the
+wrong models the moment a deployment overrides them.
 
 ABC contract (`stt/base.py`, Django-free):
 

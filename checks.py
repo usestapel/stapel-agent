@@ -18,6 +18,9 @@ Registered from ``AgentConfig.ready()``. IDs:
   the two never fire together.
 - ``stapel_agent.W015`` — the STT audio-download allowlist is empty and
   no wildcard is declared, so every URL AudioRef is refused.
+- ``stapel_agent.W018`` — a model THIS deployment is configured to call is
+  not in ``pricing.PRICES_USD_PER_MTOK``, so every call it makes stores
+  ``cost_basis=unpriced`` and metering cannot cost the feature.
 
 Import/subclass problems are warnings, not errors, on purpose: providers
 resolve lazily per request and degrade to ``status: "failure"`` — a
@@ -564,6 +567,91 @@ def check_stt_download_allowlist(app_configs, **kwargs):
     ]
 
 
+@checks.register("stapel_agent")
+def check_configured_models_are_priced(app_configs, **kwargs):
+    """W018: this deployment calls a model the rate card has never heard of.
+
+    ``pricing.cost_fields()`` already records the gap honestly — the row
+    lands with ``cost_basis="unpriced"`` rather than pretending the call was
+    free — and ``services.complete()`` already logs a warning naming the
+    model. Both are per call, inside a worker, on the same line every time.
+    A live client fleet ran that way for a fortnight: 352 composer calls in
+    one day, each one warning, each warning read by nobody, and metering
+    unable to cost the feature at all.
+
+    A test guarded the SHIPPED ladder (``conf.defaults["MODELS"]``) and was
+    green the whole time, because the ladder was not what the deployment
+    called: every rung was overridden to ``gpt-5.2`` through
+    ``OPENAI_COMPAT_MODELS``. So the question this check asks is not "is the
+    table complete" but "is the table complete FOR THIS SETTINGS FILE", and
+    it asks it once, at ``manage.py check`` time, before the first call.
+
+    Models are resolved through ``backend.resolve_model()`` — the same seam
+    ``complete()`` uses at services.py — rather than by re-deriving the
+    openai-compat overlay here. A provider that overrides model resolution
+    gets checked correctly for free; a copy of the rule would drift.
+
+    Warning, not Error: a deployment may not care what its calls cost, and a
+    provider that reports its own charge (``cost_basis="provider_ticks"``)
+    never consults the table at all. An unknown ``DEFAULT_PROVIDER`` is left
+    to E001, which already names it — two findings for one typo is noise.
+    """
+    from .conf import agent_settings
+    from .pricing import is_priced
+    from .providers.base import ProviderError
+    from .services import get_provider
+
+    models = agent_settings.MODELS or {}
+    if not models:
+        return []
+
+    try:
+        backend = get_provider(agent_settings.DEFAULT_PROVIDER)
+    except (ProviderError, ImportError):
+        # E001/W001 own this finding, and without a provider there is no
+        # resolve_model to ask.
+        return []
+
+    unpriced: dict[str, list[str]] = {}
+    for size, default in sorted(models.items()):
+        try:
+            model = backend.resolve_model(size, default)
+        except Exception:  # noqa: BLE001 — a check must not break `manage.py`
+            continue
+        if model and not is_priced(model):
+            unpriced.setdefault(model, []).append(size)
+
+    if not unpriced:
+        return []
+
+    named = ", ".join(
+        f"{model!r} (rung{'s' if len(sizes) > 1 else ''} {', '.join(sizes)})"
+        for model, sizes in sorted(unpriced.items())
+    )
+    return [
+        checks.Warning(
+            f"This deployment is configured to call {named}, which "
+            f"{'are' if len(unpriced) > 1 else 'is'} not in "
+            "stapel_agent.pricing.PRICES_USD_PER_MTOK. Every completion from "
+            f"{'those models' if len(unpriced) > 1 else 'that model'} will "
+            "be stored with cost_basis=unpriced and cost_usd=0.0, so metering "
+            "cannot cost the feature — it will read as free rather than as "
+            "unknown.",
+            hint=(
+                "Add the model to stapel_agent.pricing.PRICES_USD_PER_MTOK "
+                "with the provider's PUBLISHED price, and the source URL and "
+                "fetch date beside it — a price without a provenance line is "
+                "a number someone remembered. If the price cannot be "
+                "verified, leave it out: cost_basis=unpriced is a true "
+                "answer and a guessed rate card is not. If this provider "
+                "reports its own charge, no entry is needed — those rows "
+                "land as cost_basis=provider_ticks."
+            ),
+            id="stapel_agent.W018",
+        )
+    ]
+
+
 def _registry_issues(
     *,
     kind: str,
@@ -621,6 +709,8 @@ def _registry_issues(
 
 __all__ = [
     "PURGE_JOB_NAME",
+    "check_agent_beat_schedule_is_registered",
+    "check_configured_models_are_priced",
     "check_diarization_providers",
     "check_embedding_providers",
     "check_image_providers",

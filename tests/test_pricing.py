@@ -53,6 +53,13 @@ class TestTheCardsThatWereMissing:
             ("claude-mythos-5", (10.0, 50.0)),
             ("claude-sonnet-5", (2.0, 10.0)),
             ("claude-haiku-4-5", (1.0, 5.0)),
+            # The models a live client fleet was actually calling while the
+            # table had never heard of them: all three ladder rungs pointed
+            # at gpt-5.2 through the openai-compat provider, so
+            # every composer call — vision draft, category descent,
+            # characteristic filling — logged cost_basis=unpriced.
+            ("gpt-5.2", (1.75, 14.0)),
+            ("gpt-5.2-pro", (21.0, 168.0)),
         ],
     )
     def test_verified_against_the_published_list(self, model, expected):
@@ -109,6 +116,24 @@ class TestEstimate:
     def test_dated_snapshot_suffix_resolves_to_the_base_alias(self):
         """Providers hand back `claude-haiku-4-5-20251001`; the table keys the base."""
         assert estimate_cost("claude-haiku-4-5-20251001", 1_000_000, 0) == pytest.approx(1.0)
+
+    def test_a_hyphenated_snapshot_suffix_also_resolves(self):
+        """OpenAI dates its snapshots ``-YYYY-MM-DD``, not ``-YYYYMMDD``.
+
+        The published id for the model this fleet calls is
+        ``gpt-5.2-2025-12-11``. A normalizer that only knows Anthropic's
+        spelling prices the base alias and leaves every snapshot id
+        unpriced — the same blindness, one string away.
+        """
+        assert estimate_cost("gpt-5.2-2025-12-11", 1_000_000, 0) == pytest.approx(1.75)
+        assert is_priced("gpt-5.2-2025-12-11")
+
+    def test_a_non_date_suffix_is_not_stripped(self):
+        """Only a date is a snapshot. A normalizer greedy enough to eat any
+        trailing segment would make one model's price answer for another's,
+        which is a fabricated cost with extra steps."""
+        assert not is_priced("gpt-5.2-turbo")
+        assert not is_priced("claude-sonnet-5-cheap")
 
     def test_an_unknown_model_costs_zero_and_says_so(self, caplog):
         """A fabricated price does not stay isolated — it gets summed."""
@@ -184,3 +209,114 @@ class TestCostBasis:
             input_tokens=1_000_000, output_tokens=0, cost_in_usd_ticks=True,
         )
         assert fields["cost_basis"] == "pricing_estimate"
+
+
+class TestTheDeploymentsOwnModelsAreChecked:
+    """W018: the table being right is worth nothing if this deployment
+    calls something that is not in it.
+
+    ``test_the_default_large_model_is_priced`` above guards the SHIPPED
+    ladder and passed all along, while a live client fleet pointed all
+    three rungs at ``gpt-5.2`` through ``OPENAI_COMPAT_MODELS`` and logged
+    every composer call — vision draft, category descent, characteristic
+    filling — with ``cost_basis=unpriced``. Nine hundred rows, one warning
+    line per row in a worker's log, and metering that could not cost the
+    feature at all. The gate was green about the wrong models.
+
+    So the check resolves the models THIS deployment will actually call,
+    through the same ``resolve_model`` seam ``complete()`` uses, and says
+    so at ``manage.py check`` time — before the first call, not once per
+    call.
+    """
+
+    def _run(self):
+        from stapel_agent.checks import check_configured_models_are_priced
+
+        return check_configured_models_are_priced(app_configs=None)
+
+    def _ids(self):
+        return [issue.id for issue in self._run()]
+
+    def test_the_shipped_ladder_is_clean(self, settings):
+        settings.STAPEL_AGENT = {}
+        assert self._ids() == []
+
+    def test_an_unpriced_configured_model_warns(self, settings):
+        settings.STAPEL_AGENT = {
+            "MODELS": {"small": "no-such-model-9", "medium": "claude-sonnet-5"},
+        }
+        assert self._ids() == ["stapel_agent.W018"]
+
+    def test_the_warning_names_the_model_and_the_rung(self, settings):
+        """A warning that says "some model is unpriced" sends the reader
+        looking; this one hands over the string to paste into the table."""
+        settings.STAPEL_AGENT = {
+            "MODELS": {"small": "no-such-model-9", "medium": "claude-sonnet-5"},
+        }
+        message = self._run()[0].msg
+        assert "no-such-model-9" in message
+        assert "small" in message
+        assert "claude-sonnet-5" not in message
+
+    def test_it_is_a_warning_not_an_error(self, settings):
+        """A deployment may not care what its calls cost, and a provider
+        that reports its own charge never lands on the table at all."""
+        from django.core import checks as django_checks
+
+        settings.STAPEL_AGENT = {"MODELS": {"small": "no-such-model-9"}}
+        assert self._run()[0].level == django_checks.WARNING
+
+    def test_the_hint_names_the_table_to_edit(self, settings):
+        settings.STAPEL_AGENT = {"MODELS": {"small": "no-such-model-9"}}
+        hint = self._run()[0].hint
+        assert "PRICES_USD_PER_MTOK" in hint
+        assert "cost_basis=unpriced" in hint
+
+    def test_the_openai_compat_overlay_is_what_gets_checked(self, settings):
+        """The exact live shape: the Anthropic ladder underneath is fully
+        priced, and every rung is overridden to a model the table has never
+        heard of. Reading MODELS alone reports all clear."""
+        settings.STAPEL_AGENT = {
+            "DEFAULT_PROVIDER": "openai-compat",
+            "OPENAI_COMPAT_BASE_URL": "https://api.openai.com/v1",
+            "MODELS": {
+                "small": "claude-haiku-4-5-20251001",
+                "medium": "claude-sonnet-5",
+                "large": "claude-opus-5",
+            },
+            "OPENAI_COMPAT_MODELS": {
+                "small": "no-such-model-9",
+                "medium": "no-such-model-9",
+                "large": "no-such-model-9",
+            },
+        }
+        issues = self._run()
+        assert [i.id for i in issues] == ["stapel_agent.W018"]
+        assert "no-such-model-9" in issues[0].msg
+
+    def test_the_overlay_that_this_fleet_now_ships_is_priced(self, settings):
+        """gpt-5.2 on all three rungs — the client fleet's stand .env, the
+        configuration that produced the unpriced rows."""
+        settings.STAPEL_AGENT = {
+            "DEFAULT_PROVIDER": "openai-compat",
+            "OPENAI_COMPAT_BASE_URL": "https://api.openai.com/v1",
+            "OPENAI_COMPAT_MODELS": {
+                "small": "gpt-5.2",
+                "medium": "gpt-5.2",
+                "large": "gpt-5.2",
+            },
+        }
+        assert self._ids() == []
+
+    def test_an_unknown_default_provider_is_left_to_E001(self, settings):
+        """Two findings for one typo is noise; E001 already names it, and
+        this check cannot resolve models without a provider."""
+        settings.STAPEL_AGENT = {"DEFAULT_PROVIDER": "nope"}
+        assert self._ids() == []
+
+    def test_it_is_registered(self):
+        from django.core.checks.registry import registry
+
+        from stapel_agent.checks import check_configured_models_are_priced
+
+        assert check_configured_models_are_priced in registry.registered_checks

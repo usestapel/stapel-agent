@@ -89,6 +89,24 @@ PRICES_USD_PER_MTOK: dict[str, dict[str, float]] = {
     "grok-4.20-0309-non-reasoning": {"input": 1.25, "output": 2.5},
     # OpenAI gpt-5.6-luna: platform.openai.com/docs/pricing (short-context)
     "gpt-5.6-luna": {"input": 1.0, "output": 6.0},
+    # --- The models a live deployment was calling while unpriced -----------
+    # A client fleet points ALL THREE ladder rungs at gpt-5.2 through the
+    # openai-compat provider, so every AI-composer call — vision draft,
+    # category descent, characteristic filling — stored cost_basis=unpriced
+    # and metering could not cost the feature at all (352 rows over 2026-09-02
+    # alone). W018 below is why that can no longer happen quietly.
+    #
+    # verified https://developers.openai.com/api/docs/pricing (the
+    # platform.openai.com/docs/pricing URL now 301s there) AND the model's own
+    # page https://developers.openai.com/api/docs/models/gpt-5.2, both fetched
+    # 3 Sep 2026. STANDARD tier, which is what this facade calls: the page
+    # lists Batch and Flex separately at exactly half ($0.875/$7.00), and
+    # third-party aggregators were quoting that half as if it were OpenAI's
+    # standard price. Same trap as the grok-4.20 entry below — the primary
+    # source wins. Cached input ($0.175) is recorded by the provider but not
+    # modelled here, for the reason the module docstring gives.
+    "gpt-5.2": {"input": 1.75, "output": 14.0},
+    "gpt-5.2-pro": {"input": 21.0, "output": 168.0},
     # Meta Model API muse-spark-1.1 (public preview 2026-07-09):
     # ai.developer.meta.com pricing page ($1.25/$4.25, cached in $0.15)
     "muse-spark-1.1": {"input": 1.25, "output": 4.25},
@@ -97,8 +115,16 @@ PRICES_USD_PER_MTOK: dict[str, dict[str, float]] = {
 }
 
 
-# Trailing dated snapshot suffix, e.g. "claude-haiku-4-5-20251001" -> base alias.
-_DATE_SUFFIX = re.compile(r"-\d{8}$")
+# Trailing dated snapshot suffix -> base alias. Providers date their snapshots
+# in two spellings and a table that knows only one prices the base id and
+# leaves every snapshot unpriced — the same blindness as a missing row, one
+# string away:
+#   Anthropic  "claude-haiku-4-5-20251001"   -YYYYMMDD
+#   OpenAI     "gpt-5.2-2025-12-11"          -YYYY-MM-DD
+# Only a date is stripped. A normalizer greedy enough to eat any trailing
+# segment would let "gpt-5.2-turbo" answer with gpt-5.2's price, which is a
+# fabricated cost with extra steps.
+_DATE_SUFFIX = re.compile(r"-\d{8}$|-\d{4}-\d{2}-\d{2}$")
 
 #: Providers whose completion count EXCLUDES reasoning tokens. Membership here
 #: is a measured fact about a provider's accounting, not a preference.
@@ -110,7 +136,7 @@ USD_PER_TICK = 1e-10
 
 
 def _normalize_model(model: str) -> str:
-    """Strip a trailing ``-YYYYMMDD`` snapshot suffix to match a base alias."""
+    """Strip a trailing dated snapshot suffix (either spelling) to match a base alias."""
     return _DATE_SUFFIX.sub("", model or "")
 
 
