@@ -61,21 +61,48 @@ class ProseContract:
         case- and «ё»-insensitively.
     :param reject_trailing_question: refuse a text that ends on a question
         mark. A document does not interrogate its reader; a chat turn does.
+    :param banned_patterns: regular expressions that must not match ANYWHERE.
+        The escalation from ``banned_phrases``, and the reason it exists: a
+        phrase list bans what somebody thought of. A live composer routed
+        around «на фото» inside one attempt — «по предоставленному фото
+        определить невозможно», «по фото не указаны» — and every variant is
+        the same register, the text treating the photograph as its source of
+        knowledge instead of describing the item. Answering that with more
+        literals is whack-a-mole against a model with more spellings than the
+        list has rows; a pattern states the SHAPE once. Both fields are kept
+        because an exact string is easier to read and impossible to get
+        wrong, and is right wherever it is enough.
     :param banned_endings: regular expressions that must not match at the
         END of the text. Separate from ``banned_phrases`` on purpose — an
         offer to keep talking is only a defect where it closes the text, and
         the same words mid-sentence are ordinary prose.
+
+    Every pattern field is compiled in ``__post_init__``, so a malformed
+    regex raises where the contract is DECLARED — at import, next to the
+    settings that state it — and not an hour later on the first generated
+    text that happened to reach it.
     """
 
     max_chars: int | None = None
     banned_phrases: tuple[str, ...] = ()
     reject_trailing_question: bool = False
+    banned_patterns: tuple[str, ...] = ()
     banned_endings: tuple[str, ...] = ()
 
+    #: Compiled ``banned_patterns``, built once per contract.
+    _patterns: tuple = field(default=(), init=False, repr=False, compare=False)
     #: Compiled ``banned_endings``, built once per contract.
     _endings: tuple = field(default=(), init=False, repr=False, compare=False)
 
     def __post_init__(self):
+        # Folded before compiling, like every other rule here: «ё» is
+        # optional in written Russian and a model emits it inconsistently,
+        # so a pattern that respects it is a check that cannot see half the
+        # spellings it was written for.
+        anywhere = tuple(
+            (pattern, re.compile(_fold(pattern))) for pattern in self.banned_patterns
+        )
+        object.__setattr__(self, "_patterns", anywhere)
         compiled = tuple(
             (pattern, re.compile(_fold(pattern) + r"[" + re.escape(_TAIL_NOISE) + r"]*$"))
             for pattern in self.banned_endings
@@ -92,7 +119,7 @@ def check_prose(text: str, contract: ProseContract) -> tuple[str, ...]:
     operator reading a log learns which rule fired.
 
     Codes: ``too_long``, ``trailing_question``, ``banned_phrase:<phrase>``,
-    ``banned_ending:<pattern>``.
+    ``banned_pattern:<pattern>``, ``banned_ending:<pattern>``.
     """
     violations: list[str] = []
     raw = str(text or "")
@@ -104,6 +131,10 @@ def check_prose(text: str, contract: ProseContract) -> tuple[str, ...]:
     for phrase in contract.banned_phrases:
         if phrase and _fold(phrase) in folded:
             violations.append(f"banned_phrase:{phrase}")
+
+    for pattern, compiled in contract._patterns:
+        if compiled.search(folded):
+            violations.append(f"banned_pattern:{pattern}")
 
     stripped = raw.rstrip(" \t\r\n")
     if contract.reject_trailing_question and stripped.endswith(("?", "？")):

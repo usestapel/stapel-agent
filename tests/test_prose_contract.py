@@ -18,6 +18,7 @@ to say so to the model and ask again rather than handing the caller prose it
 has already established is wrong.
 """
 import json
+import re
 
 import pytest
 from pydantic import BaseModel, ConfigDict
@@ -218,3 +219,81 @@ class TestCompleteJsonRevises:
             max_revisions=1,
         )
         assert seen == [Draft]
+
+
+# --- banned_patterns (0.18.0) ----------------------------------------------
+#
+# A phrase list bans what somebody thought of. The live composer routed
+# around «на фото» in one attempt — «по предоставленному фото определить
+# невозможно», «по фото не указаны» — and every one of those is the same
+# register: the text is talking about the photograph as its source of
+# knowledge instead of describing the item for sale. Answering that with
+# more literals is whack-a-mole with a model that has more spellings than
+# the list has rows.
+#
+# So the contract gains a way to state the SHAPE. Kept beside
+# `banned_phrases` rather than replacing it: an exact string is easier to
+# read, impossible to get wrong, and right for the cases where it is enough.
+
+
+def test_a_pattern_catches_what_a_phrase_list_missed():
+    from stapel_agent.safety.prose import ProseContract, check_prose
+
+    contract = ProseContract(
+        banned_patterns=(r"\b(?:на|по|судя по)\s+(?:\w+\s+)?фото\w*",),
+    )
+    for text in (
+        "На фото видно три камеры.",
+        "По фото не указаны характеристики.",
+        "По предоставленному фото определить невозможно.",
+        "Судя по фотографии, состояние хорошее.",
+    ):
+        assert check_prose(text, contract), text
+
+
+def test_a_pattern_leaves_ordinary_prose_alone():
+    """The ban is on a register, not on a word. A listing may sell a camera,
+    mention a photo studio, or offer to send more pictures — none of those is
+    the text hedging about what it can tell from an image."""
+    from stapel_agent.safety.prose import ProseContract, check_prose
+
+    contract = ProseContract(
+        banned_patterns=(r"\b(?:на|по|судя по)\s+(?:\w+\s+)?фото\w*",),
+    )
+    for text in (
+        "Фотоаппарат Canon EOS 6D, состояние отличное.",
+        "Продаётся фотостудия под ключ.",
+        "Отправлю фото по запросу.",
+    ):
+        assert check_prose(text, contract) == (), text
+
+
+def test_a_pattern_violation_names_the_pattern():
+    """The code travels into the revision prompt, so it has to say which
+    rule broke — the same contract `banned_phrase:`/`banned_ending:` keep."""
+    from stapel_agent.safety.prose import ProseContract, check_prose
+
+    contract = ProseContract(banned_patterns=(r"\bвидно\b",))
+    assert check_prose("Хорошо видно корпус.", contract) == ("banned_pattern:\\bвидно\\b",)
+
+
+def test_a_pattern_folds_case_and_yo_like_every_other_rule():
+    from stapel_agent.safety.prose import ProseContract, check_prose
+
+    contract = ProseContract(banned_patterns=(r"\bберёзовый\b",))
+    assert check_prose("БЕРЕЗОВЫЙ шкаф", contract) != ()
+
+
+def test_an_invalid_pattern_is_refused_at_declaration_time():
+    """A contract is built once, at import; a bad regex must fail there and
+    not on the first generated text an hour later."""
+    from stapel_agent.safety.prose import ProseContract
+
+    with pytest.raises(re.error):
+        ProseContract(banned_patterns=(r"(unclosed",))
+
+
+def test_no_patterns_declared_rejects_nothing():
+    from stapel_agent.safety.prose import ProseContract, check_prose
+
+    assert check_prose("На фото видно всё.", ProseContract()) == ()

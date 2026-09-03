@@ -3,6 +3,28 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.18.0] — 2026-09-03
+
+### Added
+
+- `ProseContract.banned_patterns` — regular expressions that must not match
+  anywhere in the text, the escalation from `banned_phrases`. A phrase list
+  bans what somebody thought of: a live composer routed around a banned
+  «на фото» inside a single attempt («по предоставленному фото определить
+  невозможно», «по фото не указаны»), and every variant is the same register
+  — the text treating the photograph as its source of knowledge instead of
+  describing the item for sale. Answering that with more literals is
+  whack-a-mole against a model with more spellings than the list has rows; a
+  pattern states the shape once. Violations travel as
+  `banned_pattern:<pattern>`, so the revision prompt names the rule that
+  broke like every other code here.
+
+  Patterns are folded (case, «ё»→«е») and compiled in `__post_init__`, so a
+  malformed regex raises where the contract is DECLARED rather than an hour
+  later on the first generated text that reached it. `banned_phrases` stays:
+  an exact string is easier to read, impossible to get wrong, and right
+  wherever it is enough. An undeclared field rejects nothing.
+
 ## [Unreleased]
 
 ## [0.17.0] — 2026-09-03
