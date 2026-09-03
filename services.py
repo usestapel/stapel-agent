@@ -274,6 +274,27 @@ def _identity(user_id, workspace_id) -> dict:
     }
 
 
+def _embedding_tokens(usage: dict | None) -> int | None:
+    """The billable input-token count an embeddings provider reported.
+
+    None means the provider said nothing, which is the embeddings analogue
+    of STT's missing ``duration_ms``: no billable quantity, so no cost — as
+    opposed to a quantity of zero. Providers spell it ``prompt_tokens``
+    (OpenAI and everything OpenAI-shaped, including the self-hosted TEI
+    servers that copy its envelope) or, failing that, ``total_tokens``;
+    embeddings have no output tokens, so the two agree wherever both
+    appear. Anything non-integer is treated as unreported rather than
+    coerced — a count guessed from a string is a fabricated quantity.
+    """
+    if not isinstance(usage, dict):
+        return None
+    for key in ("prompt_tokens", "total_tokens", "input_tokens"):
+        value = usage.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+    return None
+
+
 def _cost_columns(cost: dict | None) -> dict:
     """``pricing.cost_fields()`` output as PromptLog columns.
 
@@ -1485,9 +1506,12 @@ def embed(
     a model ignore it — the returned ``embeddings.model`` is always what
     ACTUALLY ran, never an echo of the request.
 
-    One PromptLog row per call — ``source=embed``, ``model`` = provider
-    name, and ONLY counts/usage in the row: prompt = ``texts:<n>``,
-    response null, metadata carries ``{model, batch_size, dim, usage}``.
+    One PromptLog row per call — ``source=embed``, ``model`` = the MODEL
+    the provider reported (the provider name moves to
+    ``metadata["provider"]``, and is the fallback only when a self-hosted
+    server reports no model at all), and ONLY counts/usage in the row:
+    prompt = ``texts:<n>``, response null, metadata carries
+    ``{provider, model, batch_size, dim, usage, priced_by?}``.
     **Never the texts** — embedding inputs are customer data and must not
     leak into the ledger (privacy canon — the safe thing is the default;
     same rule as STT keyterms). The vectors likewise never land in the
@@ -1502,19 +1526,41 @@ def embed(
     batch_size = len(texts) if isinstance(texts, (list, tuple)) else 0
     start = time.monotonic()
 
-    def _log(status: str, *, error: str | None = None, extra: dict | None = None):
+    def _log(
+        status: str,
+        *,
+        error: str | None = None,
+        extra: dict | None = None,
+        model_used: str | None = None,
+        cost: dict | None = None,
+        input_tokens: int | None = None,
+    ):
         PromptLog.objects.create(
             source=PromptSource.EMBED,
-            model=name,
+            # The MODEL, not the provider. It held the provider name until
+            # 0.20.0, which is why no rate card could ever match an embed
+            # row: the fleet ran `openai-embeddings` in this column while
+            # the model it actually called sat in metadata. The provider
+            # name is the fallback for a self-hosted server that reports no
+            # model, so the column is never empty and never a lie.
+            model=model_used or name,
             model_size="",
             # Counts only — the ledger must never see the texts.
             prompt=f"texts:{batch_size}",
             response=None,
             status=status,
             error_message=error,
+            input_tokens=input_tokens,
+            output_tokens=0 if input_tokens is not None else None,
             duration_ms=int((time.monotonic() - start) * 1000),
+            **_cost_columns(cost),
             **_identity(user_id, workspace_id),
-            metadata={**(metadata or {}), "batch_size": batch_size, **(extra or {})},
+            metadata={
+                **(metadata or {}),
+                "provider": name,
+                "batch_size": batch_size,
+                **(extra or {}),
+            },
         )
 
     # The model pin travels only when asked for, so embedding adapters
@@ -1538,8 +1584,30 @@ def embed(
         _log(PromptStatus.ERROR, error=reason)
         return {"status": "failure", "reason": reason}
 
+    from .pricing import embedding_cost_fields
+
+    model_used = result.model or name
+    tokens = _embedding_tokens(result.usage)
+    cost = embedding_cost_fields(
+        model=model_used,
+        input_tokens=tokens,
+        extra_prices=agent_settings.EMBEDDING_PRICES,
+    )
+    if cost["cost_basis"] == "unpriced":
+        logger.warning(
+            "stapel-agent: no rate card for embedding model %r (provider %r) "
+            "— the embed row is stored with cost_basis=unpriced. Declare the "
+            "rate in STAPEL_AGENT['EMBEDDING_PRICES'] (USD per MTok of "
+            "input); a model you host yourself and are not billed per query "
+            "is 0.0 there, which is an answer, not a blank.",
+            model_used,
+            name,
+        )
     _log(
         PromptStatus.SUCCESS,
+        model_used=model_used,
+        cost=cost,
+        input_tokens=tokens,
         extra={"model": result.model, "dim": result.dim, "usage": result.usage},
     )
     return {

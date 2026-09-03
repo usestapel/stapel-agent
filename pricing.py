@@ -87,8 +87,19 @@ PRICES_USD_PER_MTOK: dict[str, dict[str, float]] = {
     # --- claimed $2/$6 for the 4.20 SKU - refuted by the API's own catalog.
     "grok-4.3": {"input": 1.25, "output": 2.5},
     "grok-4.20-0309-non-reasoning": {"input": 1.25, "output": 2.5},
-    # OpenAI gpt-5.6-luna: platform.openai.com/docs/pricing (short-context)
-    "gpt-5.6-luna": {"input": 1.0, "output": 6.0},
+    # OpenAI gpt-5.6-luna, short-context standard tier.
+    # $1.00/$6.00 when first read 2026-07-10; re-verified 3 Sep 2026 against
+    # developers.openai.com/api/docs/pricing AND the model's own page, both
+    # of which now publish $0.20/$1.20 — the list price fell 5x. Corrected
+    # here rather than left: an OVER-stated rate inflates every estimate that
+    # touches it, which is the same defect as an unpriced call with the sign
+    # flipped, and rows already computed at the old rate keep their stored
+    # cost because pricing is applied at call time.
+    # The "short-context" qualifier is real and now confirmed: prompts over
+    # 272K input tokens bill 2x input / 1.5x output for the whole request.
+    # Not modelled, for the reason the module docstring gives — this is
+    # ``pricing_estimate``, and a long-context call is under-counted honestly.
+    "gpt-5.6-luna": {"input": 0.2, "output": 1.2},
     # --- The models a live deployment was calling while unpriced -----------
     # A client fleet points ALL THREE ladder rungs at gpt-5.2 through the
     # openai-compat provider, so every AI-composer call — vision draft,
@@ -113,6 +124,27 @@ PRICES_USD_PER_MTOK: dict[str, dict[str, float]] = {
     # google/gemini-3.5-flash via OpenRouter (public /api/v1/models catalog)
     "or-gemini-3.5-flash": {"input": 1.5, "output": 9.0},
 }
+
+
+# --- Embeddings ---------------------------------------------------------
+# A SECOND table, because an embeddings call has a different shape, not just
+# different numbers: it bills input tokens and has no output tokens at all, so
+# a row of ``{"input", "output"}`` and an estimate that multiplies both cannot
+# express it. USD per MILLION input tokens.
+#
+# verified https://developers.openai.com/api/docs/pricing, fetched 3 Sep 2026.
+# The page lists embeddings with an input price and no output column.
+EMBEDDING_PRICES_USD_PER_MTOK: dict[str, float] = {
+    "text-embedding-3-small": 0.02,
+    "text-embedding-3-large": 0.13,
+    "text-embedding-ada-002": 0.10,
+}
+
+# Deliberately NO entry here for a self-hosted model. A library that shipped
+# ``{"bge-m3": 0.0}`` would be asserting a price about somebody else's
+# endpoint — the same fabrication as guessing a published one, and harder to
+# spot because it looks like good news. The host declares its own: see
+# ``extra_prices`` below and ``STAPEL_AGENT["EMBEDDING_PRICES"]``.
 
 
 # Trailing dated snapshot suffix -> base alias. Providers date their snapshots
@@ -216,11 +248,61 @@ def cost_fields(
     }
 
 
+def embedding_price(model: str, extra_prices: dict | None = None) -> float | None:
+    """USD per MTok of input for *model*, or None if nothing prices it.
+
+    ``extra_prices`` is the host's own table, and it WINS over the shipped
+    one: a negotiated rate is a fact about this deployment's invoice, and a
+    published list price is only the default.
+
+    Returning None for a miss (rather than 0.0, as the completion table does)
+    is the whole point. On the completion side the 0.0 is paired with
+    ``cost_basis="unpriced"`` and the column carries the basis, so the pair
+    stays honest. Here the cost column itself is left NULL, which is what the
+    audio surfaces already do, and it means a SUM over the table cannot
+    quietly absorb an unknown as if it were nothing.
+
+    A DECLARED 0.0, by contrast, is a real answer: a host that runs its own
+    embedder is not billed per query, and saying so is different from never
+    having asked. That difference survives here because 0.0 is a value in the
+    table and a miss is not.
+    """
+    for table in (extra_prices or {}, EMBEDDING_PRICES_USD_PER_MTOK):
+        for key in (model or "", _normalize_model(model or "")):
+            if key and key in table:
+                return float(table[key])
+    return None
+
+
+def embedding_cost_fields(
+    *,
+    model: str,
+    input_tokens: int | None,
+    extra_prices: dict | None = None,
+) -> dict:
+    """The cost view of one embeddings call.
+
+    Two ways to end up unpriced, and they are the same finding from opposite
+    ends: nothing prices the model, or the provider reported no billable
+    quantity to price. A rate with nothing to multiply is not a cost.
+    """
+    rate = embedding_price(model, extra_prices)
+    if rate is None or input_tokens is None:
+        return {"cost_usd": None, "cost_basis": "unpriced"}
+    return {
+        "cost_usd": round(int(input_tokens) * rate / 1_000_000, 8),
+        "cost_basis": "pricing_estimate",
+    }
+
+
 __all__ = [
+    "EMBEDDING_PRICES_USD_PER_MTOK",
     "PRICES_USD_PER_MTOK",
     "USD_PER_TICK",
     "billed_output_tokens",
     "cost_fields",
+    "embedding_cost_fields",
+    "embedding_price",
     "estimate_cost",
     "is_priced",
 ]

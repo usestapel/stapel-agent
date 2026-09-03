@@ -62,6 +62,10 @@ NO_ENV = (
     "DEFAULT_DIARIZATION_PROVIDER",
     "EMBEDDING_PROVIDERS",
     "DEFAULT_EMBEDDING_PROVIDER",
+    # A rate card is a claim about money. Like STT_PRICING_MODULES it is
+    # stated in settings.py where a reviewer sees it, never assembled from
+    # an environment variable in a shared shell.
+    "EMBEDDING_PRICES",
     "RERANK_PROVIDERS",
     "DEFAULT_RERANK_PROVIDER",
     "IMAGE_PROVIDERS",
@@ -260,6 +264,20 @@ agent_settings = AppSettings(
         # through the LLM's tunnel. socks* URLs need stapel-agent[socks].
         "EMBEDDINGS_PROXY": "",
         "EMBEDDINGS_MODEL": "text-embedding-3-small",
+        # Host rate card for embedding models, USD per MTok of INPUT,
+        # merged OVER pricing.EMBEDDING_PRICES_USD_PER_MTOK and winning
+        # over it. Two things only this can say:
+        #   {"bge-m3": 0.0}  — "I host this one and am not billed per
+        #       query". A declared zero is an ANSWER: the row lands at
+        #       0.00 with cost_basis=pricing_estimate, which is not the
+        #       same row as one nobody costed (NULL / unpriced).
+        #   {"text-embedding-3-small": 0.005} — a negotiated rate, which
+        #       is a fact about this deployment's invoice and beats the
+        #       published list price.
+        # The shipped table deliberately carries no zero entries: a
+        # library asserting a price about somebody else's endpoint is the
+        # same fabrication as guessing a published one.
+        "EMBEDDING_PRICES": {},
         # Generic self-hosted embeddings server (POST {base}/embed,
         # {"texts": [...]} → {"vectors": [[...]]}; model fixed
         # server-side — bge-m3 / multilingual-e5 class). Key optional.

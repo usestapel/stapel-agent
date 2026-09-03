@@ -339,3 +339,163 @@ class TestTheDeploymentsOwnModelsAreChecked:
         from stapel_agent.checks import check_configured_models_are_priced
 
         assert check_configured_models_are_priced in registry.registered_checks
+
+
+class TestEmbeddingRateCards:
+    """Embeddings bill input tokens only, and a self-hosted one may bill
+    nothing at all — which has to be sayable.
+
+    The completion table cannot answer here: its rows are
+    ``{"input", "output"}`` and every estimate multiplies both, while an
+    embeddings call has no output tokens to multiply. So this is a second
+    table with a different shape, landing in the same two columns.
+    """
+
+    @pytest.mark.parametrize(
+        "model,expected",
+        [
+            ("text-embedding-3-small", 0.02),
+            ("text-embedding-3-large", 0.13),
+            ("text-embedding-ada-002", 0.10),
+        ],
+    )
+    def test_verified_against_the_published_list(self, model, expected):
+        from stapel_agent.pricing import EMBEDDING_PRICES_USD_PER_MTOK
+
+        assert EMBEDDING_PRICES_USD_PER_MTOK[model] == expected
+
+    def test_the_shipped_default_embedding_model_is_priced(self):
+        from stapel_agent.conf import agent_settings
+        from stapel_agent.pricing import embedding_price
+
+        default = agent_settings.defaults["EMBEDDINGS_MODEL"]
+        assert embedding_price(default) is not None
+
+    def test_a_known_model_costs_its_rate(self):
+        from stapel_agent.pricing import embedding_cost_fields
+
+        fields = embedding_cost_fields(
+            model="text-embedding-3-small", input_tokens=1_000_000
+        )
+        assert fields["cost_usd"] == pytest.approx(0.02)
+        assert fields["cost_basis"] == "pricing_estimate"
+
+    def test_an_unknown_model_is_unknown_not_free(self):
+        """The whole defect this closes, in one assertion: NULL is "we do
+        not know", 0.00 is "we know, and it was nothing". A table miss must
+        produce the first, never the second."""
+        from stapel_agent.pricing import embedding_cost_fields
+
+        fields = embedding_cost_fields(model="mystery-embedder", input_tokens=5_000)
+        assert fields["cost_usd"] is None
+        assert fields["cost_basis"] == "unpriced"
+
+    def test_no_usage_reported_is_unpriced_even_for_a_known_model(self):
+        """A rate with nothing to multiply is not a cost. The billable
+        quantity being absent is the same finding as the rate being absent."""
+        from stapel_agent.pricing import embedding_cost_fields
+
+        fields = embedding_cost_fields(
+            model="text-embedding-3-small", input_tokens=None
+        )
+        assert fields["cost_usd"] is None
+        assert fields["cost_basis"] == "unpriced"
+
+    def test_a_declared_zero_is_free_and_says_so(self):
+        """A host that runs its own embedder is not billed per query, and
+        that is a FACT about the endpoint, not an absence of information.
+        Declaring it 0.0 must read as priced-at-nothing — cost 0.00 with a
+        real basis — so it can be told apart from a model nobody costed."""
+        from stapel_agent.pricing import embedding_cost_fields
+
+        fields = embedding_cost_fields(
+            model="sentence-transformers/LaBSE",
+            input_tokens=10_000,
+            extra_prices={"sentence-transformers/LaBSE": 0.0},
+        )
+        assert fields["cost_usd"] == 0.0
+        assert fields["cost_basis"] == "pricing_estimate"
+
+    def test_free_and_unknown_are_not_the_same_row(self):
+        from stapel_agent.pricing import embedding_cost_fields
+
+        free = embedding_cost_fields(
+            model="local", input_tokens=10_000, extra_prices={"local": 0.0}
+        )
+        unknown = embedding_cost_fields(model="local", input_tokens=10_000)
+        assert (free["cost_usd"], free["cost_basis"]) == (0.0, "pricing_estimate")
+        assert (unknown["cost_usd"], unknown["cost_basis"]) == (None, "unpriced")
+
+    def test_a_host_overlay_can_override_a_published_price(self):
+        """Negotiated rates exist. The overlay wins over the shipped table."""
+        from stapel_agent.pricing import embedding_price
+
+        assert embedding_price(
+            "text-embedding-3-small", {"text-embedding-3-small": 0.005}
+        ) == 0.005
+
+
+class TestW018SeesTheEmbeddingSurfaceToo:
+    """The composer's vector matching runs through embeddings, and a check
+    that only looks at completion models is green about half the spend.
+
+    Same question as the completion half, asked of the other surface: what
+    will THIS settings file call, and does anything price it?
+    """
+
+    def _run(self):
+        from stapel_agent.checks import check_configured_models_are_priced
+
+        return check_configured_models_are_priced(app_configs=None)
+
+    def _ids(self):
+        return [issue.id for issue in self._run()]
+
+    def test_the_shipped_embedding_default_is_clean(self, settings):
+        settings.STAPEL_AGENT = {}
+        assert self._ids() == []
+
+    def test_an_uncarded_embedding_model_warns(self, settings):
+        settings.STAPEL_AGENT = {"EMBEDDINGS_MODEL": "bge-m3"}
+        issues = self._run()
+        assert [i.id for i in issues] == ["stapel_agent.W018"]
+        assert "bge-m3" in issues[0].msg
+
+    def test_the_warning_says_which_surface(self, settings):
+        """"Unpriced model" sends the reader to the wrong table if it does
+        not say which one."""
+        settings.STAPEL_AGENT = {"EMBEDDINGS_MODEL": "bge-m3"}
+        issue = self._run()[0]
+        assert "embedding" in issue.msg.lower()
+        assert "EMBEDDING_PRICES" in issue.hint
+
+    def test_a_host_declared_zero_satisfies_it(self, settings):
+        """The self-hosted case must be able to go green by DECLARING the
+        price, not by being ignored."""
+        settings.STAPEL_AGENT = {
+            "EMBEDDINGS_MODEL": "sentence-transformers/LaBSE",
+            "EMBEDDING_PRICES": {"sentence-transformers/LaBSE": 0.0},
+        }
+        assert self._ids() == []
+
+    def test_both_surfaces_report_in_one_finding(self, settings):
+        settings.STAPEL_AGENT = {
+            "MODELS": {"small": "no-such-model-9"},
+            "EMBEDDINGS_MODEL": "bge-m3",
+        }
+        issues = self._run()
+        assert len(issues) == 1
+        assert "no-such-model-9" in issues[0].msg
+        assert "bge-m3" in issues[0].msg
+
+    def test_a_masked_embedding_registry_is_not_warned_about(self, settings):
+        """A deployment that removed every embedding adapter has no
+        embeddings surface to be blind about."""
+        settings.STAPEL_AGENT = {
+            "EMBEDDINGS_MODEL": "bge-m3",
+            "EMBEDDING_PROVIDERS": {
+                "openai-embeddings": None,
+                "embeddings-http": None,
+            },
+        }
+        assert self._ids() == []

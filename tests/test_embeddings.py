@@ -554,7 +554,10 @@ class TestEmbedService:
         services.embed([secret, "second secret"], user_id="u1")
         log = PromptLog.objects.get()
         assert log.source == "embed"
-        assert log.model == "fake-embed"
+        # The MODEL, not the provider — the column held "fake-embed" until
+        # 0.20.0, which is exactly why no rate card could match an embed row.
+        assert log.model == "fake-embed-1"
+        assert log.metadata["provider"] == "fake-embed"
         assert log.status == "success"
         assert log.user_id == "u1"
         # the privacy canon: counts/usage only — NEVER the texts, and no
@@ -802,3 +805,105 @@ class TestEmbedEndpoint:
         )
         assert resp.status_code == 400
         assert fake_embeddings.calls == []
+
+
+@pytest.mark.django_db
+class TestTheEmbedLedgerRowIsMetered:
+    """367 rows on a live stand carried no tokens, no cost and no model id.
+
+    Worse than unpriced: outside metering entirely. The provider had
+    already reported ``usage: {"prompt_tokens": 4, "total_tokens": 4}`` and
+    the service dropped it into ``metadata`` and threw the rest away, so a
+    surface the composer's vector matching runs through could not be costed
+    even in principle. And the ``model`` column held the PROVIDER name, so
+    no rate card keyed by model could ever have matched it.
+    """
+
+    def test_the_model_column_holds_the_model_not_the_provider(
+        self, fake_embeddings, settings
+    ):
+        settings.STAPEL_AGENT = {
+            **settings.STAPEL_AGENT,
+            "EMBEDDING_PRICES": {"fake-embed-1": 0.0},
+        }
+        services.embed(["a"])
+        log = PromptLog.objects.get()
+        assert log.model == "fake-embed-1"
+        assert log.metadata["provider"] == "fake-embed"
+
+    def test_reported_tokens_reach_the_column(self, fake_embeddings):
+        services.embed(["abcde"])
+        log = PromptLog.objects.get()
+        assert log.input_tokens == 5
+        assert log.output_tokens == 0
+
+    def test_a_priced_model_costs_what_the_card_says(
+        self, fake_embeddings, settings
+    ):
+        from decimal import Decimal
+
+        settings.STAPEL_AGENT = {
+            **settings.STAPEL_AGENT,
+            "EMBEDDING_PRICES": {"fake-embed-1": 1.0},
+        }
+        services.embed(["a" * 1000])
+        log = PromptLog.objects.get()
+        assert log.cost_basis == "pricing_estimate"
+        assert log.cost_usd == Decimal("0.00100000")
+
+    def test_a_self_hosted_zero_is_free_not_unknown(
+        self, fake_embeddings, settings
+    ):
+        """The in-fleet embedder is not billed per query. That is a fact
+        about the endpoint, and it has to land as 0.00 with a real basis —
+        NULL would say we never looked."""
+        from decimal import Decimal
+
+        settings.STAPEL_AGENT = {
+            **settings.STAPEL_AGENT,
+            "EMBEDDING_PRICES": {"fake-embed-1": 0.0},
+        }
+        services.embed(["abcde"])
+        log = PromptLog.objects.get()
+        assert log.cost_usd == Decimal("0E-8")
+        assert log.cost_basis == "pricing_estimate"
+
+    def test_an_uncarded_model_is_unpriced_and_loud(self, fake_embeddings, caplog):
+        services.embed(["abcde"])
+        log = PromptLog.objects.get()
+        assert log.cost_usd is None
+        assert log.cost_basis == "unpriced"
+        assert "no rate card" in caplog.text
+        assert "fake-embed-1" in caplog.text
+
+    def test_a_failed_call_records_no_cost(self, fake_embeddings):
+        services.embed(["x"], provider="fatal-embed")
+        log = PromptLog.objects.get()
+        assert log.status == "error"
+        assert log.cost_usd is None
+        assert log.cost_basis is None
+
+    def test_the_texts_still_never_reach_the_row(self, fake_embeddings, settings):
+        """Metering must not have widened the privacy surface."""
+        import json
+
+        settings.STAPEL_AGENT = {
+            **settings.STAPEL_AGENT,
+            "EMBEDDING_PRICES": {"fake-embed-1": 0.0},
+        }
+        secret = "СЕКРЕТНЫЙ客户text-А"
+        services.embed([secret])
+        log = PromptLog.objects.get()
+        surface = json.dumps(
+            {
+                "prompt": log.prompt,
+                "system_prompt": log.system_prompt,
+                "response": log.response,
+                "error_message": log.error_message,
+                "metadata": log.metadata,
+                "model": log.model,
+            },
+            ensure_ascii=False,
+        )
+        assert secret not in surface
+        assert "vectors" not in surface

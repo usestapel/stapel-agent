@@ -3,6 +3,71 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.20.0] — 2026-09-03
+
+### Added — the embeddings surface joins the ledger
+
+`embed()` wrote a PromptLog row with no token counts, no cost, and the
+PROVIDER name in the `model` column. Worse than unpriced: outside metering
+entirely, on a surface a client fleet's composer runs its vector matching
+through. 367 rows on one stand, and the provider had *already reported*
+`usage: {"prompt_tokens": 4, "total_tokens": 4}` — the service dropped it into
+`metadata` and threw the rest away.
+
+- **`input_tokens`** is recorded from the provider's reported usage
+  (`prompt_tokens`, else `total_tokens`, else `input_tokens`). Embeddings have
+  no output tokens, so `output_tokens` is 0 rather than NULL — a real zero,
+  not an absence. A non-integer usage value is treated as unreported rather
+  than coerced: a count guessed from a string is a fabricated quantity.
+- **`model` now holds the model**, and `metadata["provider"]` the provider.
+  The old arrangement is exactly why no rate card could ever have matched an
+  embed row: the fleet stored `openai-embeddings` in the column while the
+  model it actually called (`sentence-transformers/LaBSE`) sat in metadata.
+  The provider name remains the fallback for a self-hosted server that reports
+  no model, so the column is never empty and never a lie. **Breaking** for
+  anything reading `PromptLog.model` on `source=embed` rows.
+- **`pricing.EMBEDDING_PRICES_USD_PER_MTOK`** — a second table, because an
+  embeddings call has a different shape and not just different numbers: it
+  bills input tokens and has no output tokens, so a row of
+  `{"input", "output"}` and an estimate that multiplies both cannot express
+  it. `text-embedding-3-small` $0.02, `-3-large` $0.13, `ada-002` $0.10 per
+  MTok of input, verified at developers.openai.com/api/docs/pricing on
+  3 Sep 2026.
+- **`STAPEL_AGENT["EMBEDDING_PRICES"]`** — the host's own card, merged over
+  the shipped one and winning: a negotiated rate is a fact about this
+  deployment's invoice, a published list price is only the default.
+
+### Free is not unknown
+
+A miss leaves `cost_usd` NULL, not `0.0` — the audio surfaces' convention, and
+the point is that a SUM cannot absorb an unknown as if it were nothing. A
+**declared** `0.0` is the opposite: a host that runs its own embedder is not
+billed per query, and that is a fact about the endpoint rather than an absence
+of information. `EMBEDDING_PRICES = {"<model>": 0.0}` lands the row at `0.00`
+with `cost_basis=pricing_estimate`, which is a different row from one nobody
+costed. The shipped table carries no zero entries on purpose: a library
+asserting a price about somebody else's endpoint is the same fabrication as
+guessing a published one, and harder to spot because it looks like good news.
+
+### Changed — W018 watches both surfaces
+
+The check was green about half the spend. It now resolves the configured
+`EMBEDDINGS_MODEL` against the embeddings card as well, and reports both
+surfaces in one finding. A deployment that masked every embedding adapter has
+removed the surface and is not warned, same rule as W015.
+
+### Fixed — `gpt-5.6-luna` was over-priced by 5x
+
+Listed at $1.00/$6.00 from a 2026-07-10 reading; re-verified 3 Sep 2026
+against the pricing page and the model's own page, which both publish
+$0.20/$1.20 for the short-context standard tier. An over-stated rate silently
+inflates every estimate that touches it — the unpriced defect with the sign
+flipped. Rows already computed at the old rate keep their stored cost, because
+pricing is applied at call time and never recomputed. The "short-context"
+qualifier is now confirmed rather than assumed: prompts over 272K input tokens
+bill 2x input / 1.5x output for the whole request, which stays unmodelled for
+the reason the module docstring gives.
+
 ## [0.19.1] — 2026-09-03
 
 ### Fixed

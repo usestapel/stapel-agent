@@ -597,58 +597,74 @@ def check_configured_models_are_priced(app_configs, **kwargs):
     to E001, which already names it — two findings for one typo is noise.
     """
     from .conf import agent_settings
-    from .pricing import is_priced
+    from .embeddings import registered_embedding_providers
+    from .pricing import embedding_price, is_priced
     from .services import get_provider
 
-    models = agent_settings.MODELS or {}
-    if not models:
-        return []
-
-    try:
-        backend = get_provider(agent_settings.DEFAULT_PROVIDER)
-    except Exception:  # noqa: BLE001
-        # E001/W001/W016 own this finding, and without a provider there is no
-        # resolve_model to ask. Deliberately every exception, not just
-        # ProviderError/ImportError: PROVIDERS is an open extension point, a
-        # host-registered class may raise anything at all from its
-        # constructor, and a system check that takes `manage.py check` down
-        # with it blocks the deploy it was added to inform.
-        return []
-
     unpriced: dict[str, list[str]] = {}
-    for size, default in sorted(models.items()):
+
+    # ── Completions ────────────────────────────────────────────────────
+    models = agent_settings.MODELS or {}
+    if models:
         try:
-            model = backend.resolve_model(size, default)
-        except Exception:  # noqa: BLE001 — a check must not break `manage.py`
-            continue
-        if model and not is_priced(model):
-            unpriced.setdefault(model, []).append(size)
+            backend = get_provider(agent_settings.DEFAULT_PROVIDER)
+        except Exception:  # noqa: BLE001
+            # E001/W001/W016 own this finding, and without a provider there
+            # is no resolve_model to ask. Deliberately every exception, not
+            # just ProviderError/ImportError: PROVIDERS is an open extension
+            # point, a host-registered class may raise anything at all from
+            # its constructor, and a system check that takes `manage.py
+            # check` down with it blocks the deploy it was added to inform.
+            backend = None
+        if backend is not None:
+            for size, default in sorted(models.items()):
+                try:
+                    model = backend.resolve_model(size, default)
+                except Exception:  # noqa: BLE001 — must not break `manage.py`
+                    continue
+                if model and not is_priced(model):
+                    unpriced.setdefault(model, []).append(f"rung {size}")
+
+    # ── Embeddings ─────────────────────────────────────────────────────
+    # A second billable surface, and the one a composer's vector matching
+    # runs through. A check that looked only at completions was green about
+    # half the spend. A deployment that masked every embedding adapter has
+    # removed the surface and is not warned — same rule as W015.
+    if registered_embedding_providers():
+        embedding_model = agent_settings.EMBEDDINGS_MODEL
+        if embedding_model and embedding_price(
+            embedding_model, agent_settings.EMBEDDING_PRICES
+        ) is None:
+            unpriced.setdefault(embedding_model, []).append("embeddings")
 
     if not unpriced:
         return []
 
     named = ", ".join(
-        f"{model!r} (rung{'s' if len(sizes) > 1 else ''} {', '.join(sizes)})"
-        for model, sizes in sorted(unpriced.items())
+        f"{model!r} ({', '.join(where)})" for model, where in sorted(unpriced.items())
     )
+    plural = len(unpriced) > 1
     return [
         checks.Warning(
             f"This deployment is configured to call {named}, which "
-            f"{'are' if len(unpriced) > 1 else 'is'} not in "
-            "stapel_agent.pricing.PRICES_USD_PER_MTOK. Every completion from "
-            f"{'those models' if len(unpriced) > 1 else 'that model'} will "
-            "be stored with cost_basis=unpriced and cost_usd=0.0, so metering "
-            "cannot cost the feature — it will read as free rather than as "
-            "unknown.",
+            f"{'have' if plural else 'has'} no rate card. Every call to "
+            f"{'those models' if plural else 'that model'} is stored with "
+            "cost_basis=unpriced, so metering cannot cost the feature — it "
+            "reads as free rather than as unknown.",
             hint=(
-                "Add the model to stapel_agent.pricing.PRICES_USD_PER_MTOK "
-                "with the provider's PUBLISHED price, and the source URL and "
-                "fetch date beside it — a price without a provenance line is "
-                "a number someone remembered. If the price cannot be "
-                "verified, leave it out: cost_basis=unpriced is a true "
-                "answer and a guessed rate card is not. If this provider "
-                "reports its own charge, no entry is needed — those rows "
-                "land as cost_basis=provider_ticks."
+                "Completion models go in stapel_agent.pricing."
+                "PRICES_USD_PER_MTOK; the embedding model goes in "
+                "STAPEL_AGENT['EMBEDDING_PRICES'] (USD per MTok of input, "
+                "merged over pricing.EMBEDDING_PRICES_USD_PER_MTOK). Use the "
+                "provider's PUBLISHED price and put the source URL and fetch "
+                "date beside it — a price without a provenance line is a "
+                "number someone remembered. A model you HOST yourself and "
+                "are not billed per query is 0.0, which is an answer and "
+                "reads as free; leaving it out is a different statement and "
+                "reads as unknown. If the price cannot be verified, leave it "
+                "out: cost_basis=unpriced is true and a guessed rate card is "
+                "not. A provider that reports its own charge needs no entry "
+                "— those rows land as cost_basis=provider_ticks."
             ),
             id="stapel_agent.W018",
         )

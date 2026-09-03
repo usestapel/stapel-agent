@@ -31,7 +31,7 @@ registries). Everything below is verifiable against the code in this repo.
 | Cache (`cache.py`) | `CachePolicy` ABC (`should_cache` / `lookup` / optional `store`) + `PromptLogCachePolicy` default (PromptLog rows + `CACHE_LOOKUP`/`CACHE_TTL`) |
 | Privacy & retention (`gdpr.py`, `retention.py`, `management/`) | `AgentGDPRProvider` (section `agent`; registered into `stapel_core.gdpr.gdpr_registry` from `AgentConfig.ready()`, so subject export/erasure reaches the prompt ledger), `purge_prompt_logs()` + `scrub_queryset()` (scrub the text, keep the counters), management command `purge_prompt_logs [--days N] [--dry-run]` — the job a deployment schedules |
 | Safety (`safety/`) | `redaction_gate` (provider keys/env secrets never reach a durable artifact), `detect_pwned_markers` / `redact_markers` / `sanitize_for_rag` (prompt-injection flag+escape split), `detect_structured_output_leak` (structured-output scaffolding leaking into a plain answer) |
-| System checks (`checks.py`) | `stapel_agent.E001` (DEFAULT_PROVIDER not in the effective registry), `W001` (unimportable provider path), `W002` (entry is not an `LlmProvider` subclass), `W003`/`W004` (the STT equivalents), `W005`/`W006` (the image-registry equivalents), `W018` (a model this deployment is configured to call has no rate card, so its calls store `cost_basis=unpriced`) — registered from `AgentConfig.ready()` |
+| System checks (`checks.py`) | `stapel_agent.E001` (DEFAULT_PROVIDER not in the effective registry), `W001` (unimportable provider path), `W002` (entry is not an `LlmProvider` subclass), `W003`/`W004` (the STT equivalents), `W005`/`W006` (the image-registry equivalents), `W018` (a model this deployment is configured to call — completion OR embedding — has no rate card, so its calls store `cost_basis=unpriced`) — registered from `AgentConfig.ready()` |
 | Public API (`__init__.py`, PEP 562 lazy) | `__all__ = ["AudioRef", "CachePolicy", "GeneratedImage", "ImageGenProvider", "ImageRef", "LlmProvider", "NormalizedTranscript", "ProviderResult", "SttProvider", "agent_settings", "complete", "generate_image", "register_image_provider", "register_provider", "register_stt_provider", "registered_image_providers", "registered_providers", "registered_stt_providers", "summarize", "transcribe", "translate"]` — Django-free at import |
 
 ## Extension points (fork-free)
@@ -211,6 +211,32 @@ overlay is what gets checked, not the ladder underneath it) and names any that
 `pricing.PRICES_USD_PER_MTOK` has never heard of, at `manage.py check` time,
 before the first call. A test that guards the shipped ladder is green about the
 wrong models the moment a deployment overrides them.
+
+It covers **both billable surfaces**, because a check that watched only
+completions was green about half the spend: the configured `EMBEDDINGS_MODEL`
+is resolved against `pricing.EMBEDDING_PRICES_USD_PER_MTOK` merged under
+`STAPEL_AGENT["EMBEDDING_PRICES"]`, and reported in the same finding.
+
+### Embeddings are metered too
+
+An `embed()` row carries `input_tokens` (from the provider's own reported
+`usage`; embeddings have no output tokens, so `output_tokens` is 0) and
+`cost_usd`/`cost_basis` from the embeddings rate card. `model` holds the MODEL
+the provider reported — the provider name lives in `metadata["provider"]` and
+is the fallback only when a self-hosted server reports no model at all. Until
+0.20.0 that column held the provider name and the row carried no counts and no
+cost, so a whole surface sat outside metering and no card keyed by model could
+ever have matched it.
+
+Two ways to be unpriced, and they are one finding from opposite ends: nothing
+prices the model, or the provider reported no billable quantity. Either leaves
+`cost_usd` NULL — not `0.0` — so a SUM cannot absorb an unknown as if it were
+nothing. **A declared `0.0` is the opposite of that**: a host that runs its own
+embedder is not billed per query, and `STAPEL_AGENT["EMBEDDING_PRICES"] =
+{"<model>": 0.0}` says so, landing the row at `0.00` with
+`cost_basis=pricing_estimate`. Free and unknown are different rows. The shipped
+table carries no zero entries on purpose — a library asserting a price about
+somebody else's endpoint is the same fabrication as guessing a published one.
 
 ABC contract (`stt/base.py`, Django-free):
 
