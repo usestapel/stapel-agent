@@ -3,6 +3,37 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.21.1] — 2026-09-04
+
+### Fixed — a job asked over nothing must say so, not answer
+
+`sha256("")` is a perfectly valid hash, and that was the trap. A host whose
+job started over inputs that never arrived got a fingerprint that looked
+exactly as legitimate as any other: every stage ran, each answered about a
+subject that was not there, and the non-blocking screening stage published
+`allowed: false` with the rationale "the content is empty" — a verdict on the
+READER, not on what was being screened. Measured on a live stand: every
+analysed listing ended that way, while the row being analysed held two photos
+and a title the whole time.
+
+* **`Fingerprint.is_empty`** — the emptiness is now a question a caller can
+  ask, instead of one every stage answers separately and none says out loud.
+* **`runner.start()` refuses an empty question.** The document comes back
+  `status: "failed"` with the new top-level **`error: "empty_input"`**, every
+  stage `skipped`, `started` False — so a host's `execute()` is never reached
+  and no provider call is bought. A later start with real inputs runs
+  normally; a failed job is not a cached answer.
+* **`AnalysisState.error`** joins the document (JSON round-trip included,
+  `null` when the job did not fail as a whole). The key is always present.
+* **`Stage(skip_when=...)`** — a predicate asked before a stage runs. A stage
+  that answers "nothing to do" is `skipped`, which is a different statement
+  from `done` with an empty result, and the difference is the whole point: a
+  screener that never saw content must not be the thing that says the content
+  is not allowed. A predicate that raises is logged and the stage runs.
+
+Additive: `skip_when` defaults to `None`, and a fingerprint over any real
+input behaves exactly as it did in 0.21.0.
+
 ## [0.21.0] — 2026-09-04
 
 ### Added — `stapel_agent.analysis`: staged analysis as a job, not a request

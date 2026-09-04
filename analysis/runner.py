@@ -23,6 +23,7 @@ from typing import Any, Callable, Iterable, Iterator, Sequence
 
 from .state import (
     DONE,
+    ERROR_EMPTY_INPUT,
     FAILED,
     QUEUED,
     RUNNING,
@@ -62,6 +63,14 @@ class Stage:
     run: Callable[["JobContext"], Any]
     depends_on: frozenset = field(default_factory=lambda: frozenset({ON_PHOTOS, ON_TEXT}))
     blocking: bool = True
+    #: Asked before the stage runs: is there anything here for it to do?
+    #: A stage that answers "no" is ``skipped`` — which is a different
+    #: statement from ``done`` with an empty result, and the difference is
+    #: the whole point: a screening stage that ran over nothing and said
+    #: "not allowed, the content is empty" has published a verdict about a
+    #: question nobody asked. The predicate must not raise; one that does
+    #: is logged and treated as "do not skip".
+    skip_when: Callable[["JobContext"], bool] | None = None
 
 
 @dataclass
@@ -94,6 +103,16 @@ def start(
     the same text are the same question, and asking a model twice for it
     buys nothing but an invoice.
     """
+    if fingerprint.is_empty:
+        # Nothing was read: no photos, no words. Every stage would run, cost
+        # a provider call apiece and answer about a listing that is not
+        # there — and the screening stage would answer "not allowed, this is
+        # empty", which is a verdict on OUR failure to read the draft. The
+        # job says so instead, once, in the one place a caller looks.
+        state = _empty_input_state(fingerprint, stages, seller_filled)
+        store.save(key, state)
+        return state, False
+
     previous = store.load(key)
     if (
         previous is not None
@@ -132,6 +151,20 @@ def _changed_halves(previous: AnalysisState | None, fingerprint: Fingerprint) ->
     return changed
 
 
+def _empty_input_state(
+    fingerprint: Fingerprint, stages: Sequence[Stage], seller_filled: Iterable[str]
+) -> AnalysisState:
+    """A job that was asked over nothing: failed, with the reason named."""
+    state = AnalysisState.fresh(
+        fingerprint, [s.name for s in stages], seller_filled=seller_filled
+    )
+    state.status = FAILED
+    state.error = ERROR_EMPTY_INPUT
+    for stage in stages:
+        state.set_stage(stage.name, StageState(status=SKIPPED))
+    return state
+
+
 def run(
     *,
     store: StateStore,
@@ -151,7 +184,7 @@ def run(
     for stage in stages:
         if state.stage(stage.name).status == DONE:
             continue  # carried over by a refresh
-        if failed_blocking:
+        if failed_blocking or _skips(stage, ctx):
             state.set_stage(stage.name, StageState(status=SKIPPED))
             store.save(key, state)
             continue
@@ -162,6 +195,22 @@ def run(
     state.status = FAILED if failed_blocking else DONE
     store.save(key, state)
     return state
+
+
+def _skips(stage: Stage, ctx: "JobContext") -> bool:
+    """Does this stage have nothing to do? Never raises."""
+    if stage.skip_when is None:
+        return False
+    try:
+        return bool(stage.skip_when(ctx))
+    except Exception as exc:  # noqa: BLE001 - a broken predicate must not skip
+        logger.warning(
+            "analysis: skip_when of stage %s raised %s: %s - running it",
+            stage.name,
+            type(exc).__name__,
+            exc,
+        )
+        return False
 
 
 def _run_stage(store, key, state, ctx, stage: Stage) -> None:
@@ -221,6 +270,7 @@ def wait_for_stage(
 
 __all__ = [
     "DONE",
+    "ERROR_EMPTY_INPUT",
     "FAILED",
     "ON_PHOTOS",
     "ON_TEXT",

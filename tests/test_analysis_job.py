@@ -3,6 +3,7 @@ import pytest
 
 from stapel_agent.analysis import (
     DONE,
+    ERROR_EMPTY_INPUT,
     FAILED,
     ON_PHOTOS,
     RUNNING,
@@ -177,7 +178,9 @@ def test_document_round_trips_through_json():
     runner.run(store=store, key="k", stages=PIPELINE)
     doc = store.load("k").as_dict()
     assert json.loads(json.dumps(doc)) == doc
-    assert set(doc) == {"status", "fingerprint", "stages", "seller_filled", "updated_at"}
+    assert set(doc) == {
+        "status", "fingerprint", "error", "stages", "seller_filled", "updated_at",
+    }
     assert set(doc["stages"]["features"]) == {"status", "result", "error", "progress"}
 
 
@@ -199,3 +202,103 @@ def test_model_store_persists_the_document():
     store.save("k", state)
     store.save("k", state)  # upsert, not a duplicate row
     assert ModelStateStore().load("k").fingerprint == state.fingerprint
+
+
+# ─── A job over nothing is a failure, not an answer ────────────────────────
+
+
+def test_empty_input_fails_the_job_and_never_runs_a_stage():
+    """The defect this exists for: `sha256("")` on both halves is not a job.
+
+    The composer's job was started over an empty request body while the
+    draft row held two photos and a title. Every stage ran, each answered
+    about a listing that was not there, and the screening stage published
+    "not allowed, the content is empty" — a verdict on the reader, not on
+    the seller.
+    """
+    store = MemoryStateStore()
+    ran = []
+    pipeline = [
+        Stage("text", lambda ctx: ran.append("text")),
+        Stage("features", lambda ctx: ran.append("features")),
+    ]
+
+    state, started = runner.start(
+        store=store, key="k", fingerprint=Fingerprint.of(), stages=pipeline
+    )
+
+    assert started is False  # nothing to execute
+    assert state.status == FAILED
+    assert state.error == ERROR_EMPTY_INPUT
+    assert [state.stage(s.name).status for s in pipeline] == [SKIPPED, SKIPPED]
+    assert ran == []
+    assert store.load("k").error == ERROR_EMPTY_INPUT
+
+
+def test_one_half_of_the_input_is_enough_to_run():
+    """Photos with no words, or words with no photos, are real questions."""
+    for fingerprint in (
+        Fingerprint.of(photos=[b"jpeg"]),
+        Fingerprint.of(text="iPhone 13 128 ГБ"),
+    ):
+        store = MemoryStateStore()
+        state, started = _start(store, fingerprint)
+        assert started is True
+        assert state.error is None
+        assert state.status != FAILED
+
+
+def test_empty_input_error_survives_the_document_round_trip():
+    state = AnalysisState.fresh(Fingerprint.of(), ["text"])
+    state.status = FAILED
+    state.error = ERROR_EMPTY_INPUT
+
+    assert AnalysisState.from_dict(state.as_dict()).error == ERROR_EMPTY_INPUT
+    assert AnalysisState.from_dict({}).error is None
+
+
+def test_a_stage_with_nothing_to_do_is_skipped_not_run():
+    store = MemoryStateStore()
+    ran = []
+    pipeline = [
+        Stage("text", _fast, depends_on=frozenset({ON_PHOTOS})),
+        Stage(
+            "moderation",
+            lambda ctx: ran.append("screened") or {"allowed": False},
+            blocking=False,
+            skip_when=lambda ctx: not (ctx.result_of("text") or {}).get("title"),
+        ),
+    ]
+    runner.start(
+        store=store, key="k", fingerprint=Fingerprint.of(photos=[b"a"]), stages=pipeline
+    )
+    state = runner.run(store=store, key="k", stages=pipeline)
+    assert state.stage("moderation").status == DONE  # there WAS a title
+    assert ran == ["screened"]
+
+    store2 = MemoryStateStore()
+    pipeline[0] = Stage("text", lambda ctx: {"title": ""}, depends_on=frozenset({ON_PHOTOS}))
+    runner.start(
+        store=store2, key="k", fingerprint=Fingerprint.of(photos=[b"b"]), stages=pipeline
+    )
+    state = runner.run(store=store2, key="k", stages=pipeline)
+
+    assert state.stage("moderation").status == SKIPPED
+    assert state.stage("moderation").result is None
+    assert state.status == DONE  # a skip is not a failure
+    assert ran == ["screened"]  # the screener was never asked the empty question
+
+
+def test_a_raising_skip_predicate_runs_the_stage_rather_than_dropping_it():
+    store = MemoryStateStore()
+
+    def boom(ctx):
+        raise RuntimeError("predicate is broken")
+
+    pipeline = [Stage("text", _fast, skip_when=boom)]
+    runner.start(
+        store=store, key="k", fingerprint=Fingerprint.of(photos=[b"a"]), stages=pipeline
+    )
+    state = runner.run(store=store, key="k", stages=pipeline)
+
+    assert state.stage("text").status == DONE

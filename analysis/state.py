@@ -71,12 +71,35 @@ class Fingerprint:
             text=hashlib.sha256((text or "").strip().encode()).hexdigest()[:32],
         )
 
+    @property
+    def is_empty(self) -> bool:
+        """Is this a fingerprint of NOTHING — no photos and no words?
+
+        ``sha256("")`` is a perfectly valid hash, and that is the trap: a
+        job whose inputs never arrived gets a fingerprint that looks exactly
+        as legitimate as any other, starts, runs every stage over an empty
+        prompt and answers with empty results and a screening verdict of
+        "this listing is empty". The emptiness has to be a question the
+        caller can ASK, or every stage answers it separately and none of
+        them says so out loud.
+        """
+        return (self.photos, self.text) == (_EMPTY.photos, _EMPTY.text)
+
     @classmethod
     def parse(cls, value: str | None) -> "Fingerprint | None":
         if not value or ":" not in str(value):
             return None
         photos, _, text = str(value).partition(":")
         return cls(photos=photos, text=text)
+
+
+#: The fingerprint of no photos and no text, computed once so
+#: :attr:`Fingerprint.is_empty` compares against a fact rather than a
+#: literal somebody has to keep in step with the hashing above.
+_EMPTY = Fingerprint.of()
+
+#: ``AnalysisState.error`` when a job was asked over nothing at all.
+ERROR_EMPTY_INPUT = "empty_input"
 
 
 @dataclass
@@ -116,6 +139,9 @@ class AnalysisState:
 
     fingerprint: str = ""
     status: str = QUEUED
+    #: Why the JOB failed, when it failed as a whole rather than in a stage.
+    #: ``empty_input`` is the one the runner sets itself.
+    error: str | None = None
     stages: dict = field(default_factory=dict)
     updated_at: str = field(default_factory=_now)
     #: Slugs the person filled themselves. Carried on the document rather
@@ -137,6 +163,7 @@ class AnalysisState:
         return {
             "status": self.status,
             "fingerprint": self.fingerprint,
+            "error": self.error,
             "stages": {name: dict(raw) for name, raw in self.stages.items()},
             "seller_filled": list(self.seller_filled),
             "updated_at": self.updated_at,
@@ -149,6 +176,7 @@ class AnalysisState:
         return cls(
             fingerprint=str(raw.get("fingerprint") or ""),
             status=str(raw.get("status") or QUEUED),
+            error=raw.get("error") or None,
             stages=dict(stages) if isinstance(stages, Mapping) else {},
             updated_at=str(raw.get("updated_at") or _now()),
             seller_filled=list(raw.get("seller_filled") or []),
@@ -177,6 +205,7 @@ class AnalysisState:
 
 __all__ = [
     "DONE",
+    "ERROR_EMPTY_INPUT",
     "FAILED",
     "QUEUED",
     "RUNNING",

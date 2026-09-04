@@ -54,6 +54,7 @@ _EXPORTS = {
     "start": ".runner",
     "wait_for_stage": ".runner",
     "DONE": ".state",
+    "ERROR_EMPTY_INPUT": ".state",
     "FAILED": ".state",
     "QUEUED": ".state",
     "RUNNING": ".state",
