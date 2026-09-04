@@ -6,6 +6,7 @@ from stapel_agent.analysis import (
     ERROR_EMPTY_INPUT,
     FAILED,
     ON_PHOTOS,
+    QUEUED,
     RUNNING,
     SKIPPED,
     AnalysisState,
@@ -302,3 +303,137 @@ def test_a_raising_skip_predicate_runs_the_stage_rather_than_dropping_it():
     state = runner.run(store=store, key="k", stages=pipeline)
 
     assert state.stage("text").status == DONE
+
+
+# ─── A superseded run writes nothing (Д380) ───────────────────────────────
+
+
+def test_a_run_the_refresh_displaced_cannot_overwrite_the_new_one():
+    """The defect this exists for, measured on ruberi.ru 2026-09-04.
+
+    The composer starts the job twice on one draft: once at the photo step,
+    over the pictures alone, and again once the seller has typed a title.
+    Both runs hold the same key. The first one had read a phone's photos as
+    a mirror, descended to «Зеркала» and answered `mirror_type`,
+    `frame`, `furniture_shape`; the second read the title and answered
+    `vendor=apple`, `model=iphone-13`, `memory_size=128-gb`. The store was
+    a blind upsert, so the LAST write won — the stale run's document, whose
+    slugs belong to no field of the leaf the seller chose. The composer
+    dropped every answer and the characteristics step stayed empty while
+    the job read `done`.
+    """
+    store = MemoryStateStore()
+    stale = Fingerprint.of(photos=[b"a"], text="")
+    fresh = Fingerprint.of(photos=[b"a"], text="iPhone 13 128 ГБ зелёный")
+
+    def displaced(ctx):
+        # The refresh lands mid-run, exactly as a seller typing does.
+        runner.start(store=store, key="k", fingerprint=fresh, stages=PIPELINE)
+        yield StageBatch(result=[{"slug": "mirror_type", "value": "interernoe"}])
+
+    runner.start(store=store, key="k", fingerprint=stale, stages=PIPELINE)
+    state = runner.run(
+        store=store,
+        key="k",
+        stages=[Stage("text", _fast, depends_on=frozenset({ON_PHOTOS})),
+                Stage("features", displaced)],
+        fingerprint=stale.value,
+    )
+
+    row = store.load("k")
+    assert row.fingerprint == fresh.value
+    assert row.stage("features").result is None
+    # And the stale run may not announce the job over on the new one's behalf.
+    assert row.status != DONE
+    assert state.fingerprint == fresh.value
+
+
+def test_a_run_superseded_before_the_worker_picked_it_up_costs_nothing():
+    store = MemoryStateStore()
+    stale = Fingerprint.of(photos=[b"a"], text="")
+    fresh = Fingerprint.of(photos=[b"a"], text="iPhone 13")
+    ran = []
+
+    runner.start(store=store, key="k", fingerprint=stale, stages=PIPELINE)
+    runner.start(store=store, key="k", fingerprint=fresh, stages=PIPELINE)
+
+    def never(ctx):
+        ran.append(1)
+        return {}
+
+    runner.run(
+        store=store,
+        key="k",
+        stages=[Stage("text", never)],
+        fingerprint=stale.value,
+    )
+
+    assert ran == []
+    assert store.load("k").stage("text").status == QUEUED
+
+
+def test_the_run_that_owns_the_key_finishes_normally():
+    """The fence must not cost the ordinary case anything."""
+    store = MemoryStateStore()
+    fp = Fingerprint.of(photos=[b"a"], text="t")
+    runner.start(store=store, key="k", fingerprint=fp, stages=PIPELINE)
+    state = runner.run(store=store, key="k", stages=PIPELINE, fingerprint=fp.value)
+
+    assert state.status == DONE
+    assert store.load("k").stage("features").result == [
+        {"slug": "f0", "value": 0}, {"slug": "f1", "value": 1}, {"slug": "f2", "value": 2}
+    ]
+
+
+def test_a_store_without_the_fenced_write_still_refuses_a_stale_run():
+    """The fallback path: load-then-save, for a host store that predates it."""
+
+    class PlainStore:
+        def __init__(self):
+            self._inner = MemoryStateStore()
+
+        def load(self, key):
+            return self._inner.load(key)
+
+        def save(self, key, state):
+            self._inner.save(key, state)
+
+    store = PlainStore()
+    stale = Fingerprint.of(photos=[b"a"], text="")
+    fresh = Fingerprint.of(photos=[b"a"], text="iPhone 13")
+
+    def displaced(ctx):
+        runner.start(store=store, key="k", fingerprint=fresh, stages=PIPELINE)
+        yield StageBatch(result=[{"slug": "mirror_type"}])
+
+    runner.start(store=store, key="k", fingerprint=stale, stages=PIPELINE)
+    runner.run(
+        store=store,
+        key="k",
+        stages=[Stage("features", displaced)],
+        fingerprint=stale.value,
+    )
+
+    assert store.load("k").fingerprint == fresh.value
+    assert store.load("k").stage("features").result is None
+
+
+@pytest.mark.django_db
+def test_the_row_refuses_a_write_from_a_run_that_no_longer_owns_the_key():
+    from stapel_agent.analysis import ModelStateStore
+
+    store = ModelStateStore()
+    stale = Fingerprint.of(photos=[b"a"], text="")
+    fresh = Fingerprint.of(photos=[b"a"], text="iPhone 13")
+    store.save("k", AnalysisState.fresh(fresh, ["text"]))
+
+    superseded = AnalysisState.fresh(stale, ["text"])
+    superseded.status = DONE
+    assert store.save_if_current("k", superseded, stale.value) is False
+    assert store.load("k").fingerprint == fresh.value
+    assert store.load("k").status != DONE
+
+    owner = AnalysisState.fresh(fresh, ["text"])
+    owner.status = DONE
+    assert store.save_if_current("k", owner, fresh.value) is True
+    assert store.load("k").status == DONE

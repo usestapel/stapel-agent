@@ -3,6 +3,42 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.21.2] — 2026-09-04
+
+### Fixed — a superseded run must not answer for the job that displaced it
+
+One key holds one document, and a refresh starts a second run over it while
+the first is still working. `ModelStateStore.save` was a blind upsert — "the
+LAST write of a document wins" — so the two runs took turns owning the row.
+
+Measured on a live composer (ruberi.ru, Д380): the job starts at the photo
+step over the pictures alone, and again the moment the seller has typed a
+title. The first run read a phone's photos as a mirror, descended to
+«Зеркала» and answered `mirror_type`, `frame`, `furniture_shape`; the second
+read the words and answered `vendor=apple`, `model=iphone-13`,
+`memory_size=128-gb`. The stale run finished last, so its document — and its
+terminal `status: "done"` — is what every poll of that draft returned. The
+composer dropped every answer (no field of the chosen leaf carries those
+slugs), stopped polling on the `done` that was not its job's, and the
+characteristics step stayed empty while the job read finished.
+
+* **Every write a run makes is FENCED** on the fingerprint it started under.
+  A run whose key has since been claimed by a newer question stops where it
+  stands: its batches, and its terminal status, are dropped rather than
+  written. `runner.SupersededRun` is that signal, handled inside `run()` —
+  it is not a stage failure and never reaches a caller.
+* **`runner.run(..., fingerprint=...)`** — the question this run was started
+  for. A run already superseded when the worker picks it up returns at once
+  and buys no provider call. Optional: without it the fence is the document
+  as loaded, which still stops a run from overwriting the one that displaced
+  it.
+* **`StateStore.save_if_current(key, state, fingerprint)`** — the atomic
+  fenced write, on `MemoryStateStore` and `ModelStateStore` (one conditional
+  `UPDATE`; `updated_at` is set explicitly, because `.update()` is not
+  `.save()` and `auto_now` never fires). `FencedStateStore` names the
+  protocol. A host store without it falls back to load-then-save, which
+  closes the long window and leaves only the instant between two statements.
+
 ## [0.21.1] — 2026-09-04
 
 ### Fixed — a job asked over nothing must say so, not answer

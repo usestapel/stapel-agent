@@ -13,6 +13,11 @@ What the runner guarantees, so no stage has to:
   longer invalidated keeps its result and is not paid for twice.
 * **A non-blocking stage cannot fail the job.** Screening runs last and
   decides nothing here; its failure is recorded on its own stage.
+* **A superseded run writes nothing.** One key holds one document, and a
+  refresh starts a second run over it while the first is still working.
+  Every write a run makes is fenced on the fingerprint it started under, so
+  the run that is no longer being asked about cannot overwrite the one that
+  is — nor announce ``done`` on its behalf.
 """
 from __future__ import annotations
 
@@ -39,6 +44,15 @@ logger = logging.getLogger(__name__)
 #: The two halves of a fingerprint a stage can depend on.
 ON_PHOTOS = "photos"
 ON_TEXT = "text"
+
+
+class SupersededRun(RuntimeError):
+    """This run's key belongs to a newer question; its writes are refused.
+
+    Raised by the fenced write and handled by :func:`run`, which stops the
+    run where it stands. Never surfaced to a caller: a superseded run is
+    not a failure of the job, it is the job having moved on.
+    """
 
 
 @dataclass
@@ -171,30 +185,73 @@ def run(
     key: str,
     stages: Sequence[Stage],
     inputs: dict | None = None,
+    fingerprint: str | None = None,
 ) -> AnalysisState:
-    """Run every stage of the job that is not already answered."""
+    """Run every stage of the job that is not already answered.
+
+    ``fingerprint`` is the question this run was started for — the value a
+    host's ``execute()`` was handed by :func:`start`. Pass it and the run is
+    fenced: it stops the moment the key belongs to a newer question, and a
+    run already superseded before the worker picked it up costs nothing at
+    all. Omit it and the fence is taken from the document as loaded, which
+    still keeps a run from overwriting the one that displaced it.
+    """
     state = store.load(key)
     if state is None:  # pragma: no cover - start() commits before this
         raise LookupError(key)
-    state.status = RUNNING
-    store.save(key, state)
+    fence = fingerprint if fingerprint is not None else state.fingerprint
+    if state.fingerprint != fence:
+        # A newer start replaced the document between the enqueue and the
+        # worker. Its own run is answering; this one has nothing to add.
+        logger.info("analysis: run of %s was superseded before it started", key)
+        return state
     ctx = JobContext(state=state, inputs=dict(inputs or {}))
 
-    failed_blocking = False
-    for stage in stages:
-        if state.stage(stage.name).status == DONE:
-            continue  # carried over by a refresh
-        if failed_blocking or _skips(stage, ctx):
-            state.set_stage(stage.name, StageState(status=SKIPPED))
-            store.save(key, state)
-            continue
-        _run_stage(store, key, state, ctx, stage)
-        if state.stage(stage.name).status == FAILED and stage.blocking:
-            failed_blocking = True
+    try:
+        state.status = RUNNING
+        _save(store, key, state, fence)
 
-    state.status = FAILED if failed_blocking else DONE
-    store.save(key, state)
+        failed_blocking = False
+        for stage in stages:
+            if state.stage(stage.name).status == DONE:
+                continue  # carried over by a refresh
+            if failed_blocking or _skips(stage, ctx):
+                state.set_stage(stage.name, StageState(status=SKIPPED))
+                _save(store, key, state, fence)
+                continue
+            _run_stage(store, key, state, ctx, stage, fence)
+            if state.stage(stage.name).status == FAILED and stage.blocking:
+                failed_blocking = True
+
+        state.status = FAILED if failed_blocking else DONE
+        _save(store, key, state, fence)
+    except SupersededRun:
+        # Not an error: the answer this run was producing is not the one
+        # being waited for any more. Everything it would have written —
+        # its batches, and its terminal status — is dropped, so the run
+        # that owns the key now is the only one a poller ever sees.
+        logger.info("analysis: run of %s superseded; its writes are dropped", key)
+        return store.load(key) or state
     return state
+
+
+def _save(store: StateStore, key: str, state: AnalysisState, fence: str) -> None:
+    """One write of the document, refused when this run no longer owns the key.
+
+    ``save_if_current`` is the atomic form and the one a durable store
+    should offer. Without it the fence is a read then a write, which is
+    narrower than nothing: it closes the long window (a whole stage) and
+    leaves only the instant between the two statements.
+    """
+    saver = getattr(store, "save_if_current", None)
+    if saver is None:
+        current = store.load(key)
+        if current is not None and current.fingerprint != fence:
+            raise SupersededRun(key)
+        store.save(key, state)
+        return
+    if not saver(key, state, fence):
+        raise SupersededRun(key)
 
 
 def _skips(stage: Stage, ctx: "JobContext") -> bool:
@@ -213,9 +270,9 @@ def _skips(stage: Stage, ctx: "JobContext") -> bool:
         return False
 
 
-def _run_stage(store, key, state, ctx, stage: Stage) -> None:
+def _run_stage(store, key, state, ctx, stage: Stage, fence: str) -> None:
     state.set_stage(stage.name, StageState(status=RUNNING))
-    store.save(key, state)
+    _save(store, key, state, fence)
     try:
         produced = stage.run(ctx)
         if isinstance(produced, Iterator):
@@ -227,13 +284,17 @@ def _run_stage(store, key, state, ctx, stage: Stage) -> None:
                     progress={"done": batch.done, "total": batch.total},
                 )
                 state.set_stage(stage.name, last)
-                store.save(key, state)
+                _save(store, key, state, fence)
             state.set_stage(
                 stage.name,
                 StageState(status=DONE, result=last.result, progress=last.progress),
             )
         else:
             state.set_stage(stage.name, StageState(status=DONE, result=produced))
+    except SupersededRun:
+        # The fence, not a stage fault: it must not be recorded as one, and
+        # it must stop the run rather than the stage.
+        raise
     except Exception as exc:  # noqa: BLE001 - a stage failure is data, not a crash
         logger.warning(
             "analysis: stage %s failed: %s: %s", stage.name, type(exc).__name__, exc
@@ -241,7 +302,7 @@ def _run_stage(store, key, state, ctx, stage: Stage) -> None:
         state.set_stage(
             stage.name, StageState(status=FAILED, error=f"{type(exc).__name__}: {exc}")
         )
-    store.save(key, state)
+    _save(store, key, state, fence)
 
 
 def wait_for_stage(
@@ -279,6 +340,7 @@ __all__ = [
     "JobContext",
     "Stage",
     "StageBatch",
+    "SupersededRun",
     "run",
     "start",
     "wait_for_stage",
