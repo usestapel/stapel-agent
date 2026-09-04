@@ -143,3 +143,34 @@ class PromptLog(models.Model):
 
     def __str__(self):
         return f"{self.source}/{self.model_size} [{self.status}] {self.model}"
+
+
+@access.ops
+class AnalysisJob(models.Model):
+    """The state document of one staged analysis job, as a durable row.
+
+    ``@access.ops``: written by the stage runner, read by a poller. Nobody
+    edits a job by hand — the document is a snapshot of work, and a hand
+    edit would describe work that never happened.
+
+    ``document`` is the whole state, stored as one JSON value rather than
+    spread over columns. It is what the endpoint returns verbatim, so the
+    shape a caller reads and the shape the runner writes cannot drift; the
+    two columns beside it are denormalised only so the common queries
+    ("which jobs are running", "is this the fingerprint I asked about")
+    need no JSON traversal.
+    """
+
+    key = models.CharField(max_length=200, primary_key=True)
+    fingerprint = models.CharField(max_length=200, blank=True, default="", db_index=True)
+    status = models.CharField(max_length=16, blank=True, default="", db_index=True)
+    document = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True, db_index=True)
+
+    class Meta:
+        db_table = "agent_analysis_job"
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"{self.key} [{self.status}]"

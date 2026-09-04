@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-agent"
-version = "0.20.0"
+version = "0.21.0"
 description = "LLM facade Django app for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -77,7 +77,7 @@ package-dir = {"stapel_agent" = "."}
 # a directory with an __init__.py is missing here. A forgotten entry does not
 # break anything locally — it only ships a wheel with the module absent, and
 # the first sign is an ImportError in someone else's deployment.
-packages = ["stapel_agent", "stapel_agent.diarization", "stapel_agent.diarization.pricing", "stapel_agent.diarization.providers", "stapel_agent.diarization.validation", "stapel_agent.embeddings", "stapel_agent.embeddings.providers", "stapel_agent.images", "stapel_agent.images.providers", "stapel_agent.management", "stapel_agent.management.commands", "stapel_agent.migrations", "stapel_agent.providers", "stapel_agent.rerank", "stapel_agent.rerank.providers", "stapel_agent.safety", "stapel_agent.stt", "stapel_agent.stt.pricing", "stapel_agent.stt.providers", "stapel_agent.stt.validation"]
+packages = ["stapel_agent", "stapel_agent.analysis", "stapel_agent.diarization", "stapel_agent.diarization.pricing", "stapel_agent.diarization.providers", "stapel_agent.diarization.validation", "stapel_agent.embeddings", "stapel_agent.embeddings.providers", "stapel_agent.images", "stapel_agent.images.providers", "stapel_agent.management", "stapel_agent.management.commands", "stapel_agent.migrations", "stapel_agent.providers", "stapel_agent.rerank", "stapel_agent.rerank.providers", "stapel_agent.safety", "stapel_agent.stt", "stapel_agent.stt.pricing", "stapel_agent.stt.providers", "stapel_agent.stt.validation"]
 
 [tool.setuptools.package-data]
 stapel_agent = ["py.typed", "migrations/*.py", "schemas/**/*.json", "migrations/**/*.py", "docs/capabilities.json", "docs/llms.txt", "docs/flows.json", "docs/errors.json", "CONFIG.MD"]

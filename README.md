@@ -24,7 +24,7 @@ pip install stapel-agent
 
 | Fact | Value |
 |---|---|
-| Version | `0.20.0` |
+| Version | `0.21.0` |
 | Python | `>=3.11` (3.11, 3.12, 3.13, 3.14) |
 | HTTP operations | 5 |
 | Config axes | 4 |
@@ -247,6 +247,42 @@ pattern (`STAPEL_AGENT["IMAGE_PROVIDERS"]` overlay, `None` removes,
 Ideogram, ...) are an app-layer `stapel_agent.ImageGenProvider` subclass —
 recipe in [MODULE.md](https://github.com/usestapel/stapel-agent/blob/main/MODULE.md). The agent returns raw results and writes
 the ledger; storage/placement belongs to the calling tier.
+
+## Staged analysis (`stapel_agent.analysis`)
+
+A recognition chain that takes tens of seconds is a JOB, not a request.
+`analysis` is that job: one JSON state document per subject, a stage apiece,
+a fast stage whose answer is readable while a slow one still runs, and a slow
+stage that writes `progress` and a growing partial `result` after **every
+batch** rather than only at the end.
+
+```python
+from stapel_agent.analysis import (
+    Fingerprint, ModelStateStore, ON_PHOTOS, Stage, StageBatch, runner,
+)
+
+stages = [
+    Stage("text", describe, depends_on=frozenset({ON_PHOTOS})),
+    Stage("features", fill),                       # yields StageBatch(...)
+    Stage("moderation", screen, blocking=False),   # cannot fail the job
+]
+store = ModelStateStore()
+state, started = runner.start(
+    store=store, key=key,
+    fingerprint=Fingerprint.of(photos=blobs, text=typed),
+    stages=stages, seller_filled=already_answered,
+)
+```
+
+The fingerprint has two halves because they invalidate different work: a
+stage declares which halves it depends on, so a refresh with edited text
+re-runs the text-dependent stages and keeps the photo stage's answer.
+`start()` is idempotent — the same photos and the same text are the same
+question. `AnalysisJobView` is the `POST`/`GET` surface (`?wait=1` waits for
+the fast stage only), and `analysis.blocks` orders a catalogue's feature
+definitions into the order a composer asks them while resolving them in
+dependency order, giving every un-askable field an explicit `reason` instead
+of dropping it.
 
 ## Privacy & retention
 

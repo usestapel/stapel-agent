@@ -3,6 +3,55 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.21.0] — 2026-09-04
+
+### Added — `stapel_agent.analysis`: staged analysis as a job, not a request
+
+A composer that recognises a listing from photos ran the whole chain inside
+one blocking POST: seven to nineteen provider calls, median 17 s, worst 33 s,
+holding a web worker for all of it. Everything the FIRST call already knew —
+the title, the description, what the photograph plainly shows — stayed
+invisible until the LAST one returned, and there was nothing to poll, so the
+only two outcomes were "wait" and "lose the work".
+
+This is that chain as a **job on a subject**, generic enough for any staged
+recognition: a state document, a stage runner, a store, and the ordering that
+turns a catalogue's feature definitions into the order a composer asks them.
+
+- **`analysis.state`** — the document (`status`, `fingerprint`, `stages`,
+  `updated_at`), JSON by construction so it can live in a row, a cache entry
+  or another service's metadata without a second representation.
+  `Fingerprint` splits into a photo half and a text half because they
+  invalidate different work: new photos invalidate everything, edited text
+  only what was derived from it, and a single opaque hash cannot say that.
+- **`analysis.runner`** — `start()` is idempotent on the fingerprint (the
+  same question is not asked twice), and re-runs on a refresh only the stages
+  whose declared half of the fingerprint actually changed. `run()` writes the
+  document **after every batch**, so a long stage reports `progress` and a
+  growing partial `result` instead of being opaque. A stage may be
+  `blocking=False` — a screening pass that fails must not fail the job.
+- **`analysis.store`** — `ModelStateStore` (the new `AnalysisJob` row,
+  migration `0007`) or any host's own `StateStore`.
+- **`analysis.views.AnalysisJobView`** — `POST` starts or refreshes and
+  answers `202` with the document; `?wait=1` waits for the FAST stage only;
+  `GET` answers the same document, so a poller and a waiter read one shape.
+- **`analysis.blocks`** — the ordering, and the four silent drops it closes.
+  Features are planned in the composer's order (sections by first appearance,
+  required-bearing sections first, required fields first inside one) but
+  **resolved** in dependency order over `optionsRef.parentFeature`. Those are
+  not the same order, and on a live motoring leaf whose catalogue order is
+  alphabetical by slug they are nearly opposite: `generation` sorts before
+  `model` before `make`, so a catalogue-ordered cascade asked every child
+  before its parent existed and dropped the whole chain without a word.
+  Every feature that cannot be asked comes back as an `Ask` with a
+  `reason` — `unsupported_type`, `no_options`, `parent_unknown`,
+  `parent_cycle` — never as an omission a caller cannot tell from "nobody
+  thought to ask". `bounds_for()` narrows numeric questions through
+  stapel-attributes' `limit` rule effect where that module is installed, and
+  through the config's own `min`/`max` where it is not.
+
+Nothing else in the package changed; `analysis` is additive.
+
 ## [0.20.0] — 2026-09-03
 
 ### Added — the embeddings surface joins the ledger
