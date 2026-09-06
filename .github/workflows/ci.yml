@@ -20,6 +20,72 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
+      - name: Install
+        run: pip install -e ".[all]" || pip install -e .
+
+      - name: Lint
+        run: |
+          pip install ruff --quiet
+          ruff check . --select E,F,W --ignore E501
+
+      - name: migration-lint (expand/contract gate, release-management.md §3)
+        run: |
+          pip install stapel-tools --quiet
+          stapel-migration-lint . --strict
+
+      - name: Import check
+        run: python -c "import stapel_agent; print('import OK')"
+
+      - name: Install test dependencies
+        # stapel-tools (dependency-free) carries the capabilities emitter that
+        # tests/test_capabilities_surface.py drift-gates — without it that gate
+        # would skip, and a silently skipped gate is how the document rots.
+        run: pip install pytest pytest-django pytest-cov "stapel-tools>=0.22.0,<1"
+
+      - name: Tests with coverage
+        run: |
+          pytest tests/ \
+            --cov=stapel_agent \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --junitxml=junit.xml \
+            -o junit_family=legacy \
+            -v
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        with:
+          files: coverage.xml
+          flags: stapel-agent
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload test results to Codecov
+        uses: codecov/test-results-action@v1
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  core-main:
+    # Advisory / early-warning job — installs stapel-core (and any sibling)
+    # from git main so a breaking change on core's main branch shows up here
+    # before it reaches a release, without ever gating this repo's CI.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
       - name: Install stapel-core
         run: pip install git+https://github.com/usestapel/stapel-core.git
 
