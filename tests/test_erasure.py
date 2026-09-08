@@ -1,6 +1,6 @@
 """Erasure over comm: the prompt ledger answers a subject request.
 
-The finding this closes (ironmemo, 2026-08-21): stapel-agent was declared
+The finding this closes (a client fleet, 2026-08-21): stapel-agent was declared
 a GDPR data owner and shipped no ``actions.py`` at all, so the only
 erasure path was the in-process provider — which a service deployment
 never runs. The erasure request went out, nothing consumed it, and the

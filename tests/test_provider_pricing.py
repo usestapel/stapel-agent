@@ -27,7 +27,7 @@ see the module docstring notes in the calling agent's report for the full
 list; none of those upstream tests were dropped as "redundant", they are
 simply out of scope for a pricing-tables-only port.
 
-Sources (ironmemo-backend, origin/feature/benchmark-harness):
+Sources (a client backend, origin/feature/benchmark-harness):
   iron-benchmark/pipeline/tests/test_assemblyai.py
   iron-benchmark/pipeline/tests/test_deepgram.py
   iron-benchmark/pipeline/tests/test_elevenlabs.py

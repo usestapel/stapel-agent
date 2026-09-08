@@ -20,7 +20,7 @@ needed to nest each function as a class method, and a local
 assertion bodies below it can call the bare ``validate_response(...)`` name
 exactly as the source did.
 
-Sources (ironmemo-backend, origin/feature/benchmark-harness):
+Sources (a client backend, origin/feature/benchmark-harness):
   iron-benchmark/pipeline/tests/test_assemblyai.py
   iron-benchmark/pipeline/tests/test_deepgram.py
   iron-benchmark/pipeline/tests/test_elevenlabs.py

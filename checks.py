@@ -61,7 +61,7 @@ def check_providers(app_configs, **kwargs):
 
     # Registered is not usable. The check above proves DEFAULT_PROVIDER
     # RESOLVES; it never asked whether it can actually serve a call. The
-    # ironmemo stand defaulted to 'anthropic' with an empty key: green
+    # client stand defaulted to 'anthropic' with an empty key: green
     # checks, and every llm.summarize call failing — invisibly, because
     # the caller treats summarization as best-effort and completed each
     # recording with an empty summary (2026-07-26).
@@ -459,7 +459,7 @@ def check_prompt_log_retention_is_scheduled(app_configs, **kwargs):
 def check_agent_beat_schedule_is_registered(app_configs, **kwargs):
     """W017: this process runs beat and this package is not in the schedule.
 
-    The ironmemo finding was not a wrong cadence, it was **no entry at
+    The client finding was not a wrong cadence, it was **no entry at
     all**: a service with a working ``CELERY_BEAT_SCHEDULE`` for the other
     libraries, and nothing running the agent retention purge — so the
     prompts and full model responses accumulated behind a setting that

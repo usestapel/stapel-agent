@@ -11,7 +11,7 @@ One key holds one document, and a refresh starts a second run over it while
 the first is still working. `ModelStateStore.save` was a blind upsert — "the
 LAST write of a document wins" — so the two runs took turns owning the row.
 
-Measured on a live composer (ruberi.ru, Д380): the job starts at the photo
+Measured on a live composer (a client storefront, Д380): the job starts at the photo
 step over the pictures alone, and again the moment the seller has typed a
 title. The first run read a phone's photos as a mirror, descended to
 «Зеркала» and answered `mirror_type`, `frame`, `furniture_shape`; the second
@@ -648,7 +648,7 @@ Emits and consumes are declared in `schemas/emits/` and `schemas/consumes/`
   The retention window and the management command have existed since the
   AGENT-02 audit; nothing shipped that a scheduler could reference.
 - **`stapel_agent.W017`** — this process runs beat and has no entry for the
-  purge. The ironmemo finding was not a wrong cadence but no entry at all,
+  purge. The client finding was not a wrong cadence but no entry at all,
   and a beat schedule that runs *something* looks exactly like one that runs
   *this*. `W014` narrows to its complement (no scheduler known at all), so
   the two never fire together: one gap, one warning, and W017's hint names
@@ -738,7 +738,7 @@ Failure posture mirrors the fleet's own precedent rather than inventing one:
 no `user_id` on the call (nothing to ask billing *about* — a system-internal
 call has no plan) and an unreachable `billing.check_entitlement` (not
 installed, no route, a network failure) both apply **no ceiling** — the same
-fail-open choice `ironmemo-backend`'s `recordings_ext.entitlement` gate makes
+fail-open choice a client backend's `recordings_ext.entitlement` gate makes
 for its own billing seam, because refusing an otherwise-permitted size over
 OUR OWN outage is a worse outcome than the cost of one over-generous call.
 Both cases log; the identity case at `warning`, the seam-down case too. A
@@ -1414,7 +1414,7 @@ returned unchanged.
   moment a provider changes.
 - **`stapel_agent.W009`** — the default LLM provider is registered but not
   usable. `check_providers` only ever proved DEFAULT_PROVIDER *resolves*; the
-  ironmemo stand defaulted to `anthropic` with an EMPTY `ANTHROPIC_API_KEY`
+  client stand defaulted to `anthropic` with an EMPTY `ANTHROPIC_API_KEY`
   and no `claude` binary, so checks were green while every `llm.complete` /
   `llm.summarize` call raised `ProviderError` — invisibly, because the fleet's
   one caller (stapel-recordings' summarize step) is best-effort by design and
@@ -1427,7 +1427,7 @@ returned unchanged.
 
 ### Added — `llm.embed` accepts a per-call `model`
 
-Found on app.ironmemo.com when vector search was switched on:
+Found on a client's live host when vector search was switched on:
 stapel-recordings puts `model` into the `llm.embed` payload whenever its
 embeddings model is configured, and `EMBED_SCHEMA` declared only
 `texts`/`provider`/`timeout_seconds`/`provider_options` with

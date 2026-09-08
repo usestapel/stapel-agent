@@ -23,7 +23,7 @@ class ClaudeCodeCLIProvider(LlmProvider):
     @classmethod
     def configuration_error(cls) -> str | None:
         # The binary is the credential here. It is routinely absent from a
-        # slim service image (the ironmemo agent image has no `claude`),
+        # slim service image (a client's agent image has no `claude`),
         # and complete() only discovers that at call time.
         binary = agent_settings.CLI_BINARY
         if not shutil.which(binary):

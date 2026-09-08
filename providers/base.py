@@ -81,7 +81,7 @@ class LlmProvider(ABC):
         asked whether DEFAULT_PROVIDER resolves to an LlmProvider subclass
         — so a deployment defaulting to `anthropic` with an EMPTY
         ANTHROPIC_API_KEY passed every check while every text call raised
-        ProviderError (ironmemo stand, 2026-07-26). Nothing said so,
+        ProviderError (a client stand, 2026-07-26). Nothing said so,
         because the one caller in the fleet — stapel-recordings'
         summarize step — is best-effort by design: it swallowed the error
         and each recording completed with an empty summary.

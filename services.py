@@ -85,12 +85,12 @@ def resolve_size_ceiling(user_id, workspace_id=None) -> str | None:
     * *user_id* is absent. There is no subject to ask billing ABOUT — a
       system-internal call has no plan — so this logs a warning (an
       operator who DID mean to gate every caller needs to see identity-less
-      calls arriving) and applies no ceiling, same as ``ironmemo``'s
+      calls arriving) and applies no ceiling, same as a client's
       recordings gate treats an unbillable anonymous caller as a distinct
       case rather than a denial.
     * ``billing.check_entitlement`` is unreachable (``CommError`` — not
       installed, no route, or a network failure). Mirrors
-      ``ironmemo-backend``'s ``recordings_ext.entitlement`` gate: refusing
+      a client backend's ``recordings_ext.entitlement`` gate: refusing
       an otherwise-permitted size because OUR OWN billing call failed is a
       worse outcome than the cost of one over-generous call, so this fails
       OPEN (no ceiling), logged as a warning.
@@ -99,7 +99,7 @@ def resolve_size_ceiling(user_id, workspace_id=None) -> str | None:
       an unknown key/plan (catalog misconfiguration). Logged as an error
       (unlike the two cases above, this one means the deployment's plan
       catalog needs fixing) and, again, no ceiling — the same "denial
-      without a usable cap ⇒ process unrestricted" idiom ironmemo's gate
+      without a usable cap ⇒ process unrestricted" idiom a client's gate
       uses for its own catalog-misconfiguration case.
 
     ``workspace_id`` is accepted — every call site already carries it

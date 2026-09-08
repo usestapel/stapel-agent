@@ -56,10 +56,10 @@ class TestElevenLabsKeyterms:
 
     def test_keyterms_sent_as_multipart_list(self, configured, monkeypatch):
         transcript, captured = self._run(
-            monkeypatch, keyterms=["IronMemo", "stapel core"]
+            monkeypatch, keyterms=["AcmeCorp", "stapel core"]
         )
         # A list value → repeated `keyterms` form fields under requests.
-        assert captured[0]["data"]["keyterms"] == ["IronMemo", "stapel core"]
+        assert captured[0]["data"]["keyterms"] == ["AcmeCorp", "stapel core"]
         assert transcript.biasing == {
             "applied": True,
             "terms_sent": 2,
@@ -126,9 +126,9 @@ class TestAssemblyAIKeyterms:
         return transcript, posted
 
     def test_keyterms_sent_as_keyterms_prompt(self, configured, monkeypatch):
-        transcript, posted = self._run(monkeypatch, keyterms=["IronMemo", "SSH"])
+        transcript, posted = self._run(monkeypatch, keyterms=["AcmeCorp", "SSH"])
         body = posted[0]["json"]
-        assert body["keyterms_prompt"] == ["IronMemo", "SSH"]
+        assert body["keyterms_prompt"] == ["AcmeCorp", "SSH"]
         # the legacy pair is gone from current docs — must never be sent
         assert "word_boost" not in body
         assert "boost_param" not in body
@@ -170,7 +170,7 @@ class TestAssemblyAIKeyterms:
         and be ignored — silent non-biasing. The adapter must not claim
         applied=true and must not send the parameter."""
         transcript, posted = self._run(
-            monkeypatch, language="zh", keyterms=["IronMemo", "SSH"]
+            monkeypatch, language="zh", keyterms=["AcmeCorp", "SSH"]
         )
         assert "keyterms_prompt" not in posted[0]["json"]
         assert transcript.biasing == {
@@ -179,15 +179,15 @@ class TestAssemblyAIKeyterms:
             "terms_truncated": 2,
         }
         # terms are not smuggled into the request through another field
-        assert "IronMemo" not in json.dumps(posted[0]["json"])
+        assert "AcmeCorp" not in json.dumps(posted[0]["json"])
 
     def test_language_inside_model_coverage_still_biases(
         self, configured, monkeypatch
     ):
         transcript, posted = self._run(
-            monkeypatch, language="en-US", keyterms=["IronMemo"]
+            monkeypatch, language="en-US", keyterms=["AcmeCorp"]
         )
-        assert posted[0]["json"]["keyterms_prompt"] == ["IronMemo"]
+        assert posted[0]["json"]["keyterms_prompt"] == ["AcmeCorp"]
         assert transcript.biasing["applied"] is True
 
     def test_pro_model_covers_its_six_native_languages(
@@ -197,13 +197,13 @@ class TestAssemblyAIKeyterms:
             "ASSEMBLYAI_API_KEY": "aai-test", "ASSEMBLYAI_MODEL": "best",
         }
         transcript, posted = self._run(
-            monkeypatch, language="de", keyterms=["IronMemo"]
+            monkeypatch, language="de", keyterms=["AcmeCorp"]
         )
-        assert posted[0]["json"]["keyterms_prompt"] == ["IronMemo"]
+        assert posted[0]["json"]["keyterms_prompt"] == ["AcmeCorp"]
         assert transcript.biasing["applied"] is True
         # ...but not the wide tail (falls back to Universal-2 internally)
         transcript, posted = self._run(
-            monkeypatch, language="ja", keyterms=["IronMemo"]
+            monkeypatch, language="ja", keyterms=["AcmeCorp"]
         )
         assert "keyterms_prompt" not in posted[0]["json"]
         assert transcript.biasing["applied"] is False
@@ -212,8 +212,8 @@ class TestAssemblyAIKeyterms:
         self, configured, monkeypatch
     ):
         # No language pinned: coverage is unknowable before the call.
-        transcript, posted = self._run(monkeypatch, keyterms=["IronMemo"])
-        assert posted[0]["json"]["keyterms_prompt"] == ["IronMemo"]
+        transcript, posted = self._run(monkeypatch, keyterms=["AcmeCorp"])
+        assert posted[0]["json"]["keyterms_prompt"] == ["AcmeCorp"]
         assert transcript.biasing["applied"] is True
         # Unrecognized model name: refusing to bias would be its own
         # silent failure — send, and let the biasing counts be honest.
@@ -221,9 +221,9 @@ class TestAssemblyAIKeyterms:
             "ASSEMBLYAI_API_KEY": "aai-test", "ASSEMBLYAI_MODEL": "universal-9",
         }
         transcript, posted = self._run(
-            monkeypatch, language="zh", keyterms=["IronMemo"]
+            monkeypatch, language="zh", keyterms=["AcmeCorp"]
         )
-        assert posted[0]["json"]["keyterms_prompt"] == ["IronMemo"]
+        assert posted[0]["json"]["keyterms_prompt"] == ["AcmeCorp"]
         assert transcript.biasing["applied"] is True
 
     def test_provider_options_win_over_adapter_params(self, configured, monkeypatch):
@@ -231,12 +231,12 @@ class TestAssemblyAIKeyterms:
             monkeypatch,
             provider_options={
                 "speech_model": "best",
-                "custom_spelling": [{"from": ["iron memo"], "to": "IronMemo"}],
+                "custom_spelling": [{"from": ["acme corp"], "to": "AcmeCorp"}],
             },
         )
         body = posted[0]["json"]
         assert body["speech_model"] == "best"
-        assert body["custom_spelling"] == [{"from": ["iron memo"], "to": "IronMemo"}]
+        assert body["custom_spelling"] == [{"from": ["acme corp"], "to": "AcmeCorp"}]
 
 
 # ─── Non-supporting adapter contract ───────────────────────────────────
@@ -252,7 +252,7 @@ class TestNonSupportingAdapter:
         captured = []
         mock_post(monkeypatch, "whisper_http", [FakeResponse(WHISPER_BODY)], captured)
         transcript = WhisperHttpProvider().transcribe(
-            audio=AudioRef(data=b"x"), keyterms=["IronMemo", "SSH"]
+            audio=AudioRef(data=b"x"), keyterms=["AcmeCorp", "SSH"]
         )
         assert transcript.biasing == {
             "applied": False,
@@ -260,7 +260,7 @@ class TestNonSupportingAdapter:
             "terms_truncated": 2,
         }
         # the terms are NOT smuggled into the request either
-        assert "IronMemo" not in json.dumps(captured[0]["data"])
+        assert "AcmeCorp" not in json.dumps(captured[0]["data"])
 
     def test_whisper_provider_options_still_pass_through(
         self, configured, monkeypatch
@@ -271,9 +271,9 @@ class TestNonSupportingAdapter:
         mock_post(monkeypatch, "whisper_http", [FakeResponse(WHISPER_BODY)], captured)
         WhisperHttpProvider().transcribe(
             audio=AudioRef(data=b"x"),
-            provider_options={"prompt": "IronMemo, SSH", "temperature": "0"},
+            provider_options={"prompt": "AcmeCorp, SSH", "temperature": "0"},
         )
-        assert captured[0]["data"]["prompt"] == "IronMemo, SSH"
+        assert captured[0]["data"]["prompt"] == "AcmeCorp, SSH"
         assert captured[0]["data"]["temperature"] == "0"
 
     def test_unsupported_biasing_helper(self):
@@ -319,12 +319,12 @@ class TestServiceThreading:
     def test_keyterms_and_options_reach_the_adapter(self, fake_stt):
         result = services.transcribe(
             AudioRef(url="https://x/a.mp3"),
-            keyterms=["IronMemo"],
+            keyterms=["AcmeCorp"],
             provider_options={"beta_flag": True},
         )
         assert result["status"] == "ok"
         call = fake_stt.calls[0]
-        assert call["keyterms"] == ["IronMemo"]
+        assert call["keyterms"] == ["AcmeCorp"]
         assert call["provider_options"] == {"beta_flag": True}
         # the fake has no keyterm support → the generic contract applies
         assert result["transcript"]["biasing"] == {
@@ -373,13 +373,13 @@ class TestTranscribeFunctionSchema:
             "llm.transcribe",
             {
                 "audio_url": "https://minio.test/rec.mp3",
-                "keyterms": ["IronMemo", "stapel"],
+                "keyterms": ["AcmeCorp", "stapel"],
                 "provider_options": {"any_provider_key": {"nested": 1}},
             },
         )
         assert result["status"] == "ok"
         call_rec = fake_stt.calls[0]
-        assert call_rec["keyterms"] == ["IronMemo", "stapel"]
+        assert call_rec["keyterms"] == ["AcmeCorp", "stapel"]
         assert call_rec["provider_options"] == {"any_provider_key": {"nested": 1}}
         assert result["transcript"]["biasing"]["applied"] is False
 
@@ -426,7 +426,7 @@ class TestTranscribeHttpSurface:
             TRANSCRIBE_URL,
             {
                 "audio_url": "https://minio.test/rec.mp3",
-                "keyterms": ["IronMemo"],
+                "keyterms": ["AcmeCorp"],
                 "provider_options": {"beta_flag": True},
             },
             format="json",
@@ -434,7 +434,7 @@ class TestTranscribeHttpSurface:
         )
         assert resp.status_code == 200, resp.content
         call = fake_stt.calls[0]
-        assert call["keyterms"] == ["IronMemo"]
+        assert call["keyterms"] == ["AcmeCorp"]
         assert call["provider_options"] == {"beta_flag": True}
         assert resp.json()["transcript"]["biasing"] == {
             "applied": False,

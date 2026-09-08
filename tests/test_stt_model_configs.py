@@ -2,7 +2,7 @@
 
 These are the tests that could not travel with the 0.6.5 pricing port: they
 exercise a catalog of model configs and a registry mapping a provider to its
-rate card, neither of which existed here yet. Sources (ironmemo-backend,
+rate card, neither of which existed here yet. Sources (a client backend,
 origin/feature/benchmark-harness):
 
   iron-benchmark/pipeline/tests/test_model_registry.py

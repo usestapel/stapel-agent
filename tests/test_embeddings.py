@@ -681,7 +681,7 @@ class TestLlmEmbedFunction:
     def test_model_is_part_of_the_contract(self, fake_embeddings):
         """Regression: stapel-recordings 0.6.2 sends ``model`` whenever
         RECORDINGS_EMBEDDINGS_MODEL is set, and the schema rejected it —
-        every embed on app.ironmemo.com failed with "'model' was
+        every embed on a client's live host failed with "'model' was
         unexpected" until the setting was blanked. The pin must reach the
         provider and the response must report what actually ran."""
         result = call("llm.embed", {"texts": ["a"], "model": "bge-m3"})

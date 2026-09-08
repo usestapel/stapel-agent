@@ -309,7 +309,7 @@ def test_a_raising_skip_predicate_runs_the_stage_rather_than_dropping_it():
 
 
 def test_a_run_the_refresh_displaced_cannot_overwrite_the_new_one():
-    """The defect this exists for, measured on ruberi.ru 2026-09-04.
+    """The defect this exists for, measured on a client storefront 2026-09-04.
 
     The composer starts the job twice on one draft: once at the photo step,
     over the pictures alone, and again once the seller has typed a title.

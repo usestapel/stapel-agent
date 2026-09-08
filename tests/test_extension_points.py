@@ -136,7 +136,7 @@ class TestSystemChecks:
         assert check_providers(None) == []
 
     def test_default_provider_without_credentials_warns(self, settings):
-        """Registered is not usable — the ironmemo stand, 2026-07-26.
+        """Registered is not usable — a client stand, 2026-07-26.
 
         DEFAULT_PROVIDER='anthropic' with an empty key passed every check
         while every llm.summarize call raised ProviderError, invisibly:

@@ -186,10 +186,10 @@ class TestDeepgram:
         transcript, posted = self._run(
             monkeypatch,
             [FakeResponse(DEEPGRAM_BODY)],
-            keyterms=["IronMemo", "SSH", "iron memo"],
+            keyterms=["AcmeCorp", "SSH", "acme corp"],
         )
         # Plain list value → the repeated query param; never comma-joined.
-        assert posted[0]["params"]["keyterm"] == ["IronMemo", "SSH", "iron memo"]
+        assert posted[0]["params"]["keyterm"] == ["AcmeCorp", "SSH", "acme corp"]
         assert transcript.biasing == {
             "applied": True,
             "terms_sent": 3,
@@ -442,7 +442,7 @@ class TestGladia:
                 FakeResponse({"id": "job_1"}),
             ],
             get=[FakeResponse(GLADIA_DONE)],
-            keyterms=["IronMemo", "SSH"],
+            keyterms=["AcmeCorp", "SSH"],
         )
         assert transcript.biasing == {
             "applied": False,
@@ -450,7 +450,7 @@ class TestGladia:
             "terms_truncated": 2,
         }
         # ...and the terms are NOT smuggled into the request.
-        assert "IronMemo" not in json.dumps(posted[1]["json"])
+        assert "AcmeCorp" not in json.dumps(posted[1]["json"])
 
     def test_provider_options_merge_into_create_body(self, configured, monkeypatch):
         _, posted, _ = self._run(
@@ -704,7 +704,7 @@ class TestSoniox:
                 FakeResponse(SONIOX_TRANSCRIPT),
             ],
             get=[FakeResponse({"status": "completed"})],
-            keyterms=["IronMemo"],
+            keyterms=["AcmeCorp"],
         )
         assert transcript.biasing == {
             "applied": False,
@@ -721,9 +721,9 @@ class TestSoniox:
                 FakeResponse(SONIOX_TRANSCRIPT),
             ],
             get=[FakeResponse({"status": "completed"})],
-            provider_options={"context": {"terms": ["IronMemo"]}},
+            provider_options={"context": {"terms": ["AcmeCorp"]}},
         )
-        assert requested[1]["json"]["context"] == {"terms": ["IronMemo"]}
+        assert requested[1]["json"]["context"] == {"terms": ["AcmeCorp"]}
 
     def test_failed_job_deletes_file_not_transcription(self, configured, monkeypatch):
         _, _, _, deleted = mock_http(
@@ -880,14 +880,14 @@ class TestSpeechmatics:
                 FakeResponse({"job": {"status": "done"}}),
                 FakeResponse(SM_TRANSCRIPT),
             ],
-            keyterms=["IronMemo"],
+            keyterms=["AcmeCorp"],
         )
         assert transcript.biasing == {
             "applied": False,
             "terms_sent": 0,
             "terms_truncated": 1,
         }
-        assert "IronMemo" not in posted[0]["data"]["config"]
+        assert "AcmeCorp" not in posted[0]["data"]["config"]
 
     def test_provider_options_merge_into_transcription_config(
         self, configured, monkeypatch
@@ -899,10 +899,10 @@ class TestSpeechmatics:
                 FakeResponse({"job": {"status": "done"}}),
                 FakeResponse(SM_TRANSCRIPT),
             ],
-            provider_options={"additional_vocab": [{"content": "IronMemo"}]},
+            provider_options={"additional_vocab": [{"content": "AcmeCorp"}]},
         )
         tc = json.loads(posted[0]["data"]["config"])["transcription_config"]
-        assert tc["additional_vocab"] == [{"content": "IronMemo"}]
+        assert tc["additional_vocab"] == [{"content": "AcmeCorp"}]
 
     def test_rejected_job_is_fatal(self, configured, monkeypatch):
         with pytest.raises(TranscriptionError, match="rejected") as e:
@@ -991,7 +991,7 @@ class TestXaiStt:
         # an edited transcript from a verbatim one. The adapter always asks
         # for verbatim — with a language, without one, with keyterms.
         for kwargs in ({}, {"language": "ru-RU", "diarization": True},
-                       {"keyterms": ["IronMemo"]}):
+                       {"keyterms": ["AcmeCorp"]}):
             _, posted = self._run(monkeypatch, [FakeResponse(XAI_BODY)], **kwargs)
             assert posted[0]["data"]["filler_words"] == "true", kwargs
 
@@ -1021,9 +1021,9 @@ class TestXaiStt:
 
     def test_keyterms_repeated_field_and_biasing(self, configured, monkeypatch):
         transcript, posted = self._run(
-            monkeypatch, [FakeResponse(XAI_BODY)], keyterms=["IronMemo", "SSH"]
+            monkeypatch, [FakeResponse(XAI_BODY)], keyterms=["AcmeCorp", "SSH"]
         )
-        assert posted[0]["data"]["keyterm"] == ["IronMemo", "SSH"]
+        assert posted[0]["data"]["keyterm"] == ["AcmeCorp", "SSH"]
         assert transcript.biasing == {
             "applied": True,
             "terms_sent": 2,

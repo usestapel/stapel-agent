@@ -6,7 +6,7 @@ request for a subject this module holds rows about must reach these rows
 and come back with a receipt. Until 0.14.0 this package shipped no
 subscriber at all — it participated only through the in-process
 `GDPRProvider`, which a microservice deployment never runs, and the
-ironmemo audit found exactly that: an owner declared in `DATA_OWNERS`
+client audit found exactly that: an owner declared in `DATA_OWNERS`
 whose consumer nothing had ever deployed, discoverable only by waiting
 thirty days for the request to time out.
 

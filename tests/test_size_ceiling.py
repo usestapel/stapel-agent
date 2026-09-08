@@ -8,7 +8,7 @@ entitlement key name turns on a per-call ``billing.check_entitlement`` lookup
 that can refuse a request whose ``model_size`` sits above what the caller's
 plan resolves to — an upsell surface, never a silent downgrade.
 
-Fail-open precedent: mirrors ironmemo-backend's ``recordings_ext.entitlement``
+Fail-open precedent: mirrors a client backend's ``recordings_ext.entitlement``
 gate — an unreachable/misconfigured billing call must not turn into a denial
 of an otherwise-permitted size, because the caller did nothing wrong; only a
 billing verdict that is both present AND names a usable ceiling narrows
@@ -92,7 +92,7 @@ class TestNoIdentity:
 @pytest.mark.django_db
 class TestBillingUnavailable:
     """billing.check_entitlement is unreachable — fails open, mirroring
-    ironmemo's recordings_ext.entitlement gate exactly."""
+    a client's recordings_ext.entitlement gate exactly."""
 
     def test_unregistered_function_fails_open(self, fake_provider, settings):
         # Nothing registers "billing.check_entitlement" in this process —

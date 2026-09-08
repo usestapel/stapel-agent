@@ -3,7 +3,7 @@
 `PROMPT_LOG_RETENTION_DAYS` and the `purge_prompt_logs` management command
 have existed since the AGENT-02 audit; nothing shipped that a scheduler
 could reference, so every host had to invent its own cron entry and the
-ironmemo deployment ran with no beat at all — a retention policy that was
+client deployment ran with no beat at all — a retention policy that was
 a number in a settings file. This module is the missing half:
 :func:`get_agent_beat_schedule` is the entry a host splices into
 `CELERY_BEAT_SCHEDULE`, and `checks.py` warns (``stapel_agent.W017``)

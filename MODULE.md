@@ -528,7 +528,7 @@ Billed via `stapel_core.comm.call("billing.check_entitlement", {"user_id",
 "key", "quantity": 1})`, reading `{"allowed", "limit", "reason"}` back
 (`limit` is a 1-based rank into `MODEL_SIZES`). **No ceiling is applied**
 (fails OPEN, logged) in every one of these cases — mirroring
-ironmemo-backend's `recordings_ext.entitlement` gate exactly:
+a client backend's `recordings_ext.entitlement` gate exactly:
 
 - the switch is unset;
 - the call carries no `user_id` (nothing to ask billing ABOUT — logged as a
