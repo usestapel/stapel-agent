@@ -36,6 +36,14 @@
       "type": "object",
       "description": "Free-form per-provider passthrough, applied AFTER the adapter's own request params — pin provider specifics without a core release. Unknown keys go to the provider as-is."
     },
+    "transcript_put_url": {
+      "type": "string",
+      "description": "Presigned PUT the agent writes the transcript to. Supplied, the reply carries a REFERENCE (transcript_ref) plus counts instead of the transcript body — the mirror image of audio_url, and the only shape that survives a broker: a long meeting's transcript does not fit one message. Omitted, the transcript comes back inline (HTTP callers, monoliths)."
+    },
+    "transcript_key": {
+      "type": "string",
+      "description": "The caller's own key for that object, echoed back as transcript_ref.key. Echoed, never parsed out of the presigned URL — the key layout is the caller's business."
+    },
     "user_id": {
       "type": "string",
       "description": "Who this call is for — recorded on the PromptLog row so per-user cost is answerable. Opaque to this package: any id shape the host uses. Optional; omitting it leaves the row unattributed, never rejected."

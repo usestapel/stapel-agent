@@ -19,6 +19,7 @@ from typing import Optional
 import requests
 
 from ...conf import agent_settings
+from .. import segmentation
 from ..base import (
     AudioRef,
     NormalizedTranscript,
@@ -148,6 +149,10 @@ def _normalize(payload: dict, *, provider: str) -> NormalizedTranscript:
         for s in payload.get("segments") or []
         if (s.get("text") or "").strip()
     ]
+    # Word timings first: the whole-text fallback below is ONE utterance
+    # covering the file, which is the wall of text this release is about.
+    # It is kept only for a response that carries no words to cut with.
+    utterances = segmentation.finalize(utterances, words)
     if not utterances and payload.get("text"):
         end = max((w.end for w in words), default=0.0)
         utterances = [

@@ -251,6 +251,21 @@ TRANSCRIBE_SCHEMA = {
             "specifics without a core release. Unknown keys go to the "
             "provider as-is.",
         },
+        "transcript_put_url": {
+            "type": "string",
+            "description": "Presigned PUT the agent writes the transcript "
+            "to. Supplied, the reply carries a REFERENCE (transcript_ref) "
+            "plus counts instead of the transcript body — the mirror image "
+            "of audio_url, and the only shape that survives a broker: a "
+            "long meeting's transcript does not fit one message. Omitted, "
+            "the transcript comes back inline (HTTP callers, monoliths).",
+        },
+        "transcript_key": {
+            "type": "string",
+            "description": "The caller's own key for that object, echoed "
+            "back as transcript_ref.key. Echoed, never parsed out of the "
+            "presigned URL — the key layout is the caller's business.",
+        },
         **IDENTITY_PROPERTIES,
     },
     "required": ["audio_url"],
@@ -285,27 +300,64 @@ SUMMARIZE_SCHEMA = {
 }
 
 
+def transcript_summary(transcript: dict) -> dict:
+    """The bounded facts about a transcript, for a reply that carries a key.
+
+    Everything here is a scalar or a count except ``speakers_detected``,
+    which is one short label per speaker in the room. Nothing in it grows
+    with the length of the meeting — that is the property that makes the
+    reference reply safe to send over any transport.
+    """
+    words = transcript.get("words") or []
+    utterances = transcript.get("utterances") or []
+    return {
+        "provider": transcript.get("provider"),
+        "language": transcript.get("language"),
+        "duration_seconds": transcript.get("duration_seconds"),
+        "words": len(words),
+        "utterances": len(utterances),
+        "speakers_detected": list(transcript.get("speakers_detected") or []),
+        "biasing": transcript.get("biasing"),
+    }
+
+
 @function("llm.transcribe", schema=TRANSCRIBE_SCHEMA)
 def llm_transcribe(payload: dict) -> dict:
-    """Speech-to-text — same result dict as ``POST api/v1/llm/transcribe``.
+    """Speech-to-text. Returns the transcript, or a reference to it.
 
     Payload: ``{"audio_url": str, "language"?, "diarization"?,
     "provider"?, "timeout_seconds"?, "keyterms"?: [str],
-    "provider_options"?: {...}, "user_id"?: str,
-    "workspace_id"?: str}``. ``keyterms`` is the generic
-    vocabulary-biasing seam (plain terms; providers without support
-    report ``biasing.applied: false`` instead of failing);
-    ``provider_options`` passes provider-specific params through as-is,
-    after the adapter's own. Returns ``{"status": "ok", "transcript":
-    {...}, "provider_used": str, "fallback_used": bool}`` or
-    ``{"status": "failure", "reason": str}``; the transcript carries
-    ``biasing: {"applied", "terms_sent", "terms_truncated"} | null`` —
-    counts only, never the term strings.
+    "provider_options"?: {...}, "transcript_put_url"?: str,
+    "transcript_key"?: str, "user_id"?: str, "workspace_id"?: str}``.
+    ``keyterms`` is the generic vocabulary-biasing seam (plain terms;
+    providers without support report ``biasing.applied: false`` instead
+    of failing); ``provider_options`` passes provider-specific params
+    through as-is, after the adapter's own.
+
+    TWO REPLY SHAPES, CHOSEN BY THE CALLER — never by the size of the
+    answer, which is what makes this a contract rather than a threshold:
+
+    * ``transcript_put_url`` given — the transcript is written there and
+      the reply is ``{"status": "ok", "transcript_ref": {"key", "bytes",
+      "sha256", "content_type"}, "transcript_meta": {...counts...},
+      "provider_used", "fallback_used"}``. Bounded whatever the meeting's
+      length. This is the shape a broker-backed deployment must use: a
+      2h28m transcript is 8.6 MB and NATS refuses to carry it.
+    * omitted — ``{"status": "ok", "transcript": {...}, "provider_used",
+      "fallback_used"}``, the HTTP view's shape, for in-process callers
+      and ``POST api/v1/llm/transcribe``.
+
+    Failure is always ``{"status": "failure", "reason": str}``, and a
+    handoff that could not be written is a failure — never a silent
+    fallback to the inline shape, which would put the outage back exactly
+    where it was. The transcript carries ``biasing: {"applied",
+    "terms_sent", "terms_truncated"} | null`` — counts only, never the
+    term strings.
     """
     from . import services
     from .stt.base import AudioRef
 
-    return services.transcribe(
+    result = services.transcribe(
         AudioRef(url=payload["audio_url"]),
         language=payload.get("language"),
         diarization=bool(payload.get("diarization", False)),
@@ -315,6 +367,32 @@ def llm_transcribe(payload: dict) -> dict:
         provider_options=payload.get("provider_options"),
         **_identity_kwargs(payload),
     )
+
+    put_url = payload.get("transcript_put_url")
+    if not put_url or result.get("status") != "ok":
+        return result
+
+    from .handoff import HandoffError, put_json_or_raise
+
+    transcript = result.get("transcript") or {}
+    try:
+        ref = put_json_or_raise(
+            put_url, transcript, key=str(payload.get("transcript_key") or "")
+        )
+    except HandoffError as exc:
+        # The transcription itself succeeded and is already paid for, so say
+        # precisely what failed. The caller's stage treats this as retryable:
+        # a fresh presigned URL is one of the two things that fixes it.
+        logger.warning("llm.transcribe: transcript handoff failed: %s", exc)
+        return {"status": "failure", "reason": f"transcript_handoff_failed: {exc}"}
+
+    return {
+        "status": "ok",
+        "transcript_ref": ref,
+        "transcript_meta": transcript_summary(transcript),
+        "provider_used": result.get("provider_used"),
+        "fallback_used": bool(result.get("fallback_used")),
+    }
 
 
 DIARIZE_SCHEMA = {

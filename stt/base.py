@@ -156,41 +156,15 @@ def unsupported_biasing(keyterms: Optional[list[str]]) -> Optional[dict]:
 
 
 def utterances_from_words(words: list[NormalizedWord]) -> list[NormalizedUtterance]:
-    """Group consecutive same-speaker words into utterances."""
-    if not words:
-        return []
-    grouped: list[NormalizedUtterance] = []
-    buf_text: list[str] = []
-    buf_indexes: list[int] = []
-    buf_start = words[0].start
-    buf_end = words[0].end
-    buf_speaker = words[0].speaker
+    """Group *words* into utterances — see ``stt/segmentation.py``.
 
-    def flush():
-        grouped.append(
-            NormalizedUtterance(
-                text=" ".join(buf_text).strip(),
-                start=buf_start,
-                end=buf_end,
-                speaker=buf_speaker,
-                word_indexes=list(buf_indexes),
-            )
-        )
+    Kept here as the name every adapter already imports. It used to cut on
+    the speaker changing and nothing else, which meant a provider that
+    returns no speaker ids produced ONE utterance for the whole meeting.
+    """
+    from .segmentation import utterances_from_words as _group
 
-    for idx, w in enumerate(words):
-        if idx and w.speaker != buf_speaker:
-            flush()
-            buf_text = [w.text]
-            buf_indexes = [idx]
-            buf_start = w.start
-            buf_end = w.end
-            buf_speaker = w.speaker
-        else:
-            buf_text.append(w.text)
-            buf_indexes.append(idx)
-            buf_end = w.end
-    flush()
-    return grouped
+    return _group(words)
 
 
 # ─── AudioRef ──────────────────────────────────────────────────────────

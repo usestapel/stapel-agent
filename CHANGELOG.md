@@ -3,6 +3,85 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.22.0] — 2026-09-09
+
+### Fixed — a long meeting's transcript could not fit on the wire, so it was dropped
+
+`llm.transcribe` returned the whole `NormalizedTranscript` inline. Over
+HTTP that is unremarkable; over a message broker it is a hard ceiling.
+Measured on a client stand: a 2h28m meeting answered **8 647 617 bytes**
+against a NATS `max_payload` of **8 388 608**, the broker refused the
+reply, and the recording was dropped at the transcribe stage. Twice — the
+user uploaded the same meeting again and lost it again. It missed by 3%,
+which put the cliff at roughly two and a half hours of audio and moved it
+with every config change.
+
+The root cause is worth naming: **the comm Function reused the HTTP view's
+response shape verbatim.** The contract was correct in one medium and
+carried unchanged into another. The input side of the same call had it
+right already — `audio_url` is a presigned GET, and the schema says so:
+"comm carries URLs only, never raw bytes."
+
+* **`transcript_put_url` / `transcript_key`** — the caller mints a
+  presigned PUT, the agent writes the transcript there and answers with
+  `transcript_ref` (`key`, `bytes`, `sha256`, `content_type`) plus
+  `transcript_meta` (provider, language, duration, word and utterance
+  counts, speakers, biasing). Measured end to end against a real NATS
+  broker at 8 MiB: the same transcript that failed at 8 777 687 bytes now
+  travels as a **550-byte** reply.
+* **The caller chooses the shape, never the size.** Omit the field and the
+  inline shape is unchanged, for `POST api/v1/llm/transcribe` and for
+  in-process callers. A rule that switched on how big the answer came out
+  would be the same cliff with a longer fuse.
+* **A failed write is a failure**, not a fallback to inline — the fallback
+  would fire exactly when the payload is too large to send.
+* The destination belongs to the caller: the agent has no object storage
+  and grows none. `handoff.py` writes over HTTP(S) only.
+
+**Floor:** callers passing these fields need this release. The `llm.*`
+schemas are `additionalProperties: false`, so an older agent REJECTS such a
+payload rather than ignoring it — **upgrade the agent before the caller.**
+
+### Fixed — a transcript with no speaker labels became ONE segment
+
+Every builder of utterances in `stt/` cut on one condition: the speaker
+changed. A provider that returns no speaker ids — diarization off, or on
+and yielding nothing — gives every word `speaker=None`, the comparison is
+never true after the first word, and the whole recording collapses into a
+single utterance.
+
+Measured on the same stand, across 83 completed recordings: **24 render as
+one segment and 7 as none — 31 of 83.** One ten-minute meeting is a single
+turn 8592 characters long. No renderer can fix that; it is faithfully
+drawing the one turn it was handed.
+
+* **`stt/segmentation.py`** — one cut rule for the package, derived from
+  **94 608 real word-to-word gaps** off that stand (p50 0.04s, p75 0.08s,
+  p90 0.28s, p95 0.60s, p97 0.88s, p99 1.58s). An utterance ends on a
+  speaker change, on a pause of **0.65 s** (just past p95, so ~1 boundary
+  in 20), or on sentence-ending punctuation — and unconditionally at
+  **30 s / 500 characters**, which is the promise that a wall of text
+  cannot come out whatever the provider sends. Floors of 1.5 s / 4 words
+  keep the soft signals from shredding speech into single-word rows.
+* **Every adapter goes through it**: elevenlabs (which had the defect
+  outright), soniox and xai_stt (via `stt.base.utterances_from_words`,
+  which had it too), and assemblyai, deepgram, gladia, speechmatics and
+  whisper_http via `segmentation.finalize` — which keeps a provider's own
+  segmentation when it is reasonable, re-cuts a turn past the ceilings,
+  and builds utterances from words when the provider sent none. A test
+  asserts every adapter in the package routes through the shared rule, so
+  a new one cannot quietly reintroduce it.
+* **What this means for anchors.** A segment is what a timestamp anchors
+  to. One segment per meeting means every citation, jump-to-moment and
+  search hit points at the whole meeting — which is the same as pointing
+  nowhere. Boundaries now land on phrase edges a few seconds wide, so an
+  anchor resolves to the sentence that was actually said.
+* `STAPEL_AGENT["STT_SEGMENTATION"]` overrides the five numbers for audio
+  that is not conversational.
+
+**Existing transcripts are not rewritten** — this changes what new
+transcriptions produce.
+
 ## [0.21.2] — 2026-09-04
 
 ### Fixed — a superseded run must not answer for the job that displaced it

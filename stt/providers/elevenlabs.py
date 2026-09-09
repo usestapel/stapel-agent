@@ -31,10 +31,10 @@ from typing import Optional
 import requests
 
 from ...conf import agent_settings
+from .. import segmentation
 from ..base import (
     AudioRef,
     NormalizedTranscript,
-    NormalizedUtterance,
     NormalizedWord,
     RetryableTranscriptionError,
     SttProvider,
@@ -189,26 +189,6 @@ def _normalize(payload: dict, *, provider: str) -> NormalizedTranscript:
     words_in = payload.get("words") or []
     words: list[NormalizedWord] = []
     speakers: list[str] = []
-    utterances: list[NormalizedUtterance] = []
-
-    current_speaker: object = object()  # sentinel — first word always flushes
-    current_words: list[int] = []
-    current_text: list[str] = []
-    current_start: Optional[float] = None
-    current_end: Optional[float] = None
-
-    def flush():
-        if not current_words or current_start is None or current_end is None:
-            return
-        utterances.append(
-            NormalizedUtterance(
-                text=" ".join(current_text).strip(),
-                start=current_start,
-                end=current_end,
-                speaker=current_speaker if isinstance(current_speaker, str) else None,
-                word_indexes=list(current_words),
-            )
-        )
 
     for raw in words_in:
         if raw.get("type") and raw["type"] != "word":
@@ -221,27 +201,22 @@ def _normalize(payload: dict, *, provider: str) -> NormalizedTranscript:
             # Untimed word — dropped, not stamped t=0 (see the docstring);
             # the validator's UNTIMED_WORD warning is the report.
             continue
-        start = float(raw["start"])
-        end = float(raw["end"])
         speaker = raw.get("speaker_id")
         if speaker and speaker not in speakers:
             speakers.append(speaker)
+        words.append(NormalizedWord(
+            text=text,
+            start=float(raw["start"]),
+            end=float(raw["end"]),
+            speaker=speaker,
+        ))
 
-        words.append(NormalizedWord(text=text, start=start, end=end, speaker=speaker))
-
-        if speaker != current_speaker:
-            flush()
-            current_speaker = speaker
-            current_words = [len(words) - 1]
-            current_text = [text]
-            current_start = start
-            current_end = end
-        else:
-            current_words.append(len(words) - 1)
-            current_text.append(text)
-            current_end = end
-
-    flush()
+    # Utterances used to be built right here, cut on the speaker changing
+    # and nothing else — so a response with no speaker_id (diarization off,
+    # or on and empty) came back as ONE utterance covering the meeting.
+    # The rule now lives in stt/segmentation.py and cuts on pauses,
+    # sentence ends and size as well.
+    utterances = segmentation.utterances_from_words(words)
 
     return NormalizedTranscript(
         provider=provider,

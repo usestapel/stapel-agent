@@ -79,6 +79,7 @@ NO_ENV = (
     "STT_DOWNLOAD_TOTAL_DEADLINE",
     "STT_DOWNLOAD_ALLOWED_HOSTS",
     "STT_DOWNLOAD_ALLOW_ANY_HOST",
+    "STT_SEGMENTATION",
     "DIARIZATION_TIMEOUT",
     "EMBEDDINGS_TIMEOUT",
     "RERANK_TIMEOUT",
@@ -168,6 +169,11 @@ agent_settings = AppSettings(
         # URLs from their own object store: listing it here turns the
         # SSRF-shaped surface into a fetch of one known origin.
         "STT_DOWNLOAD_ALLOWED_HOSTS": [],
+        # Where one utterance ends and the next begins — see
+        # stt/segmentation.py, whose defaults are derived from 94 608 real
+        # word gaps. Keys: gap_seconds, max_seconds, max_chars,
+        # min_seconds, min_words. Empty = the measured defaults.
+        "STT_SEGMENTATION": {},
         # What an EMPTY allowlist means. False (the default) = refuse the
         # download: an unconfigured deployment must not be one where any
         # caller-supplied host on the public internet is fetchable, and

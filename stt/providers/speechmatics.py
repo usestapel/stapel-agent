@@ -48,6 +48,7 @@ from typing import Optional
 import requests
 
 from ...conf import agent_settings
+from .. import segmentation
 from ..base import (
     AudioRef,
     NormalizedTranscript,
@@ -386,6 +387,12 @@ def _normalize(payload: dict, *, provider: str) -> NormalizedTranscript:
             )
         )
     flush()
+
+    # One provider turn can still run for minutes (diarization off, or a
+    # monologue), and a turn is what a timestamp anchors to. finalize()
+    # keeps the provider's own segmentation and re-cuts only what is past
+    # the ceilings; with no utterances at all it builds them from words.
+    utterances = segmentation.finalize(utterances, words)
 
     # job.duration is whole seconds; fall back to the furthest word end.
     duration = (payload.get("job") or {}).get("duration")
