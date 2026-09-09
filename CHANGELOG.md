@@ -3,6 +3,21 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.22.1] — 2026-09-09
+
+### Fixed — the release pipeline could not start, so 0.22.0 never shipped
+
+`publish.yml` declared `release-gate` and `ci-gate` twice, and the
+duplicate `release-gate` carried `needs: [ci-gate, release-gate]` — a job
+that needs itself. GitHub rejected the workflow before creating any job, so
+every Publish run since 2026-09-05 ended as a startup failure with zero
+jobs. `v0.22.0` is tagged on main and correct; it simply could not be
+published, and the tag predates this fix.
+
+Identical to 0.22.0 in every shipped file. `yaml.safe_load` keeps the last
+of a duplicate key and calls the file valid, which is why nothing local
+caught it.
+
 ## [0.22.0] — 2026-09-09
 
 ### Fixed — a long meeting's transcript could not fit on the wire, so it was dropped
