@@ -48,15 +48,13 @@ from typing import Optional
 import requests
 
 from ...conf import agent_settings
-from .. import segmentation
+from .. import failures, segmentation
 from ..base import (
     AudioRef,
     NormalizedTranscript,
     NormalizedUtterance,
     NormalizedWord,
-    RetryableTranscriptionError,
     SttProvider,
-    TranscriptionError,
     normalize_language,
     unsupported_biasing,
 )
@@ -95,9 +93,8 @@ class SpeechmaticsProvider(SttProvider):
     ) -> NormalizedTranscript:
         api_key = agent_settings.SPEECHMATICS_API_KEY
         if not api_key:
-            raise TranscriptionError(
-                "STAPEL_AGENT['SPEECHMATICS_API_KEY'] is not set",
-                provider=self.name,
+            raise failures.missing_credentials(
+                "SPEECHMATICS_API_KEY", provider=self.name
             )
         timeout = (
             int(agent_settings.STT_TIMEOUT)
@@ -122,7 +119,7 @@ class SpeechmaticsProvider(SttProvider):
                 tc["language_hints"] = [lang]
         else:
             if not lang or lang in ("auto", "multi"):
-                raise TranscriptionError(
+                raise failures.unsupported(
                     f"Speechmatics model {model!r} needs one explicit "
                     "language pack code (auto-LID is not wired — use the "
                     "melia-1 model for multilingual audio)",
@@ -163,24 +160,24 @@ class SpeechmaticsProvider(SttProvider):
                 timeout=REQUEST_TIMEOUT_S,
             )
         except requests.Timeout as exc:
-            raise RetryableTranscriptionError(
+            raise failures.timed_out(
                 f"Speechmatics submit timed out: {exc}", provider=self.name
             ) from exc
         except requests.RequestException as exc:
-            raise RetryableTranscriptionError(
+            raise failures.transport(
                 f"Speechmatics submit transport error: {exc}", provider=self.name
             ) from exc
         self._raise_for_status(resp, op="submit")
         try:
             data = resp.json()
         except ValueError as exc:
-            raise RetryableTranscriptionError(
+            raise failures.unavailable(
                 f"Speechmatics submit non-JSON: {resp.text[:200]}",
                 provider=self.name,
             ) from exc
         job_id = data.get("id")
         if not job_id:
-            raise RetryableTranscriptionError(
+            raise failures.unavailable(
                 f"Speechmatics submit lacked id: {data}", provider=self.name
             )
         return job_id
@@ -191,7 +188,7 @@ class SpeechmaticsProvider(SttProvider):
 
         while True:
             if time.monotonic() >= deadline:
-                raise RetryableTranscriptionError(
+                raise failures.timed_out(
                     f"Speechmatics polling exceeded {timeout_seconds}s "
                     f"for {job_id}",
                     provider=self.name,
@@ -237,7 +234,7 @@ class SpeechmaticsProvider(SttProvider):
                     )
                     or "no error detail"
                 )
-                raise TranscriptionError(
+                raise failures.job_failed(
                     f"Speechmatics job ended as {status!r}: {detail}",
                     provider=self.name,
                 )
@@ -252,12 +249,12 @@ class SpeechmaticsProvider(SttProvider):
                 timeout=REQUEST_TIMEOUT_S,
             )
         except requests.Timeout as exc:
-            raise RetryableTranscriptionError(
+            raise failures.timed_out(
                 f"Speechmatics transcript fetch timed out: {exc}",
                 provider=self.name,
             ) from exc
         except requests.RequestException as exc:
-            raise RetryableTranscriptionError(
+            raise failures.transport(
                 f"Speechmatics transcript fetch transport error: {exc}",
                 provider=self.name,
             ) from exc
@@ -265,28 +262,15 @@ class SpeechmaticsProvider(SttProvider):
         try:
             return resp.json()
         except ValueError as exc:
-            raise RetryableTranscriptionError(
+            raise failures.unavailable(
                 f"Speechmatics transcript non-JSON: {resp.text[:200]}",
                 provider=self.name,
             ) from exc
 
     def _raise_for_status(self, resp, *, op: str) -> None:
-        if 200 <= resp.status_code < 300:
-            return
-        if resp.status_code == 429:
-            raise RetryableTranscriptionError(
-                "Speechmatics rate-limited", provider=self.name, status_code=429
-            )
-        if resp.status_code >= 500:
-            raise RetryableTranscriptionError(
-                f"Speechmatics {op} {resp.status_code}: {resp.text[:300]}",
-                provider=self.name,
-                status_code=resp.status_code,
-            )
-        raise TranscriptionError(
-            f"Speechmatics {op} {resp.status_code}: {resp.text[:300]}",
-            provider=self.name,
-            status_code=resp.status_code,
+        # Per-RESPONSE classification — see stt/failures.py.
+        failures.raise_for_status(
+            resp, provider=self.name, label="Speechmatics", op=op
         )
 
 

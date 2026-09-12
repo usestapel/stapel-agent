@@ -1056,9 +1056,21 @@ def transcribe(
 
     Chain: explicit *provider* (single, no fallback) → language route →
     default + fallback chain. The next provider is tried only on
-    ``RetryableTranscriptionError`` — fatal errors (bad input, auth) stop
-    the walk. Every call writes one PromptLog row (``source=transcribe``,
-    ``model`` = provider name, token columns null).
+    ``RetryableTranscriptionError`` — and that now covers every
+    provider-side condition: quota, billing, a bad or missing key, a
+    throttle, a 5xx, a capability gap. ONLY the media itself (undecodable
+    audio, an unusable reference, a job the provider ran and failed) is
+    fatal and stops the walk, because only the media fails identically on
+    the next provider. ``stt/failures.py`` owns that classification and
+    stamps the ``reason`` recorded per attempt. Every call writes one
+    PromptLog row (``source=transcribe``, ``model`` = provider name,
+    token columns null).
+
+    ``metadata.attempts[]`` is the forensic record: one entry per provider
+    tried, each ``{"provider", "error_kind", "reason", "error"}``. When
+    the whole chain is exhausted the returned ``reason`` names every
+    provider and why it declined — an operator must not have to open the
+    row to learn that all three were out of credit.
 
     THE ROW IS AUDITABLE. STT is billed per hour of audio, and the row
     used to hold neither the audio's length nor a price: ``prompt`` was
@@ -1099,6 +1111,16 @@ def transcribe(
     attempts: list[dict] = []
     failure_reason = "No STT provider available"
     fallback_used = False
+
+    def _attempt(name: str, *, error_kind, reason, error) -> None:
+        attempts.append(
+            {
+                "provider": name,
+                "error_kind": error_kind,
+                "reason": reason,
+                "error": str(error)[:500] if error is not None else None,
+            }
+        )
 
     def _log(
         status: str,
@@ -1154,15 +1176,15 @@ def transcribe(
             # An unregistered provider name is a config error, not bad
             # audio — the next provider in the chain may well handle it.
             # Consistent with the ImportError (registered-but-unloadable)
-            # branch below; NOT fatal like a bad-input TranscriptionError
+            # branch below; NOT fatal like a bad-MEDIA TranscriptionError
             # raised from within transcribe().
             failure_reason = str(exc)
-            attempts.append({"provider": name, "error_kind": "unknown", "error": str(exc)[:500]})
+            _attempt(name, error_kind="unknown", reason="unavailable", error=exc)
             logger.warning("stapel-agent: STT provider %s unavailable: %s", name, exc)
             continue
         except ImportError as exc:
             failure_reason = f"STT provider '{name}' could not be loaded: {exc}"
-            attempts.append({"provider": name, "error_kind": "unloadable", "error": str(exc)[:500]})
+            _attempt(name, error_kind="unloadable", reason="unavailable", error=exc)
             logger.warning("stapel-agent: %s", failure_reason)
             continue
 
@@ -1183,22 +1205,30 @@ def transcribe(
             )
         except RetryableTranscriptionError as exc:
             failure_reason = str(exc)
-            attempts.append({"provider": name, "error_kind": "retryable", "error": str(exc)[:500]})
-            logger.warning("stapel-agent: STT provider %s failed (retryable): %s", name, exc)
+            reason = getattr(exc, "reason", None) or "unavailable"
+            _attempt(name, error_kind="retryable", reason=reason, error=exc)
+            logger.warning(
+                "stapel-agent: STT provider %s declined (%s): %s", name, reason, exc
+            )
             continue  # walk the fallback chain
         except TranscriptionError as exc:
-            # Fatal — the input itself is bad; the next provider would
+            # Fatal — the MEDIA itself is bad; the next provider would
             # fail on it too. No fallback.
-            attempts.append({"provider": name, "error_kind": "fatal", "error": str(exc)[:500]})
+            _attempt(
+                name,
+                error_kind="fatal",
+                reason=getattr(exc, "reason", None) or "media",
+                error=exc,
+            )
             _log(PromptStatus.ERROR, provider_used=name, response=None, error=str(exc))
             return {"status": "failure", "reason": str(exc)}
         except ImportError as exc:
             failure_reason = f"STT provider '{name}' could not be loaded: {exc}"
-            attempts.append({"provider": name, "error_kind": "unloadable", "error": str(exc)[:500]})
+            _attempt(name, error_kind="unloadable", reason="unavailable", error=exc)
             logger.warning("stapel-agent: %s", failure_reason)
             continue
 
-        attempts.append({"provider": name, "error_kind": None, "error": None})
+        _attempt(name, error_kind=None, reason=None, error=None)
         _log(
             PromptStatus.SUCCESS,
             provider_used=name,
@@ -1213,6 +1243,15 @@ def transcribe(
             "fallback_used": fallback_used,
         }
 
+    # The chain is exhausted: the answer names EVERY provider and why it
+    # declined. The last provider's message alone hid the interesting half
+    # ("elevenlabs: quota") behind the boring one ("assemblyai: timeout").
+    if attempts:
+        failure_reason = "all STT providers failed: " + "; ".join(
+            f"{a['provider']} ({a['reason'] or a['error_kind']}): "
+            f"{(a['error'] or '')[:200]}"
+            for a in attempts
+        )
     _log(PromptStatus.ERROR, provider_used=chain[-1], response=None, error=failure_reason)
     return {"status": "failure", "reason": failure_reason}
 

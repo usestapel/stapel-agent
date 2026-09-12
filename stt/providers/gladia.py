@@ -44,15 +44,13 @@ from typing import Optional
 import requests
 
 from ...conf import agent_settings
-from .. import segmentation
+from .. import failures, segmentation
 from ..base import (
     AudioRef,
     NormalizedTranscript,
     NormalizedUtterance,
     NormalizedWord,
-    RetryableTranscriptionError,
     SttProvider,
-    TranscriptionError,
     normalize_language,
     unsupported_biasing,
 )
@@ -89,9 +87,7 @@ class GladiaProvider(SttProvider):
     ) -> NormalizedTranscript:
         api_key = agent_settings.GLADIA_API_KEY
         if not api_key:
-            raise TranscriptionError(
-                "STAPEL_AGENT['GLADIA_API_KEY'] is not set", provider=self.name
-            )
+            raise failures.missing_credentials("GLADIA_API_KEY", provider=self.name)
         timeout = (
             int(agent_settings.STT_TIMEOUT)
             if timeout_seconds is None
@@ -138,7 +134,7 @@ class GladiaProvider(SttProvider):
         if model != "solaria-3":
             return
         if not lang:
-            raise TranscriptionError(
+            raise failures.unsupported(
                 "gladia solaria-3 requires exactly one language "
                 f"({'/'.join(sorted(SOLARIA3_LANGUAGES))}); auto-detect is "
                 "not documented for it — pass a language or use the "
@@ -146,7 +142,7 @@ class GladiaProvider(SttProvider):
                 provider=self.name,
             )
         if lang not in SOLARIA3_LANGUAGES:
-            raise TranscriptionError(
+            raise failures.unsupported(
                 f"gladia solaria-3 does not document language {lang!r}; "
                 f"documented: {sorted(SOLARIA3_LANGUAGES)} — use the "
                 "solaria-1 model for other languages",
@@ -170,18 +166,18 @@ class GladiaProvider(SttProvider):
                 **kwargs,
             )
         except requests.Timeout as exc:
-            raise RetryableTranscriptionError(
+            raise failures.timed_out(
                 f"Gladia {op} timed out: {exc}", provider=self.name
             ) from exc
         except requests.RequestException as exc:
-            raise RetryableTranscriptionError(
+            raise failures.transport(
                 f"Gladia {op} transport error: {exc}", provider=self.name
             ) from exc
         self._raise_for_status(resp, op=op)
         try:
             return resp.json()
         except ValueError as exc:
-            raise RetryableTranscriptionError(
+            raise failures.unavailable(
                 f"Gladia {op} non-JSON: {resp.text[:200]}", provider=self.name
             ) from exc
 
@@ -193,7 +189,7 @@ class GladiaProvider(SttProvider):
         )
         audio_url = data.get("audio_url")
         if not audio_url:
-            raise RetryableTranscriptionError(
+            raise failures.unavailable(
                 f"Gladia upload returned no audio_url: {data}", provider=self.name
             )
         return audio_url
@@ -202,7 +198,7 @@ class GladiaProvider(SttProvider):
         data = self._post("/v2/pre-recorded", op="create", json=body)
         job_id = data.get("id")
         if not job_id:
-            raise RetryableTranscriptionError(
+            raise failures.unavailable(
                 f"Gladia create returned no job id: {data}", provider=self.name
             )
         return job_id
@@ -213,7 +209,7 @@ class GladiaProvider(SttProvider):
 
         while True:
             if time.monotonic() >= deadline:
-                raise RetryableTranscriptionError(
+                raise failures.timed_out(
                     f"Gladia polling exceeded {timeout_seconds}s for {job_id}",
                     provider=self.name,
                 )
@@ -248,7 +244,7 @@ class GladiaProvider(SttProvider):
             if status == "done":
                 return payload
             if status == "error":
-                raise TranscriptionError(
+                raise failures.job_failed(
                     f"Gladia job error: {payload.get('error_code') or 'unknown'}",
                     provider=self.name,
                 )
@@ -256,23 +252,8 @@ class GladiaProvider(SttProvider):
             interval = _grow(interval)
 
     def _raise_for_status(self, resp, *, op: str) -> None:
-        if 200 <= resp.status_code < 300:
-            return
-        if resp.status_code == 429:
-            raise RetryableTranscriptionError(
-                "Gladia rate-limited", provider=self.name, status_code=429
-            )
-        if resp.status_code >= 500:
-            raise RetryableTranscriptionError(
-                f"Gladia {op} {resp.status_code}: {resp.text[:300]}",
-                provider=self.name,
-                status_code=resp.status_code,
-            )
-        raise TranscriptionError(
-            f"Gladia {op} {resp.status_code}: {resp.text[:300]}",
-            provider=self.name,
-            status_code=resp.status_code,
-        )
+        # Per-RESPONSE classification — see stt/failures.py.
+        failures.raise_for_status(resp, provider=self.name, label="Gladia", op=op)
 
 
 def _grow(interval: float) -> float:

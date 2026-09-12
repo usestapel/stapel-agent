@@ -132,17 +132,30 @@ class TestTranscribeService:
             "STT_FALLBACK_CHAIN": ["fake-stt"],
         }
         result = services.transcribe(AUDIO, provider="retry-stt")
-        assert result == {"status": "failure", "reason": "stt rate limited"}
+        assert result["status"] == "failure"
+        assert result["reason"] == (
+            "all STT providers failed: retry-stt (unavailable): stt rate limited"
+        )
         assert FakeSttProvider.calls == []
 
-    def test_all_retryable_reports_last_reason(self, settings, fake_stt):
+    def test_exhausted_chain_names_every_provider_and_reason(
+        self, settings, fake_stt
+    ):
+        # The last provider's message alone hid the interesting half: an
+        # operator reading "timed out" never learned the first provider
+        # was out of credit.
         settings.STAPEL_AGENT = {
             **settings.STAPEL_AGENT,
-            "DEFAULT_STT_PROVIDER": "retry-stt",
-            "STT_FALLBACK_CHAIN": [],
+            "DEFAULT_STT_PROVIDER": "quota-stt",
+            "STT_FALLBACK_CHAIN": ["retry-stt"],
         }
         result = services.transcribe(AUDIO)
-        assert result == {"status": "failure", "reason": "stt rate limited"}
+        assert result["status"] == "failure"
+        assert result["reason"] == (
+            "all STT providers failed: "
+            "quota-stt (quota): stt account out of credits; "
+            "retry-stt (unavailable): stt rate limited"
+        )
 
     def test_unloadable_provider_is_skipped(self, settings, fake_stt):
         settings.STAPEL_AGENT = {
@@ -215,7 +228,12 @@ class TestTranscribeLedger:
         assert log.metadata["language"] == "en"
         assert log.metadata["fallback_used"] is False
         assert log.metadata["attempts"] == [
-            {"provider": "fake-stt", "error_kind": None, "error": None}
+            {
+                "provider": "fake-stt",
+                "error_kind": None,
+                "reason": None,
+                "error": None,
+            }
         ]
 
     def test_fallback_success_row_records_attempts(self, settings, fake_stt):
@@ -255,4 +273,6 @@ class TestTranscribeLedger:
         services.transcribe(AUDIO)
         log = PromptLog.objects.get()
         assert log.status == PromptStatus.ERROR
-        assert log.error_message == "stt rate limited"
+        assert log.error_message == (
+            "all STT providers failed: retry-stt (unavailable): stt rate limited"
+        )

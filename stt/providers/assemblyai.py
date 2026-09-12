@@ -46,15 +46,13 @@ from typing import Optional
 import requests
 
 from ...conf import agent_settings
-from .. import segmentation
+from .. import failures, segmentation
 from ..base import (
     AudioRef,
     NormalizedTranscript,
     NormalizedUtterance,
     NormalizedWord,
-    RetryableTranscriptionError,
     SttProvider,
-    TranscriptionError,
     biasing_metadata,
     unsupported_biasing,
 )
@@ -142,8 +140,8 @@ class AssemblyAIProvider(SttProvider):
     ) -> NormalizedTranscript:
         api_key = agent_settings.ASSEMBLYAI_API_KEY
         if not api_key:
-            raise TranscriptionError(
-                "STAPEL_AGENT['ASSEMBLYAI_API_KEY'] is not set", provider=self.name
+            raise failures.missing_credentials(
+                "ASSEMBLYAI_API_KEY", provider=self.name
             )
         audio_url = audio.require_url(provider=self.name)
         timeout = (
@@ -217,11 +215,11 @@ class AssemblyAIProvider(SttProvider):
                 timeout=SUBMIT_TIMEOUT_S,
             )
         except requests.Timeout as exc:
-            raise RetryableTranscriptionError(
+            raise failures.timed_out(
                 f"AssemblyAI submit timed out: {exc}", provider=self.name
             ) from exc
         except requests.RequestException as exc:
-            raise RetryableTranscriptionError(
+            raise failures.transport(
                 f"AssemblyAI submit transport error: {exc}", provider=self.name
             ) from exc
 
@@ -229,12 +227,12 @@ class AssemblyAIProvider(SttProvider):
         try:
             data = resp.json()
         except ValueError as exc:
-            raise RetryableTranscriptionError(
+            raise failures.unavailable(
                 f"AssemblyAI submit non-JSON: {resp.text[:200]}", provider=self.name
             ) from exc
         transcript_id = data.get("id")
         if not transcript_id:
-            raise RetryableTranscriptionError(
+            raise failures.unavailable(
                 f"AssemblyAI submit lacked id: {data}", provider=self.name
             )
         return transcript_id
@@ -245,7 +243,7 @@ class AssemblyAIProvider(SttProvider):
 
         while True:
             if time.monotonic() >= deadline:
-                raise RetryableTranscriptionError(
+                raise failures.timed_out(
                     f"AssemblyAI polling exceeded {timeout_seconds}s "
                     f"for {transcript_id}",
                     provider=self.name,
@@ -281,7 +279,7 @@ class AssemblyAIProvider(SttProvider):
             if status == "completed":
                 return payload
             if status == "error":
-                raise TranscriptionError(
+                raise failures.job_failed(
                     f"AssemblyAI job error: {payload.get('error') or 'unknown'}",
                     provider=self.name,
                 )
@@ -289,24 +287,11 @@ class AssemblyAIProvider(SttProvider):
             interval = _grow(interval)
 
     def _raise_for_status(self, resp, *, op: str) -> None:
-        if 200 <= resp.status_code < 300:
-            return
-        if resp.status_code == 429:
-            raise RetryableTranscriptionError(
-                "AssemblyAI rate-limited", provider=self.name, status_code=429
-            )
-        if resp.status_code >= 500:
-            raise RetryableTranscriptionError(
-                f"AssemblyAI {op} {resp.status_code}: {resp.text[:300]}",
-                provider=self.name,
-                status_code=resp.status_code,
-            )
-        # 4xx (auth, bad params) — fatal: fall through to the next provider
-        # in the CHAIN is wrong here, the request itself is bad.
-        raise TranscriptionError(
-            f"AssemblyAI {op} {resp.status_code}: {resp.text[:300]}",
-            provider=self.name,
-            status_code=resp.status_code,
+        # Per-RESPONSE classification (stt/failures.py). This used to read
+        # "every 4xx is fatal, the request itself is bad" — which made an
+        # expired key or an empty account stop the whole fallback chain.
+        failures.raise_for_status(
+            resp, provider=self.name, label="AssemblyAI", op=op
         )
 
 

@@ -8,9 +8,12 @@ two ways:
   call ``require_url()``; upload-style adapters (whisper-http) accept any
   ref via ``read_bytes()``.
 - Errors join the house hierarchy: ``TranscriptionError(ProviderError)``
-  (the source's ``STTFatal`` — bad input/auth, do NOT fall back) and
-  ``RetryableTranscriptionError`` (``STTRetryable`` — 429/5xx/timeouts,
-  the service walks the fallback chain).
+  (the source's ``STTFatal`` — the MEDIA is bad, do NOT fall back) and
+  ``RetryableTranscriptionError`` (``STTRetryable`` — 429/5xx/timeouts
+  AND every account/auth/capability condition, the service walks the
+  fallback chain). Adapters do not decide that themselves: they classify
+  a provider answer through ``stt/failures.py``, which also stamps the
+  ``reason`` the ledger records.
 
 This module is deliberately Django-free.
 """
@@ -24,21 +27,41 @@ from ..providers.base import ProviderError
 
 
 class TranscriptionError(ProviderError):
-    """Permanent STT failure (bad audio, unsupported language, auth, ...).
+    """Permanent STT failure — the MEDIA is the problem (undecodable
+    audio, an unusable reference, a job the provider ran and failed).
 
     The service reports ``status: "failure"`` immediately — no fallback,
-    the next provider would fail on the same input.
+    because the next provider would fail on the same input.
+
+    ``reason`` is the machine-readable classification (``media``, ``job``
+    here; see ``stt/failures.py`` for the whole vocabulary). It is
+    recorded per attempt on the PromptLog row.
     """
 
-    def __init__(self, message: str, *, provider: str = "", status_code: int | None = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str = "",
+        status_code: int | None = None,
+        reason: str | None = None,
+    ):
         super().__init__(message)
         self.provider = provider
         self.status_code = status_code
+        self.reason = reason
 
 
 class RetryableTranscriptionError(TranscriptionError):
-    """Transient STT failure (network, 429, 5xx, poll timeout) — the
-    service tries the next provider in the fallback chain."""
+    """This provider cannot serve this request — the service tries the
+    next provider in the fallback chain.
+
+    Network, timeouts, 5xx, throttling AND the account conditions: an
+    exhausted quota, an invalid or missing key, a capability gap. None of
+    those say anything about the audio, so none of them may stop the
+    chain (see the module docstring of ``stt/failures.py`` — an
+    ElevenLabs quota 401 read as "bad input" cost a client 41 recordings).
+    """
 
 
 # ─── Normalized transcript schema ──────────────────────────────────────
@@ -219,6 +242,7 @@ class AudioRef:
                 "presigned URL, or use an upload-capable provider like "
                 "whisper-http",
                 provider=provider,
+                reason="media",
             )
         return self.url
 
@@ -238,7 +262,9 @@ class AudioRef:
                     return fh.read()
             except OSError as exc:
                 raise TranscriptionError(
-                    f"audio path not readable: {exc}", provider=provider
+                    f"audio path not readable: {exc}",
+                    provider=provider,
+                    reason="media",
                 ) from exc
         return _download(self.url or "", provider=provider, timeout=timeout)
 
@@ -338,6 +364,7 @@ def _download(url: str, *, provider: str, timeout: int) -> bytes:
             "STAPEL_AGENT['STT_DOWNLOAD_ALLOW_ANY_HOST'] = True to accept "
             "any public host.",
             provider=provider,
+            reason="media",
         )
 
     try:
@@ -352,7 +379,9 @@ def _download(url: str, *, provider: str, timeout: int) -> bytes:
     except SafeFetchError as exc:
         if exc.code == "deadline_exceeded":
             raise RetryableTranscriptionError(
-                f"audio download timed out: {exc}", provider=provider
+                f"audio download timed out: {exc}",
+                provider=provider,
+                reason="timeout",
             ) from exc
         if exc.code == "bad_status":
             status = _bad_status_code(exc)
@@ -361,30 +390,36 @@ def _download(url: str, *, provider: str, timeout: int) -> bytes:
                     f"audio URL not retrievable: {status}",
                     provider=provider,
                     status_code=status,
+                    reason="media",
                 ) from exc
             raise RetryableTranscriptionError(
                 f"audio download failed: {exc}",
                 provider=provider,
                 status_code=status,
+                reason="transport",
             ) from exc
         if exc.code in _FATAL_FETCH_CODES:
             raise TranscriptionError(
-                f"audio URL refused ({exc.code}): {exc}", provider=provider
+                f"audio URL refused ({exc.code}): {exc}",
+                provider=provider,
+                reason="media",
             ) from exc
         # dns_resolution_failed and anything a future core release adds:
         # transport-shaped, so the fallback chain gets its turn.
         raise RetryableTranscriptionError(
-            f"audio download error ({exc.code}): {exc}", provider=provider
+            f"audio download error ({exc.code}): {exc}",
+            provider=provider,
+            reason="transport",
         ) from exc
     except TimeoutError as exc:
         # socket.timeout — a hop stalled inside the per-socket budget.
         raise RetryableTranscriptionError(
-            f"audio download timed out: {exc}", provider=provider
+            f"audio download timed out: {exc}", provider=provider, reason="timeout"
         ) from exc
     except OSError as exc:
         # Socket/TLS failures below the guard layer are transport, not verdict.
         raise RetryableTranscriptionError(
-            f"audio download error: {exc}", provider=provider
+            f"audio download error: {exc}", provider=provider, reason="transport"
         ) from exc
 
 

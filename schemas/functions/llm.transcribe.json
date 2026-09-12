@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "llm.transcribe",
-  "description": "Speech-to-text through the STT router (explicit provider > STT_LANGUAGE_ROUTES > DEFAULT_STT_PROVIDER + STT_FALLBACK_CHAIN; fallback only on retryable failure). comm carries URLs only, never raw audio bytes. Returns {status: 'ok', transcript: NormalizedTranscript, provider_used: string, fallback_used: boolean} or {status: 'failure', reason: string}.",
+  "description": "Speech-to-text through the STT router (explicit provider > STT_LANGUAGE_ROUTES > DEFAULT_STT_PROVIDER + STT_FALLBACK_CHAIN). The chain walks on every provider-side condition — quota/billing, a refused or missing key, rate limits, 5xx, timeouts, transport, a capability gap — and stops only when the MEDIA is bad (a 400/413/415/422 about the audio, a failed job); an exhausted chain answers with every provider's reason. comm carries URLs only, never raw audio bytes. Returns {status: 'ok', transcript: NormalizedTranscript, provider_used: string, fallback_used: boolean} or {status: 'failure', reason: string}.",
   "type": "object",
   "properties": {
     "audio_url": {

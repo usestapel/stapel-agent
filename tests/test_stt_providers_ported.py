@@ -2,9 +2,11 @@
 deepgram / gladia / soniox / speechmatics / xai-stt. Mocked ``requests``;
 no network, no keys.
 
-Error taxonomy under test everywhere: 429/5xx/timeouts/transport →
-``RetryableTranscriptionError``, other 4xx / bad input / missing config →
-fatal ``TranscriptionError``. Keyterm wiring is asserted at the request
+Error taxonomy under test everywhere: 429/5xx/timeouts/transport AND
+every account condition (quota, billing, a refused or missing key, a
+capability gap) → ``RetryableTranscriptionError`` so the router walks the
+fallback chain; only the media itself (a 400/413/415/422 about the audio,
+a failed job) → fatal ``TranscriptionError``. See ``stt/failures.py``. Keyterm wiring is asserted at the request
 level (the exact provider parameter) and at the metadata level (the
 ``biasing`` block carries counts only).
 """
@@ -115,10 +117,11 @@ class TestDeepgram:
         )
         return transcript, posted
 
-    def test_missing_key_is_fatal(self, settings):
+    def test_missing_key_is_provider_unavailable_not_fatal(self, settings):
         settings.STAPEL_AGENT = {"DEEPGRAM_API_KEY": ""}
-        with pytest.raises(TranscriptionError, match="DEEPGRAM_API_KEY"):
+        with pytest.raises(RetryableTranscriptionError, match="DEEPGRAM_API_KEY") as e:
             DeepgramProvider().transcribe(audio=AudioRef(data=b"x"))
+        assert e.value.reason == "auth"
 
     def test_happy_path_raw_bytes_and_normalization(self, configured, monkeypatch):
         transcript, posted = self._run(
@@ -256,10 +259,19 @@ class TestDeepgram:
         with pytest.raises(RetryableTranscriptionError, match="503"):
             self._run(monkeypatch, [FakeResponse(status_code=503, text="down")])
 
-    def test_4xx_is_fatal(self, configured, monkeypatch):
-        with pytest.raises(TranscriptionError, match="401") as e:
+    def test_401_bad_key_walks_the_chain(self, configured, monkeypatch):
+        with pytest.raises(RetryableTranscriptionError, match="401") as e:
             self._run(monkeypatch, [FakeResponse(status_code=401, text="key?")])
+        assert e.value.reason == "auth"
+
+    def test_400_about_the_media_is_fatal(self, configured, monkeypatch):
+        with pytest.raises(TranscriptionError, match="400") as e:
+            self._run(
+                monkeypatch,
+                [FakeResponse(status_code=400, text="unsupported audio format")],
+            )
         assert not isinstance(e.value, RetryableTranscriptionError)
+        assert e.value.reason == "media"
 
     def test_timeout_is_retryable(self, configured, monkeypatch):
         with pytest.raises(RetryableTranscriptionError, match="timed out"):
@@ -323,10 +335,11 @@ class TestGladia:
         )
         return transcript, posted, gotten
 
-    def test_missing_key_is_fatal(self, settings):
+    def test_missing_key_is_provider_unavailable_not_fatal(self, settings):
         settings.STAPEL_AGENT = {"GLADIA_API_KEY": ""}
-        with pytest.raises(TranscriptionError, match="GLADIA_API_KEY"):
+        with pytest.raises(RetryableTranscriptionError, match="GLADIA_API_KEY") as e:
             GladiaProvider().transcribe(audio=AudioRef(data=b"x"))
+        assert e.value.reason == "auth"
 
     def test_upload_create_poll_happy_path(self, configured, monkeypatch):
         transcript, posted, gotten = self._run(
@@ -378,12 +391,14 @@ class TestGladia:
 
         posted, gotten, _, _ = mock_http(monkeypatch, "gladia")
         for language in ("ru", "uk", "multi"):
-            with pytest.raises(TranscriptionError, match="solaria-3") as e:
+            # A language THIS provider cannot do says nothing about the
+            # next one: refuse before billing, but let the chain walk.
+            with pytest.raises(RetryableTranscriptionError, match="solaria-3") as e:
                 Solaria3().transcribe(
                     audio=AudioRef(data=b"OGG", mime="audio/ogg"),
                     language=language,
                 )
-            assert not isinstance(e.value, RetryableTranscriptionError)
+            assert e.value.reason == "unsupported"
         assert posted == [] and gotten == []
 
     def test_solaria3_refuses_auto_detect_before_billing(
@@ -468,8 +483,8 @@ class TestGladia:
         with pytest.raises(RetryableTranscriptionError, match="rate-limited"):
             self._run(monkeypatch, post=[FakeResponse(status_code=429, text="429")])
 
-    def test_create_4xx_is_fatal(self, configured, monkeypatch):
-        with pytest.raises(TranscriptionError, match="401") as e:
+    def test_create_401_walks_the_chain(self, configured, monkeypatch):
+        with pytest.raises(RetryableTranscriptionError, match="401") as e:
             self._run(
                 monkeypatch,
                 post=[
@@ -477,7 +492,7 @@ class TestGladia:
                     FakeResponse(status_code=401, text="bad key"),
                 ],
             )
-        assert not isinstance(e.value, RetryableTranscriptionError)
+        assert e.value.reason == "auth"
 
     def test_job_error_status_is_fatal(self, configured, monkeypatch):
         with pytest.raises(TranscriptionError, match="job error"):
@@ -546,10 +561,11 @@ class TestSoniox:
         )
         return transcript, requested, gotten, deleted
 
-    def test_missing_key_is_fatal(self, settings):
+    def test_missing_key_is_provider_unavailable_not_fatal(self, settings):
         settings.STAPEL_AGENT = {"SONIOX_API_KEY": ""}
-        with pytest.raises(TranscriptionError, match="SONIOX_API_KEY"):
+        with pytest.raises(RetryableTranscriptionError, match="SONIOX_API_KEY") as e:
             SonioxProvider().transcribe(audio=AudioRef(data=b"x"))
+        assert e.value.reason == "auth"
 
     def test_five_step_happy_path_with_cleanup(self, configured, monkeypatch):
         transcript, requested, gotten, deleted = self._run(
@@ -799,10 +815,11 @@ class TestSpeechmatics:
         )
         return transcript, posted, gotten
 
-    def test_missing_key_is_fatal(self, settings):
+    def test_missing_key_is_provider_unavailable_not_fatal(self, settings):
         settings.STAPEL_AGENT = {"SPEECHMATICS_API_KEY": ""}
-        with pytest.raises(TranscriptionError, match="SPEECHMATICS_API_KEY"):
+        with pytest.raises(RetryableTranscriptionError, match="SPEECHMATICS_API_KEY") as e:
             SpeechmaticsProvider().transcribe(audio=AudioRef(data=b"x"))
+        assert e.value.reason == "auth"
 
     def test_submit_poll_fetch_happy_path(self, configured, monkeypatch):
         transcript, posted, gotten = self._run(
@@ -923,10 +940,10 @@ class TestSpeechmatics:
         with pytest.raises(RetryableTranscriptionError, match="rate-limited"):
             self._run(monkeypatch, post=[FakeResponse(status_code=429, text="429")])
 
-    def test_submit_4xx_is_fatal(self, configured, monkeypatch):
-        with pytest.raises(TranscriptionError, match="403") as e:
+    def test_submit_403_walks_the_chain(self, configured, monkeypatch):
+        with pytest.raises(RetryableTranscriptionError, match="403") as e:
             self._run(monkeypatch, post=[FakeResponse(status_code=403, text="no")])
-        assert not isinstance(e.value, RetryableTranscriptionError)
+        assert e.value.reason == "auth"
 
 
 # ─── xAI STT ───────────────────────────────────────────────────────────
@@ -956,10 +973,11 @@ class TestXaiStt:
         )
         return transcript, posted
 
-    def test_missing_key_is_fatal(self, settings):
+    def test_missing_key_is_provider_unavailable_not_fatal(self, settings):
         settings.STAPEL_AGENT = {"XAI_API_KEY": ""}
-        with pytest.raises(TranscriptionError, match="XAI_API_KEY"):
+        with pytest.raises(RetryableTranscriptionError, match="XAI_API_KEY") as e:
             XaiSttProvider().transcribe(audio=AudioRef(data=b"x"))
+        assert e.value.reason == "auth"
 
     def test_happy_path_multipart_and_normalization(self, configured, monkeypatch):
         transcript, posted = self._run(

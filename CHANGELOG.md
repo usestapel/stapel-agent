@@ -3,6 +3,73 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.23.0] — 2026-09-12
+
+### Fixed — an empty ElevenLabs wallet was read as bad audio, so the fallback chain never fired
+
+ElevenLabs answers an exhausted account with
+
+```
+401 {"detail": {"type": "invalid_request", "code": "quota_exceeded",
+     "message": "This request exceeds your quota of 23736. You have 18
+     credits remaining, while 1080 credits are required for this request."}}
+```
+
+Every STT adapter classified by STATUS CLASS: `429` retryable, `>=500`
+retryable, **every other 4xx fatal**. A fatal `TranscriptionError` means
+"the input is bad, the next provider would fail identically", so
+`services.transcribe` returned failure without trying the configured
+`STT_FALLBACK_CHAIN`. On a client stand that cost **41 consecutive
+recordings** between 2026-09-09 22:02 CEST and 2026-09-12; the configured
+fallback (`assemblyai`) was never called, and `fallback_used` had never
+once been true in the whole history of the log table — the flag nobody
+could have noticed was broken, because it had never been anything else.
+
+**The rule now: a provider's account, billing or auth condition is never
+bad input.** Classification is per RESPONSE, not per status class, and it
+lives in ONE place — the new `stt/failures.py` — instead of eight
+hand-rolled copies that could drift apart again:
+
+| provider answer | before | now |
+|---|---|---|
+| `402`, or `401`/`403`/`429`/`400` whose body says quota/credits/billing/subscription | fatal (except 429) | retryable, `reason: quota` |
+| `401`/`403`/`407` with no such marker (a plain bad key) | fatal | retryable, `reason: auth` |
+| `429` without a quota marker | retryable | retryable, `reason: rate` |
+| `>=500` | retryable | retryable, `reason: server` |
+| other 4xx (`404`, `405`, `409`, `451`, …) | fatal | retryable, `reason: unavailable` |
+| `400`/`413`/`415`/`422` about the media (format, size, corrupt) | fatal | **fatal**, `reason: media` |
+| a job the provider ran and failed | fatal | **fatal**, `reason: job` |
+| timeouts / transport | retryable | retryable, `reason: timeout` / `transport` |
+| provider key or base URL not configured | fatal | retryable, `reason: auth` |
+| a language/model this provider does not document | fatal | retryable, `reason: unsupported` |
+
+Only the media stops the chain, because only the media fails identically
+on the next provider. Trying the next provider for anything else is the
+behaviour the setting was added for.
+
+Applied to all eight adapters — `elevenlabs`, `assemblyai`, `deepgram`,
+`gladia`, `soniox`, `speechmatics`, `whisper-http`, `xai-stt` — through
+the shared helper; a test fails if any adapter raises the error classes
+directly or branches on `status_code >= 400` again.
+
+### Added — the ledger says WHY each provider declined
+
+* `TranscriptionError`/`RetryableTranscriptionError` carry `reason`.
+* `metadata.attempts[]` on the transcribe PromptLog row gains `reason`
+  per entry: `{provider, error_kind, reason, error}`.
+* An exhausted chain no longer reports only the LAST provider's message.
+  `reason` becomes `all STT providers failed: elevenlabs (quota): …;
+  assemblyai (server): …` — "we are out of credit" is not hidden behind
+  "the second one timed out".
+* `fallback_used` is true when a later provider succeeds (it always could
+  be; nothing ever reached the code path).
+
+No schema or settings change: `STT_FALLBACK_CHAIN` and
+`STT_LANGUAGE_ROUTES` (a route list is the chain for that language) keep
+their shape and now actually walk. Callers reading `reason` as an opaque
+string are unaffected; callers matching the exhausted-chain string exactly
+should read `metadata.attempts` instead.
+
 ## [0.22.1] — 2026-09-09
 
 ### Fixed — the release pipeline could not start, so 0.22.0 never shipped

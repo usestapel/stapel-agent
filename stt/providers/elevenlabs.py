@@ -31,14 +31,12 @@ from typing import Optional
 import requests
 
 from ...conf import agent_settings
-from .. import segmentation
+from .. import failures, segmentation
 from ..base import (
     AudioRef,
     NormalizedTranscript,
     NormalizedWord,
-    RetryableTranscriptionError,
     SttProvider,
-    TranscriptionError,
     biasing_metadata,
     normalize_language,
 )
@@ -92,8 +90,8 @@ class ElevenLabsProvider(SttProvider):
     ) -> NormalizedTranscript:
         api_key = agent_settings.ELEVENLABS_API_KEY
         if not api_key:
-            raise TranscriptionError(
-                "STAPEL_AGENT['ELEVENLABS_API_KEY'] is not set", provider=self.name
+            raise failures.missing_credentials(
+                "ELEVENLABS_API_KEY", provider=self.name
             )
         audio.require_url(provider=self.name)
         timeout = (
@@ -137,35 +135,22 @@ class ElevenLabsProvider(SttProvider):
                 timeout=timeout,
             )
         except requests.Timeout as exc:
-            raise RetryableTranscriptionError(
+            raise failures.timed_out(
                 f"ElevenLabs request timed out: {exc}", provider=self.name
             ) from exc
         except requests.RequestException as exc:
-            raise RetryableTranscriptionError(
+            raise failures.transport(
                 f"ElevenLabs transport error: {exc}", provider=self.name
             ) from exc
 
-        if resp.status_code == 429:
-            raise RetryableTranscriptionError(
-                "ElevenLabs rate-limited", provider=self.name, status_code=429
-            )
-        if resp.status_code >= 500:
-            raise RetryableTranscriptionError(
-                f"ElevenLabs {resp.status_code}: {resp.text[:300]}",
-                provider=self.name,
-                status_code=resp.status_code,
-            )
-        if resp.status_code >= 400:
-            raise TranscriptionError(
-                f"ElevenLabs {resp.status_code}: {resp.text[:300]}",
-                provider=self.name,
-                status_code=resp.status_code,
-            )
+        # Per-RESPONSE classification (stt/failures.py): a quota 401 is an
+        # empty wallet, not bad audio, and must walk the fallback chain.
+        failures.raise_for_status(resp, provider=self.name, label="ElevenLabs")
 
         try:
             body = resp.json()
         except ValueError as exc:
-            raise RetryableTranscriptionError(
+            raise failures.unavailable(
                 f"ElevenLabs returned non-JSON: {resp.text[:300]}",
                 provider=self.name,
             ) from exc

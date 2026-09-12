@@ -23,7 +23,7 @@ registries). Everything below is verifiable against the code in this repo.
 | Models (`models.py`) | `PromptLog` (immutable per-call ledger: `source` llm_facade/translate/transcribe/summarize/generate_image/other, `model`, `model_size`, `prompt`, `system_prompt`, `response`, `status` success/failure/timeout/error, `error_message`, `input_tokens`/`output_tokens`/`thinking_tokens`/`cache_read_tokens`/`cache_write_tokens`, `duration_ms`, `audio_duration_ms` (billable audio length, distinct from wall clock), `cost_usd`/`cost_basis` (as computed at call time, never recomputed), `user_id`, `workspace_id`, JSON `metadata`, `created_at`; doubles as the cache-by-prompt store) |
 | Services (`services.py`) | `complete()` (cache lookup → optional size-ceiling gate → provider → PromptLog row → `{status, result, usage}`; optional `images` for vision), `complete_json()` (JSON-API system prompt + JSON extraction — the `llm.complete` surface), `translate()`, `transcribe()` (STT router walk — see "STT providers"), `summarize()` (single-shot / map-reduce over `complete()`), `generate_image()` (see "Image generation"), `get_provider()` / `get_stt_provider()` / `get_image_provider()` (lazy resolution against the merged registries), `resolve_size_ceiling()` / `enforce_size_ceiling()` / `ModelSizeCeilingExceeded` (see "Model-size ceiling"), `JSON_API_SYSTEM_PROMPT` |
 | Parsing (`parsing.py`) | `parse_json_response()` (direct JSON → fenced block → object anywhere → array anywhere; surrounding prose becomes `comment`), `parse_translation_response()`, Django-free |
-| STT seam (`stt/`) | `SttProvider` ABC (incl. the `keyterms`/`provider_options` biasing seam), `AudioRef` (exactly one of url/path/data), `NormalizedTranscript` (incl. the counts-only `biasing` block)/`NormalizedUtterance`/`NormalizedWord` + `transcript_from_dict()`/`utterances_from_words()`, `TranscriptionError` (fatal) / `RetryableTranscriptionError` (transient) error taxonomy (`stt/base.py`, Django-free); open registry (`stt/__init__.py`); language router (`stt/router.py`); adapters `whisper-http` / `elevenlabs` / `assemblyai` / `deepgram` / `gladia` / `soniox` / `speechmatics` / `xai-stt` (`stt/providers/`) |
+| STT seam (`stt/`) | `SttProvider` ABC (incl. the `keyterms`/`provider_options` biasing seam), `AudioRef` (exactly one of url/path/data), `NormalizedTranscript` (incl. the counts-only `biasing` block)/`NormalizedUtterance`/`NormalizedWord` + `transcript_from_dict()`/`utterances_from_words()`, `TranscriptionError` (fatal: the media) / `RetryableTranscriptionError` (this provider cannot serve this request — incl. quota/auth) taxonomy (`stt/base.py`, Django-free) with the shared per-response classifier + `reason` vocabulary (`stt/failures.py`); open registry (`stt/__init__.py`); language router (`stt/router.py`); adapters `whisper-http` / `elevenlabs` / `assemblyai` / `deepgram` / `gladia` / `soniox` / `speechmatics` / `xai-stt` (`stt/providers/`) |
 | Summarization prep (`summary.py`) | `render_markdown()` (timestamped `[MM:SS] speaker: text` lines), `build_summary_input()` (token-budget chunking with `seg_NNNN` → start-ms anchors), `split_text_chunks()`, the three system prompts (single-shot / chunk / merge) — Django-free |
 | Image seam (`images/`) | `ImageRef` (vision input: exactly one of url/data; wire form url \| base64 `data_b64`), `ImageGenProvider` ABC + `GeneratedImage`, `ImageGenError` (fatal) / `RetryableImageGenError` (transient) taxonomy (`images/base.py`, Django-free); open registry (`images/__init__.py`); built-in `openai-images` adapter (`images/providers/openai_images.py`) |
 | HTTP API (`urls.py`, `views.py`) | `api/llm/complete` (accepts optional `images`), `api/llm/translate`, `api/llm/transcribe`, `api/llm/summarize`, `api/llm/generate-image` (all `IsServiceRequest \| IsStaffUser`; hosts mount the app under `agent/`). LLM/STT/image failures are HTTP 200 with `status: "failure"` |
@@ -55,7 +55,7 @@ same name → environment variable → default. All keys are read **lazily at ca
 | `MAX_TOKENS` | `4096` | Completion token cap passed to providers. |
 | `STT_PROVIDERS` | `{}` | Overlay **merged over** `stt.BUILTIN_STT_PROVIDERS` (whisper-http / elevenlabs / assemblyai / deepgram / gladia / soniox / speechmatics / xai-stt) — same merge semantics as `PROVIDERS`; see "STT providers" below. |
 | `DEFAULT_STT_PROVIDER` | `"whisper-http"` | STT provider used when the request pins none and no language route matches. |
-| `STT_FALLBACK_CHAIN` | `[]` | Provider names tried in order after the default — on **retryable** failure only. |
+| `STT_FALLBACK_CHAIN` | `[]` | Provider names tried in order after the default — on **retryable** failure only (which now includes a provider's quota/billing/auth refusal; only bad media is fatal). |
 | `STT_LANGUAGE_ROUTES` | `{}` | `{iso-639-1: [provider names]}` language matrix; beats the default chain, loses to an explicit `provider` in the request. |
 | `STT_TIMEOUT` | `1800` | Hard cap (seconds) on one STT provider's submit+poll cycle. |
 | `STT_DOWNLOAD_MAX_BYTES` | `134217728` | Byte cap on an audio URL download (128 MiB). The transfer aborts mid-stream when it is crossed — an oversized body is never buffered whole. |
@@ -188,11 +188,20 @@ per name:
 request → single-name chain, **no fallback** (a pinned provider's failures must
 stay visible) → `STT_LANGUAGE_ROUTES[lang]` (language normalized `en-US` → `en`)
 → `[DEFAULT_STT_PROVIDER] + STT_FALLBACK_CHAIN`. The service walks the chain on
-`RetryableTranscriptionError` only (429/5xx/timeouts/transport); a fatal
-`TranscriptionError` (bad audio, auth, other 4xx) stops immediately — the next
-provider would fail on the same input. Every `transcribe()` call writes one
-PromptLog row: `source=transcribe`, `model` = provider name, LLM token columns
-NULL, `metadata.attempts` = the per-provider walk. A successful call also
+`RetryableTranscriptionError`, and **`stt/failures.py` is the single place that
+decides what that is** — per provider RESPONSE, never per status class. Only
+the media itself is fatal (`400`/`413`/`415`/`422` about the audio, a job the
+provider ran and failed), because only the media fails identically on the next
+provider. Every account condition walks: quota/billing (`402`, or a `401`/`403`/
+`429`/`400` whose body says quota, credits, billing, subscription), a refused or
+missing key, a throttle, a `5xx`, a timeout, a transport error, a capability gap
+(a language pack this provider does not have). Each attempt carries a `reason` —
+`quota` / `auth` / `rate` / `server` / `unavailable` / `unsupported` / `timeout` /
+`transport` / `media` / `job` — and when the whole chain is exhausted the returned
+`reason` names every provider and why it declined. Every `transcribe()` call
+writes one PromptLog row: `source=transcribe`, `model` = provider name, LLM token
+columns NULL, `metadata.attempts` = the per-provider walk
+(`{provider, error_kind, reason, error}` per entry). A successful call also
 stores the billable quantity — `audio_duration_ms` from the provider's own
 reported duration, and `cost_usd`/`cost_basis` from the STT rate card for that
 provider (its model config when the catalog has one, so price variants and
@@ -242,7 +251,7 @@ ABC contract (`stt/base.py`, Django-free):
 
 | Member | Signature | Contract |
 |---|---|---|
-| `transcribe` | `(*, audio: AudioRef, language: str \| None = None, diarization: bool = False, timeout_seconds: int \| None = None, keyterms: list[str] \| None = None, provider_options: dict \| None = None) -> NormalizedTranscript` | Synchronous (polling-based) batch transcription. Raise `RetryableTranscriptionError` on transient failure, `TranscriptionError` on permanent failure. `keyterms` = the generic vocabulary-biasing seam (see below); `provider_options` = free-form per-provider passthrough applied AFTER the adapter's own request params — never silently dropped. |
+| `transcribe` | `(*, audio: AudioRef, language: str \| None = None, diarization: bool = False, timeout_seconds: int \| None = None, keyterms: list[str] \| None = None, provider_options: dict \| None = None) -> NormalizedTranscript` | Synchronous (polling-based) batch transcription. Classify a provider answer through `stt.failures` (`raise_for_status` / `missing_credentials` / `unsupported` / `timed_out` / `transport` / `unavailable` / `job_failed`) instead of hand-rolling the taxonomy: `TranscriptionError` is for the media alone, everything else is `RetryableTranscriptionError` so the chain walks. `keyterms` = the generic vocabulary-biasing seam (see below); `provider_options` = free-form per-provider passthrough applied AFTER the adapter's own request params — never silently dropped. |
 | `name` / `supports_diarization` / `supports_keyterms` / `supported_languages` / `cost_per_hour` | class attributes | Stable id (stored on the PromptLog row), capability flags, optional USD/hour for billing hosts. |
 | `speech_model` | class attribute (`str \| None`, default None) | **Per-registration model pin** — the STT mirror of fixing a model on an LLM registration. Set it on a subclass to force one engine/model for that registered name, overriding the provider's configured default (`WHISPER_MODEL` / `ELEVENLABS_STT_MODEL` / `ASSEMBLYAI_MODEL`); None falls back to that default. `effective_model()` returns the pin-or-default and `default_speech_model()` the configured default (providers override it to read their setting). Two registrations of one adapter class can thus carry different models without a settings change or a fork. |
 

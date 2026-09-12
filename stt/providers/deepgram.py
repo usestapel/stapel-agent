@@ -57,15 +57,13 @@ from typing import Optional
 import requests
 
 from ...conf import agent_settings
-from .. import segmentation
+from .. import failures, segmentation
 from ..base import (
     AudioRef,
     NormalizedTranscript,
     NormalizedUtterance,
     NormalizedWord,
-    RetryableTranscriptionError,
     SttProvider,
-    TranscriptionError,
     biasing_metadata,
 )
 
@@ -144,8 +142,8 @@ class DeepgramProvider(SttProvider):
     ) -> NormalizedTranscript:
         api_key = agent_settings.DEEPGRAM_API_KEY
         if not api_key:
-            raise TranscriptionError(
-                "STAPEL_AGENT['DEEPGRAM_API_KEY'] is not set", provider=self.name
+            raise failures.missing_credentials(
+                "DEEPGRAM_API_KEY", provider=self.name
             )
         timeout = (
             int(agent_settings.STT_TIMEOUT)
@@ -199,35 +197,21 @@ class DeepgramProvider(SttProvider):
                 timeout=timeout,
             )
         except requests.Timeout as exc:
-            raise RetryableTranscriptionError(
+            raise failures.timed_out(
                 f"Deepgram request timed out: {exc}", provider=self.name
             ) from exc
         except requests.RequestException as exc:
-            raise RetryableTranscriptionError(
+            raise failures.transport(
                 f"Deepgram transport error: {exc}", provider=self.name
             ) from exc
 
-        if resp.status_code == 429:
-            raise RetryableTranscriptionError(
-                "Deepgram rate-limited", provider=self.name, status_code=429
-            )
-        if resp.status_code >= 500:
-            raise RetryableTranscriptionError(
-                f"Deepgram {resp.status_code}: {resp.text[:300]}",
-                provider=self.name,
-                status_code=resp.status_code,
-            )
-        if resp.status_code >= 400:
-            raise TranscriptionError(
-                f"Deepgram {resp.status_code}: {resp.text[:300]}",
-                provider=self.name,
-                status_code=resp.status_code,
-            )
+        # Per-RESPONSE classification — see stt/failures.py.
+        failures.raise_for_status(resp, provider=self.name, label="Deepgram")
 
         try:
             body = resp.json()
         except ValueError as exc:
-            raise RetryableTranscriptionError(
+            raise failures.unavailable(
                 f"Deepgram returned non-JSON: {resp.text[:300]}",
                 provider=self.name,
             ) from exc

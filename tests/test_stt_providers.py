@@ -83,7 +83,7 @@ class TestWhisperHttp:
         transcript = WhisperHttpProvider().transcribe(audio=audio, **kwargs)
         return transcript, captured
 
-    def test_unconfigured_base_url_is_fatal(self, settings):
+    def test_unconfigured_base_url_is_provider_unavailable(self, settings):
         settings.STAPEL_AGENT = {"WHISPER_BASE_URL": ""}
         with pytest.raises(TranscriptionError, match="WHISPER_BASE_URL"):
             WhisperHttpProvider().transcribe(audio=AudioRef(data=b"x"))
@@ -191,7 +191,7 @@ class TestWhisperHttp:
                 audio=AudioRef(data=b"x"),
             )
 
-    def test_4xx_is_fatal(self, configured, monkeypatch):
+    def test_400_about_the_media_is_fatal(self, configured, monkeypatch):
         with pytest.raises(TranscriptionError, match="400") as e:
             self._run(
                 monkeypatch,
@@ -199,6 +199,18 @@ class TestWhisperHttp:
                 audio=AudioRef(data=b"x"),
             )
         assert not isinstance(e.value, RetryableTranscriptionError)
+        assert e.value.reason == "media"
+
+    def test_401_bad_key_walks_the_chain(self, configured, monkeypatch):
+        # A key this endpoint refuses says nothing about the audio — the
+        # next provider gets its turn, and the reason names why.
+        with pytest.raises(RetryableTranscriptionError, match="401") as e:
+            self._run(
+                monkeypatch,
+                [FakeResponse(status_code=401, text="invalid api key")],
+                audio=AudioRef(data=b"x"),
+            )
+        assert e.value.reason == "auth"
 
     def test_timeout_is_retryable(self, configured, monkeypatch):
         with pytest.raises(RetryableTranscriptionError, match="timed out"):
@@ -270,10 +282,15 @@ class TestElevenLabs:
         )
         return transcript, captured
 
-    def test_missing_key_is_fatal(self, settings):
+    def test_missing_key_is_provider_unavailable_not_fatal(self, settings):
+        # An unconfigured provider in a chain must not sink the providers
+        # behind it (the quota-401 defect, reached from the other side).
         settings.STAPEL_AGENT = {"ELEVENLABS_API_KEY": ""}
-        with pytest.raises(TranscriptionError, match="ELEVENLABS_API_KEY"):
+        with pytest.raises(
+            RetryableTranscriptionError, match="ELEVENLABS_API_KEY"
+        ) as e:
             ElevenLabsProvider().transcribe(audio=AudioRef(url="https://x/a"))
+        assert e.value.reason == "auth"
 
     def test_bytes_ref_is_rejected(self, configured):
         with pytest.raises(TranscriptionError, match="requires an audio URL"):
@@ -443,10 +460,13 @@ class TestAssemblyAI:
         )
         return transcript, posted, polled
 
-    def test_missing_key_is_fatal(self, settings):
+    def test_missing_key_is_provider_unavailable_not_fatal(self, settings):
         settings.STAPEL_AGENT = {"ASSEMBLYAI_API_KEY": ""}
-        with pytest.raises(TranscriptionError, match="ASSEMBLYAI_API_KEY"):
+        with pytest.raises(
+            RetryableTranscriptionError, match="ASSEMBLYAI_API_KEY"
+        ) as e:
             AssemblyAIProvider().transcribe(audio=AudioRef(url="https://x/a"))
+        assert e.value.reason == "auth"
 
     def test_bytes_ref_is_rejected(self, configured):
         with pytest.raises(TranscriptionError, match="requires an audio URL"):
@@ -513,10 +533,19 @@ class TestAssemblyAI:
         with pytest.raises(RetryableTranscriptionError, match="500"):
             self._run(monkeypatch, submit=[FakeResponse(status_code=500, text="boom")])
 
-    def test_submit_4xx_is_fatal(self, configured, monkeypatch):
-        with pytest.raises(TranscriptionError, match="401") as e:
+    def test_submit_401_bad_key_walks_the_chain(self, configured, monkeypatch):
+        with pytest.raises(RetryableTranscriptionError, match="401") as e:
             self._run(monkeypatch, submit=[FakeResponse(status_code=401, text="key?")])
+        assert e.value.reason == "auth"
+
+    def test_submit_400_about_the_media_is_fatal(self, configured, monkeypatch):
+        with pytest.raises(TranscriptionError, match="400") as e:
+            self._run(
+                monkeypatch,
+                submit=[FakeResponse(status_code=400, text="audio file is corrupt")],
+            )
         assert not isinstance(e.value, RetryableTranscriptionError)
+        assert e.value.reason == "media"
 
     def test_submit_timeout_is_retryable(self, configured, monkeypatch):
         with pytest.raises(RetryableTranscriptionError, match="timed out"):

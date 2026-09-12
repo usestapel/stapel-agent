@@ -50,13 +50,12 @@ from typing import Optional
 import requests
 
 from ...conf import agent_settings
+from .. import failures
 from ..base import (
     AudioRef,
     NormalizedTranscript,
     NormalizedWord,
-    RetryableTranscriptionError,
     SttProvider,
-    TranscriptionError,
     normalize_language,
     unsupported_biasing,
     utterances_from_words,
@@ -91,9 +90,7 @@ class SonioxProvider(SttProvider):
     ) -> NormalizedTranscript:
         api_key = agent_settings.SONIOX_API_KEY
         if not api_key:
-            raise TranscriptionError(
-                "STAPEL_AGENT['SONIOX_API_KEY'] is not set", provider=self.name
-            )
+            raise failures.missing_credentials("SONIOX_API_KEY", provider=self.name)
         timeout = (
             int(agent_settings.STT_TIMEOUT)
             if timeout_seconds is None
@@ -155,18 +152,18 @@ class SonioxProvider(SttProvider):
                 **kwargs,
             )
         except requests.Timeout as exc:
-            raise RetryableTranscriptionError(
+            raise failures.timed_out(
                 f"Soniox {op} timed out: {exc}", provider=self.name
             ) from exc
         except requests.RequestException as exc:
-            raise RetryableTranscriptionError(
+            raise failures.transport(
                 f"Soniox {op} transport error: {exc}", provider=self.name
             ) from exc
         self._raise_for_status(resp, op=op)
         try:
             return resp.json()
         except ValueError as exc:
-            raise RetryableTranscriptionError(
+            raise failures.unavailable(
                 f"Soniox {op} non-JSON: {resp.text[:200]}", provider=self.name
             ) from exc
 
@@ -179,7 +176,7 @@ class SonioxProvider(SttProvider):
         )
         file_id = data.get("id")
         if not file_id:
-            raise RetryableTranscriptionError(
+            raise failures.unavailable(
                 f"Soniox upload returned no file id: {data}", provider=self.name
             )
         return file_id
@@ -188,7 +185,7 @@ class SonioxProvider(SttProvider):
         data = self._request("POST", "/v1/transcriptions", op="create", json=body)
         transcription_id = data.get("id")
         if not transcription_id:
-            raise RetryableTranscriptionError(
+            raise failures.unavailable(
                 f"Soniox create returned no transcription id: {data}",
                 provider=self.name,
             )
@@ -200,7 +197,7 @@ class SonioxProvider(SttProvider):
 
         while True:
             if time.monotonic() >= deadline:
-                raise RetryableTranscriptionError(
+                raise failures.timed_out(
                     f"Soniox polling exceeded {timeout_seconds}s "
                     f"for {transcription_id}",
                     provider=self.name,
@@ -236,7 +233,7 @@ class SonioxProvider(SttProvider):
             if status == "completed":
                 return payload
             if status in ("error", "failed"):
-                raise TranscriptionError(
+                raise failures.job_failed(
                     "Soniox job failed: "
                     f"{payload.get('error_message') or payload.get('error_type') or 'unknown'}",
                     provider=self.name,
@@ -266,23 +263,8 @@ class SonioxProvider(SttProvider):
             return False
 
     def _raise_for_status(self, resp, *, op: str) -> None:
-        if 200 <= resp.status_code < 300:
-            return
-        if resp.status_code == 429:
-            raise RetryableTranscriptionError(
-                "Soniox rate-limited", provider=self.name, status_code=429
-            )
-        if resp.status_code >= 500:
-            raise RetryableTranscriptionError(
-                f"Soniox {op} {resp.status_code}: {resp.text[:300]}",
-                provider=self.name,
-                status_code=resp.status_code,
-            )
-        raise TranscriptionError(
-            f"Soniox {op} {resp.status_code}: {resp.text[:300]}",
-            provider=self.name,
-            status_code=resp.status_code,
-        )
+        # Per-RESPONSE classification — see stt/failures.py.
+        failures.raise_for_status(resp, provider=self.name, label="Soniox", op=op)
 
 
 def _grow(interval: float) -> float:

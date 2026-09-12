@@ -296,6 +296,23 @@ class RetryableSttProvider(FakeSttProvider):
         )
 
 
+class QuotaSttProvider(FakeSttProvider):
+    """Always fails on the ACCOUNT (out of credits) — the condition that
+    used to be read as bad input and stopped the chain dead."""
+
+    name = "quota-stt"
+
+    @classmethod
+    def reset(cls):
+        super().reset()
+        cls.error = RetryableTranscriptionError(
+            "stt account out of credits",
+            provider=cls.name,
+            status_code=401,
+            reason="quota",
+        )
+
+
 class FatalSttProvider(FakeSttProvider):
     """Always fails permanently — the service must NOT fall back."""
 
@@ -305,7 +322,10 @@ class FatalSttProvider(FakeSttProvider):
     def reset(cls):
         super().reset()
         cls.error = TranscriptionError(
-            "audio is not decodable", provider=cls.name, status_code=400
+            "audio is not decodable",
+            provider=cls.name,
+            status_code=400,
+            reason="media",
         )
 
 

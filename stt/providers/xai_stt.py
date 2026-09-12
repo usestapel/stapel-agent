@@ -43,14 +43,13 @@ from typing import Optional
 import requests
 
 from ...conf import agent_settings
+from .. import failures
 from ..base import (
     AudioRef,
     NormalizedTranscript,
     NormalizedUtterance,
     NormalizedWord,
-    RetryableTranscriptionError,
     SttProvider,
-    TranscriptionError,
     biasing_metadata,
     normalize_language,
     utterances_from_words,
@@ -109,9 +108,7 @@ class XaiSttProvider(SttProvider):
     ) -> NormalizedTranscript:
         api_key = agent_settings.XAI_API_KEY
         if not api_key:
-            raise TranscriptionError(
-                "STAPEL_AGENT['XAI_API_KEY'] is not set", provider=self.name
-            )
+            raise failures.missing_credentials("XAI_API_KEY", provider=self.name)
         timeout = (
             int(agent_settings.STT_TIMEOUT)
             if timeout_seconds is None
@@ -162,36 +159,22 @@ class XaiSttProvider(SttProvider):
                 timeout=timeout,
             )
         except requests.Timeout as exc:
-            raise RetryableTranscriptionError(
+            raise failures.timed_out(
                 f"xAI STT request timed out: {exc}", provider=self.name
             ) from exc
         except requests.RequestException as exc:
-            raise RetryableTranscriptionError(
+            raise failures.transport(
                 f"xAI STT transport error: {exc}", provider=self.name
             ) from exc
 
-        if resp.status_code == 429:
-            raise RetryableTranscriptionError(
-                "xAI STT rate-limited", provider=self.name, status_code=429
-            )
-        if resp.status_code >= 500:
-            # Includes the documented 502 (audio fetch) / 503.
-            raise RetryableTranscriptionError(
-                f"xAI STT {resp.status_code}: {resp.text[:300]}",
-                provider=self.name,
-                status_code=resp.status_code,
-            )
-        if resp.status_code >= 400:
-            raise TranscriptionError(
-                f"xAI STT {resp.status_code}: {resp.text[:300]}",
-                provider=self.name,
-                status_code=resp.status_code,
-            )
+        # Per-RESPONSE classification — see stt/failures.py. 5xx (the
+        # documented 502 audio-fetch / 503 included) stays retryable.
+        failures.raise_for_status(resp, provider=self.name, label="xAI STT")
 
         try:
             body = resp.json()
         except ValueError as exc:
-            raise RetryableTranscriptionError(
+            raise failures.unavailable(
                 f"xAI STT returned non-JSON: {resp.text[:300]}",
                 provider=self.name,
             ) from exc

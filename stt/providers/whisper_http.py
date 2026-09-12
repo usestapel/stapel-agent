@@ -19,15 +19,13 @@ from typing import Optional
 import requests
 
 from ...conf import agent_settings
-from .. import segmentation
+from .. import failures, segmentation
 from ..base import (
     AudioRef,
     NormalizedTranscript,
     NormalizedUtterance,
     NormalizedWord,
-    RetryableTranscriptionError,
     SttProvider,
-    TranscriptionError,
     normalize_language,
     unsupported_biasing,
 )
@@ -57,9 +55,10 @@ class WhisperHttpProvider(SttProvider):
     ) -> NormalizedTranscript:
         base_url = (agent_settings.WHISPER_BASE_URL or "").rstrip("/")
         if not base_url:
-            raise TranscriptionError(
-                "STAPEL_AGENT['WHISPER_BASE_URL'] is not configured",
-                provider=self.name,
+            # Unconfigured endpoint = this provider is unavailable in this
+            # deployment; the chain must walk past it, not die on it.
+            raise failures.missing_credentials(
+                "WHISPER_BASE_URL", provider=self.name
             )
         timeout = (
             int(agent_settings.STT_TIMEOUT)
@@ -93,35 +92,21 @@ class WhisperHttpProvider(SttProvider):
                 timeout=timeout,
             )
         except requests.Timeout as exc:
-            raise RetryableTranscriptionError(
+            raise failures.timed_out(
                 f"whisper request timed out: {exc}", provider=self.name
             ) from exc
         except requests.RequestException as exc:
-            raise RetryableTranscriptionError(
+            raise failures.transport(
                 f"whisper transport error: {exc}", provider=self.name
             ) from exc
 
-        if resp.status_code == 429:
-            raise RetryableTranscriptionError(
-                "whisper endpoint rate-limited", provider=self.name, status_code=429
-            )
-        if resp.status_code >= 500:
-            raise RetryableTranscriptionError(
-                f"whisper {resp.status_code}: {resp.text[:300]}",
-                provider=self.name,
-                status_code=resp.status_code,
-            )
-        if resp.status_code >= 400:
-            raise TranscriptionError(
-                f"whisper {resp.status_code}: {resp.text[:300]}",
-                provider=self.name,
-                status_code=resp.status_code,
-            )
+        # Per-RESPONSE classification — see stt/failures.py.
+        failures.raise_for_status(resp, provider=self.name, label="whisper")
 
         try:
             body = resp.json()
         except ValueError as exc:
-            raise RetryableTranscriptionError(
+            raise failures.unavailable(
                 f"whisper returned non-JSON: {resp.text[:300]}", provider=self.name
             ) from exc
         transcript = _normalize(body, provider=self.name)
