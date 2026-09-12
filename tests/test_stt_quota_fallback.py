@@ -1,6 +1,6 @@
-"""The ironmemo regression: a provider's ACCOUNT condition walks the chain.
+"""The client-stand regression: a provider's ACCOUNT condition walks the chain.
 
-Production evidence (ironmemo, 2026-09-09 22:02 CEST → 2026-09-12):
+Production evidence (a client stand, 2026-09-09 22:02 CEST → 2026-09-12):
 ElevenLabs answered an exhausted account with
 
     401 {"detail": {"type": "invalid_request", "code": "quota_exceeded",
@@ -29,7 +29,7 @@ from stapel_agent.tests.fakes import serve_audio
 
 AUDIO = AudioRef(url="https://minio.test/bucket/rec.mp3?X-Sig=s3cr3t")
 
-#: Verbatim from the ironmemo telemetry (numbers included).
+#: Verbatim from the stand's telemetry (numbers included).
 QUOTA_401 = json.dumps(
     {
         "detail": {
@@ -72,7 +72,7 @@ class FakeResponse:
 
 @pytest.fixture
 def stand(settings, monkeypatch):
-    """ironmemo's own configuration: ElevenLabs first, AssemblyAI behind it."""
+    """The stand's own configuration: ElevenLabs first, AssemblyAI behind it."""
     settings.STAPEL_AGENT = {
         "ELEVENLABS_API_KEY": "el-test",
         "ASSEMBLYAI_API_KEY": "aai-test",
@@ -227,7 +227,7 @@ class TestQuotaWalksTheChain:
         self, stand, monkeypatch
     ):
         # STT_LANGUAGE_ROUTES replaces the default chain wholesale, so the
-        # walk has to work there too — ironmemo routes ru/en by language.
+        # walk has to work there too — the stand routes ru/en by language.
         stand.STAPEL_AGENT = {
             **stand.STAPEL_AGENT,
             "STT_LANGUAGE_ROUTES": {"ru": ["elevenlabs", "assemblyai"]},

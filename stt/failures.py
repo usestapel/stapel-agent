@@ -1,6 +1,6 @@
 """One classification of a provider's refusal, shared by every adapter.
 
-The defect this module closes (ironmemo production, 2026-09-09 →
+The defect this module closes (a client stand in production, 2026-09-09 →
 2026-09-12): every adapter classified by STATUS CLASS — 429 retryable,
 >=500 retryable, *every other 4xx* fatal. ElevenLabs answers an exhausted
 account with ``401 {"detail": {"type": "invalid_request", "code":
