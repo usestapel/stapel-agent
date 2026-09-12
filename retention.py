@@ -79,4 +79,26 @@ def purge_prompt_logs(*, older_than_days: int | None = None, dry_run: bool = Fal
     return scrub_queryset(qs)
 
 
-__all__ = ["CONTENT_FIELDS", "SCRUBBED", "purge_prompt_logs", "scrub_queryset"]
+def purge_checkpoints(*, dry_run: bool = False) -> int:
+    """Delete expired provider checkpoints. Returns the count.
+
+    The same job as :func:`purge_prompt_logs` for the other table this
+    package writes, and it DELETES rather than scrubs: a checkpoint is
+    customer content with no accounting half to keep (see
+    :mod:`stapel_agent.checkpoint`). Expiry is per surface — a
+    transcription's week against everything else's retry window — so a
+    host that never runs this job still cannot be SERVED a stale
+    checkpoint; it just keeps the rows.
+    """
+    from .checkpoint import purge_expired
+
+    return purge_expired(dry_run=dry_run)
+
+
+__all__ = [
+    "CONTENT_FIELDS",
+    "SCRUBBED",
+    "purge_checkpoints",
+    "purge_prompt_logs",
+    "scrub_queryset",
+]

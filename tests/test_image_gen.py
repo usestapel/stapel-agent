@@ -288,6 +288,10 @@ class TestGenerateImageService:
             "status": "ok",
             "images": [{"data_b64": PNG_B64, "mime": "image/png"}],
             "provider_used": "fake-images",
+            # Every priced surface says whether it paid — see
+            # stapel_agent.checkpoint. False here: no idempotency_key, so
+            # this call was never eligible to be served from a checkpoint.
+            "cached": False,
         }
         assert fake_images.calls[0] == {
             "prompt": "a cat",

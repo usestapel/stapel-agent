@@ -6,6 +6,7 @@ stapel-translate's AgentProvider branch on ``status``.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -397,6 +398,7 @@ def complete(
     workspace_id: str | None = None,
     metadata: dict | None = None,
     skip_cache: bool = False,
+    idempotency_key: str | None = None,
     images: list | None = None,
     max_tokens: int | None = None,
     schema: dict | None = None,
@@ -421,6 +423,20 @@ def complete(
     Providers without ``supports_images`` degrade to a clear
     ``status: "failure"``; the ledger records ``{count, kinds}`` in
     metadata, never image bytes.
+
+    *idempotency_key* turns this call into a CHECKPOINT (see
+    :mod:`stapel_agent.checkpoint`): the provider's answer is stored the
+    instant it arrives, and a later call with the same key — the same
+    task retried, the same stage re-driven, the same message redelivered
+    — is served from it with ``cost_usd=0`` and ``cost_basis="cached"``
+    instead of being generated (and paid for) a second time. Unlike the
+    audio surfaces this requires the caller to say so: a completion is
+    SAMPLED, so keying on the prompt alone would quietly return the same
+    sample to a caller that deliberately asked twice. The key is the
+    caller's word for "this is the same attempt at the same job"; the
+    prompt, the model and the shape of the request are in the key
+    alongside it, so a key reused over changed inputs cannot serve a
+    stale answer.
 
     *max_tokens* is a per-call output-token cap overriding the configured
     ``MAX_TOKENS`` (long structured outputs raise it; short ones bound
@@ -517,6 +533,75 @@ def complete(
                 "usage": {"input_tokens": 0, "output_tokens": 0},
             }
 
+    # ── The checkpoint, read side ──────────────────────────────────────
+    # Only when the caller named the attempt (see the docstring). The
+    # prompt travels as a hash: this table is storage, and a second
+    # verbatim copy of every prompt is a second thing retention has to
+    # find.
+    from . import checkpoint
+
+    ckpt_key = ""
+    if idempotency_key:
+        ckpt_key = checkpoint.call_key(
+            "complete",
+            user_id=user_id,
+            workspace_id=workspace_id,
+            parts={
+                "idempotency_key": str(idempotency_key),
+                "prompt": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                "system_prompt": hashlib.sha256(
+                    (system_prompt or "").encode("utf-8")
+                ).hexdigest(),
+                "provider": provider_name,
+                "model": model,
+                "model_size": model_size,
+                "max_tokens": max_tokens,
+                "schema": bool(schema),
+                "images": [img.kind for img in images] if images else None,
+                "source": str(source),
+            },
+        )
+        hit = checkpoint.load(ckpt_key, surface="complete")
+        if hit is not None:
+            stored = hit.value or {}
+            logger.info(
+                "stapel-agent: %s served from the checkpoint written %ss ago "
+                "(idempotency_key) — no provider call, no charge",
+                source, hit.age_seconds,
+            )
+            usage = {
+                "input_tokens": stored.get("input_tokens") or 0,
+                "output_tokens": stored.get("output_tokens") or 0,
+                "thinking_tokens": stored.get("thinking_tokens") or 0,
+                "cache_read_tokens": stored.get("cache_read_tokens") or 0,
+                "cache_write_tokens": stored.get("cache_write_tokens") or 0,
+                "cost_usd": 0,
+                "cost_basis": CostBasis.CACHED,
+            }
+            PromptLog.objects.create(
+                source=source,
+                model=model,
+                model_size=model_size,
+                prompt=prompt,
+                system_prompt=system_prompt,
+                response=stored.get("text"),
+                status=PromptStatus.SUCCESS,
+                input_tokens=usage["input_tokens"],
+                output_tokens=usage["output_tokens"],
+                thinking_tokens=usage["thinking_tokens"],
+                cache_read_tokens=usage["cache_read_tokens"],
+                cache_write_tokens=usage["cache_write_tokens"],
+                duration_ms=0,
+                **_cost_columns(usage),
+                **_identity(user_id, workspace_id),
+                metadata={
+                    **(metadata or {}),
+                    "provider": provider_name,
+                    "cached": True,
+                },
+            )
+            return {"status": "ok", "result": stored.get("text"), "usage": usage}
+
     extra_meta = {}
     if images:
         # Never the bytes — just enough for observability/cost queries.
@@ -570,6 +655,25 @@ def complete(
         log.duration_ms = int((time.monotonic() - start) * 1000)
         log.save()
         return {"status": "failure", "reason": str(exc)}
+
+    # Checkpoint FIRST — the tokens are paid for; the ledger row, the
+    # parse, the caller's own persistence may all still fail and retry.
+    if ckpt_key:
+        checkpoint.store(
+            ckpt_key,
+            surface="complete",
+            provider=provider_name,
+            value={
+                "text": result.text,
+                "input_tokens": result.input_tokens,
+                "output_tokens": result.output_tokens,
+                "thinking_tokens": result.thinking_tokens,
+                "cache_read_tokens": result.cache_read_tokens,
+                "cache_write_tokens": result.cache_write_tokens,
+            },
+            user_id=user_id,
+            workspace_id=workspace_id,
+        )
 
     log.status = PromptStatus.SUCCESS
     log.response = result.text
@@ -625,6 +729,7 @@ def complete_json(
     images: list | None = None,
     max_tokens: int | None = None,
     schema: dict | None = None,
+    idempotency_key: str | None = None,
     validate=None,
     max_revisions: int = 0,
 ) -> dict:
@@ -682,6 +787,10 @@ def complete_json(
             images=images,
             max_tokens=max_tokens,
             schema=schema,
+            # Threaded, not re-derived: a revision re-asks with a
+            # DIFFERENT prompt, and the prompt is in the checkpoint key,
+            # so attempt 2 of one job cannot be served attempt 1's answer.
+            idempotency_key=idempotency_key,
         )
         if raw["status"] == "failure":
             return _drop_none(
@@ -1048,6 +1157,8 @@ def transcribe(
     timeout_seconds: int | None = None,
     keyterms: list[str] | None = None,
     provider_options: dict | None = None,
+    audio_content_hash: str | None = None,
+    audio_duration_ms: int | None = None,
     user_id: str | None = None,
     workspace_id: str | None = None,
     metadata: dict | None = None,
@@ -1090,13 +1201,48 @@ def transcribe(
     (counts only — never the terms; term lists are customer data and are
     likewise kept OUT of the PromptLog row).
 
+    THE PROVIDER CALL IS A CHECKPOINT. It is the most expensive call this
+    package makes, and everything after it — the ledger row, the reply,
+    the caller's handoff PUT, the caller's own persistence — is allowed to
+    fail. Before 0.24.0 each of those failures re-entered this function
+    from the top and bought the transcript again: production measured ONE
+    148-minute recording transcribed six times (two tasks × three
+    attempts) because the REPLY did not fit the broker. So the transcript
+    is stored under ``checkpoint.call_key`` the instant the adapter
+    returns and before anything else happens, keyed on the audio's
+    content hash + provider + model + language + diarization + biasing
+    terms, and a later call with the same key is served from it with
+    ``cost_usd=0``, ``cost_basis="cached"`` and ``attempts:
+    [{"provider", "cached": true}]``.
+
+    *audio_content_hash* is that key's first component. Pass it whenever
+    the caller already has it (an uploader hashes the object once, and
+    would otherwise force a second full download here); omitted, it is
+    computed from local bytes, and a URL ref with no hash simply does not
+    participate — it is logged, never guessed.
+
+    *audio_duration_ms* is HOW MUCH AUDIO WAS SUBMITTED, and it — not
+    ``transcript.duration_seconds`` — is what the row meters. Several
+    adapters derive the transcript's duration from the last word's end
+    timestamp, so an EMPTY transcript reads as zero minutes: two paid
+    ElevenLabs calls sat in production's ledger at 0 ms while the invoice
+    counted them in full. Omitted, the submitted length is measured from
+    local media (``stt.base.probe_duration_ms``) and falls back to the
+    provider's number only when nothing measured it. An empty transcript
+    is metered like any other — the provider billed for it.
+
     Returns ``{"status": "ok", "transcript": {...}, "provider_used": str,
-    "fallback_used": bool}`` or ``{"status": "failure", "reason": ...}``.
+    "fallback_used": bool, "cached": bool}`` or ``{"status": "failure",
+    "reason": ...}``.
     """
+    from . import checkpoint
     from .stt.base import (
         AudioRef,
         RetryableTranscriptionError,
         TranscriptionError,
+        content_hash,
+        probe_duration_ms,
+        transcript_from_dict,
     )
     from .stt.router import select_chain
 
@@ -1106,6 +1252,28 @@ def transcribe(
     chain = select_chain(language, provider=provider)
     if not chain:
         return {"status": "failure", "reason": "No STT provider configured"}
+
+    # ── What identifies this media, and how much of it there is ────────
+    # Both are resolved BEFORE the loop: they are properties of the
+    # request, not of whichever provider happens to answer.
+    media_hash = audio_content_hash or None
+    if not media_hash:
+        local = audio.local_bytes()
+        if local:
+            media_hash = content_hash(local)
+        else:
+            logger.info(
+                "stapel-agent: transcribe has no audio_content_hash and the "
+                "ref is remote (%s) — this call cannot be checkpointed, so a "
+                "retry above it will pay the provider again. Pass "
+                "audio_content_hash from the object you uploaded.",
+                audio.describe(),
+            )
+
+    submitted_ms = int(audio_duration_ms) if audio_duration_ms else None
+    submitted_source = "caller" if submitted_ms else "unknown"
+    if submitted_ms is None:
+        submitted_ms, submitted_source = probe_duration_ms(audio)
 
     start = time.monotonic()
     attempts: list[dict] = []
@@ -1129,19 +1297,48 @@ def transcribe(
         response: str | None,
         error: str | None,
         transcript=None,
+        cached: bool = False,
     ):
-        # The billable quantity comes from the provider's own answer, which
-        # is the only party that measured the audio. A failed attempt has
-        # no transcript and therefore no duration — and no cost, which is
-        # correct: providers do not bill for a call that returned nothing.
-        audio_ms = None
+        # THE BILLABLE QUANTITY IS WHAT WE SUBMITTED. The provider's own
+        # number is kept beside it (``audio_reported_ms``) because the two
+        # disagreeing is a real signal, but it cannot be the meter: it is
+        # the last word's end timestamp for several adapters, so trailing
+        # silence is free and an empty transcript is free — and neither is
+        # free on the invoice. The provider's number is used only when
+        # nothing measured the submission.
+        reported_ms = None
         if transcript is not None and transcript.duration_seconds is not None:
-            audio_ms = int(round(float(transcript.duration_seconds) * 1000))
-        cost = (
-            _stt_cost(provider_used, transcript.language or language, audio_ms)
-            if transcript is not None
-            else {}
-        )
+            reported_ms = int(round(float(transcript.duration_seconds) * 1000))
+        audio_ms = submitted_ms if submitted_ms is not None else reported_ms
+        if transcript is not None and audio_ms is None:
+            logger.warning(
+                "stapel-agent: STT call to %r is stored with no audio length "
+                "— neither the caller nor the media nor the provider gave "
+                "one, so its cost cannot be reconstructed. Pass "
+                "audio_duration_ms.", provider_used,
+            )
+        if transcript is not None and not transcript.words and not transcript.utterances:
+            logger.warning(
+                "stapel-agent: STT provider %r returned an EMPTY transcript "
+                "for %s ms of submitted audio — metered and priced in full, "
+                "because the provider charged for it.",
+                provider_used, audio_ms,
+            )
+        if cached:
+            # A checkpoint hit spent nothing. Zero with its own basis, so
+            # "what did we pay" and "what did the checkpoint save" are two
+            # queries over one column instead of a guess.
+            cost = {
+                "cost_usd": 0,
+                "cost_basis": CostBasis.CACHED,
+                "priced_by": None,
+            }
+        else:
+            cost = (
+                _stt_cost(provider_used, transcript.language or language, audio_ms)
+                if transcript is not None
+                else {}
+            )
         PromptLog.objects.create(
             source=PromptSource.TRANSCRIBE,
             model=provider_used,
@@ -1161,6 +1358,13 @@ def transcribe(
                 "diarization": diarization,
                 "fallback_used": fallback_used,
                 "attempts": attempts,
+                # The meter's two numbers, kept apart on purpose (see the
+                # comment above): what we handed the provider, and what
+                # the provider said it heard.
+                "audio_submitted_ms": submitted_ms,
+                "audio_submitted_source": submitted_source,
+                "audio_reported_ms": reported_ms,
+                **({"cached": True} if cached else {}),
                 # Which card produced cost_usd — a config id, a provider
                 # name, or absent when nothing priced it. Without this the
                 # number is unfalsifiable a quarter later.
@@ -1195,6 +1399,53 @@ def transcribe(
         if provider_options is not None:
             seam_kwargs["provider_options"] = dict(provider_options)
 
+        # ── The checkpoint, read side ──────────────────────────────────
+        # Every input that changes what a correct transcript is. A part
+        # left out here is one caller's answer served to another's
+        # question: the model, the language and the diarization flag all
+        # change the text, and the biasing terms change the spelling of
+        # every name in it.
+        key = ""
+        if media_hash:
+            key = checkpoint.call_key(
+                "transcribe",
+                user_id=user_id,
+                workspace_id=workspace_id,
+                parts={
+                    "audio": media_hash,
+                    "provider": name,
+                    "model": getattr(backend, "speech_model", None),
+                    "language": language,
+                    "diarization": bool(diarization),
+                    "keyterms": list(keyterms) if keyterms else None,
+                    "provider_options": provider_options or None,
+                },
+            )
+            hit = checkpoint.load(key, surface="transcribe")
+            if hit is not None:
+                transcript = transcript_from_dict(hit.value)
+                attempts.append({"provider": name, "cached": True})
+                logger.info(
+                    "stapel-agent: transcribe served from the checkpoint "
+                    "written %ss ago by %s — no provider call, no charge",
+                    hit.age_seconds, hit.provider or name,
+                )
+                _log(
+                    PromptStatus.SUCCESS,
+                    provider_used=name,
+                    response=transcript.text,
+                    error=None,
+                    transcript=transcript,
+                    cached=True,
+                )
+                return {
+                    "status": "ok",
+                    "transcript": hit.value,
+                    "provider_used": name,
+                    "fallback_used": fallback_used,
+                    "cached": True,
+                }
+
         try:
             transcript = backend.transcribe(
                 audio=audio,
@@ -1228,6 +1479,20 @@ def transcribe(
             logger.warning("stapel-agent: %s", failure_reason)
             continue
 
+        # ── The checkpoint, write side ─────────────────────────────────
+        # FIRST, before the ledger row, before the return, before the
+        # caller's handoff: from here on every failure is free to retry.
+        payload = transcript.to_dict()
+        if key:
+            checkpoint.store(
+                key,
+                surface="transcribe",
+                provider=name,
+                value=payload,
+                user_id=user_id,
+                workspace_id=workspace_id,
+            )
+
         _attempt(name, error_kind=None, reason=None, error=None)
         _log(
             PromptStatus.SUCCESS,
@@ -1238,9 +1503,10 @@ def transcribe(
         )
         return {
             "status": "ok",
-            "transcript": transcript.to_dict(),
+            "transcript": payload,
             "provider_used": name,
             "fallback_used": fallback_used,
+            "cached": False,
         }
 
     # The chain is exhausted: the answer names EVERY provider and why it
@@ -1286,6 +1552,7 @@ def diarize(
     provider: str | None = None,
     timeout_seconds: int | None = None,
     provider_options: dict | None = None,
+    audio_content_hash: str | None = None,
     user_id: str | None = None,
     workspace_id: str | None = None,
     metadata: dict | None = None,
@@ -1300,11 +1567,19 @@ def diarize(
     URLs; token columns null). Fusing the returned turns with STT words
     is the CALLER's job — merge policy is app know-how, not core.
 
+    Priced per audio hour, so it is a checkpoint too (see
+    :mod:`stapel_agent.checkpoint`): the provider's answer is stored under
+    the audio's content hash + provider + speaker hint before this returns,
+    and a retry is served from it at ``cost_basis="cached"``.
+    *audio_content_hash* is the caller's; absent, it is computed from
+    local bytes, and a remote ref without one does not participate.
+
     Returns ``{"status": "ok", "diarization": {...}, "provider_used":
-    str}`` or ``{"status": "failure", "reason": ...}``.
+    str, "cached": bool}`` or ``{"status": "failure", "reason": ...}``.
     """
+    from . import checkpoint
     from .diarization.base import DiarizationError
-    from .stt.base import AudioRef
+    from .stt.base import AudioRef, content_hash
 
     if not isinstance(audio, AudioRef):
         return {"status": "failure", "reason": "audio must be an AudioRef"}
@@ -1312,12 +1587,19 @@ def diarize(
     name = provider or agent_settings.DEFAULT_DIARIZATION_PROVIDER
     start = time.monotonic()
 
+    media_hash = audio_content_hash or None
+    if not media_hash:
+        local = audio.local_bytes()
+        if local:
+            media_hash = content_hash(local)
+
     def _log(
         status: str,
         *,
         error: str | None = None,
         extra: dict | None = None,
         audio_seconds: float | None = None,
+        cached: bool = False,
     ):
         PromptLog.objects.create(
             source=PromptSource.DIARIZE,
@@ -1338,14 +1620,55 @@ def diarize(
                 if audio_seconds is not None
                 else None
             ),
+            **(
+                {"cost_usd": 0, "cost_basis": CostBasis.CACHED} if cached else {}
+            ),
             **_identity(user_id, workspace_id),
             metadata={
                 **(metadata or {}),
                 "audio": audio.describe(),
                 "num_speakers": num_speakers,
+                **({"cached": True} if cached else {}),
                 **(extra or {}),
             },
         )
+
+    key = ""
+    if media_hash:
+        key = checkpoint.call_key(
+            "diarize",
+            user_id=user_id,
+            workspace_id=workspace_id,
+            parts={
+                "audio": media_hash,
+                "provider": name,
+                "num_speakers": num_speakers,
+                "provider_options": provider_options or None,
+            },
+        )
+        hit = checkpoint.load(key, surface="diarize")
+        if hit is not None:
+            stored = hit.value or {}
+            logger.info(
+                "stapel-agent: diarize served from the checkpoint written "
+                "%ss ago — no provider call, no charge", hit.age_seconds,
+            )
+            _log(
+                PromptStatus.SUCCESS,
+                extra={
+                    "turns": len(stored.get("turns") or []),
+                    "speakers_detected": len(stored.get("speakers_detected") or []),
+                    "duration_seconds": stored.get("duration_seconds"),
+                },
+                audio_seconds=stored.get("duration_seconds"),
+                cached=True,
+            )
+            return {
+                "status": "ok",
+                "diarization": stored,
+                "provider_used": name,
+                "cached": True,
+            }
 
     try:
         backend = get_diarization_provider(name)
@@ -1363,6 +1686,19 @@ def diarize(
         _log(PromptStatus.ERROR, error=reason)
         return {"status": "failure", "reason": reason}
 
+    # Checkpoint FIRST — the money is spent, and everything below here
+    # (the ledger row, the reply, the caller's merge) may be retried.
+    payload = result.to_dict()
+    if key:
+        checkpoint.store(
+            key,
+            surface="diarize",
+            provider=name,
+            value=payload,
+            user_id=user_id,
+            workspace_id=workspace_id,
+        )
+
     _log(
         PromptStatus.SUCCESS,
         extra={
@@ -1374,8 +1710,9 @@ def diarize(
     )
     return {
         "status": "ok",
-        "diarization": result.to_dict(),
+        "diarization": payload,
         "provider_used": name,
+        "cached": False,
     }
 
 
@@ -1556,9 +1893,16 @@ def embed(
     same rule as STT keyterms). The vectors likewise never land in the
     ledger (they are the response payload, not observability data).
 
+    A checkpoint surface (see :mod:`stapel_agent.checkpoint`): the batch's
+    vectors are stored under a hash of the texts + model + provider before
+    this returns, so a caller whose indexing transaction rolls back does
+    not re-embed the same batch. Keyed on a hash of the texts, never on
+    the texts.
+
     Returns ``{"status": "ok", "embeddings": {...}, "provider_used":
-    str}`` or ``{"status": "failure", "reason": ...}``.
+    str, "cached": bool}`` or ``{"status": "failure", "reason": ...}``.
     """
+    from . import checkpoint
     from .embeddings.base import EmbeddingError
 
     name = provider or agent_settings.DEFAULT_EMBEDDING_PROVIDER
@@ -1607,6 +1951,52 @@ def embed(
     # the STT keyterms seam above.
     seam_kwargs = {"model": str(model)} if model else {}
 
+    # A HASH of the batch, never the batch: the checkpoint table is
+    # storage this package owns, and customer text does not go into it
+    # by way of a key (the ledger has the same rule — see _log above).
+    key = ""
+    if isinstance(texts, (list, tuple)) and batch_size:
+        key = checkpoint.call_key(
+            "embed",
+            user_id=user_id,
+            workspace_id=workspace_id,
+            parts={
+                "texts": hashlib.sha256(
+                    "\x1f".join(str(t) for t in texts).encode("utf-8")
+                ).hexdigest(),
+                "count": batch_size,
+                "provider": name,
+                "model": str(model) if model else None,
+                "provider_options": provider_options or None,
+            },
+        )
+        hit = checkpoint.load(key, surface="embed")
+        if hit is not None:
+            stored = hit.value or {}
+            logger.info(
+                "stapel-agent: embed batch of %d served from the checkpoint "
+                "written %ss ago — no provider call, no charge",
+                batch_size, hit.age_seconds,
+            )
+            _log(
+                PromptStatus.SUCCESS,
+                model_used=stored.get("model") or name,
+                cost={"cost_usd": 0, "cost_basis": CostBasis.CACHED},
+                input_tokens=_embedding_tokens(stored.get("usage")),
+                extra={
+                    "model": stored.get("model"),
+                    "dim": stored.get("dim"),
+                    "usage": stored.get("usage"),
+                    "cached": True,
+                },
+            )
+            return {
+                "status": "ok",
+                "embeddings": stored,
+                "provider_used": name,
+                "cached": True,
+            }
+
     try:
         backend = get_embedding_provider(name)
         result = backend.embed(
@@ -1622,6 +2012,19 @@ def embed(
         reason = f"Embedding provider '{name}' could not be loaded: {exc}"
         _log(PromptStatus.ERROR, error=reason)
         return {"status": "failure", "reason": reason}
+
+    # Checkpoint FIRST — before pricing, before the ledger row, before
+    # the caller's indexing transaction that may yet roll back.
+    payload = result.to_dict()
+    if key:
+        checkpoint.store(
+            key,
+            surface="embed",
+            provider=name,
+            value=payload,
+            user_id=user_id,
+            workspace_id=workspace_id,
+        )
 
     from .pricing import embedding_cost_fields
 
@@ -1651,8 +2054,9 @@ def embed(
     )
     return {
         "status": "ok",
-        "embeddings": result.to_dict(),
+        "embeddings": payload,
         "provider_used": name,
+        "cached": False,
     }
 
 
@@ -1708,9 +2112,13 @@ def rerank(
     into the ledger (privacy canon — the safe thing is the default; same
     rule as embeddings/STT keyterms).
 
-    Returns ``{"status": "ok", "rerank": {...}, "provider_used": str}``
-    or ``{"status": "failure", "reason": ...}``.
+    A checkpoint surface (see :mod:`stapel_agent.checkpoint`), keyed on a
+    HASH of the query and documents — never on their text.
+
+    Returns ``{"status": "ok", "rerank": {...}, "provider_used": str,
+    "cached": bool}`` or ``{"status": "failure", "reason": ...}``.
     """
+    from . import checkpoint
     from .rerank.base import RerankError
 
     name = provider or agent_settings.DEFAULT_RERANK_PROVIDER
@@ -1737,6 +2145,42 @@ def rerank(
             },
         )
 
+    key = ""
+    if doc_count:
+        key = checkpoint.call_key(
+            "rerank",
+            user_id=user_id,
+            workspace_id=workspace_id,
+            parts={
+                "query": hashlib.sha256(str(query).encode("utf-8")).hexdigest(),
+                "documents": hashlib.sha256(
+                    "\x1f".join(str(d) for d in documents).encode("utf-8")
+                ).hexdigest(),
+                "count": doc_count,
+                "provider": name,
+                "top_n": top_n,
+                "provider_options": provider_options or None,
+            },
+        )
+        hit = checkpoint.load(key, surface="rerank")
+        if hit is not None:
+            stored = hit.value or {}
+            _log(
+                PromptStatus.SUCCESS,
+                extra={
+                    "model": stored.get("model"),
+                    "result_count": len(stored.get("results") or []),
+                    "usage": stored.get("usage"),
+                    "cached": True,
+                },
+            )
+            return {
+                "status": "ok",
+                "rerank": stored,
+                "provider_used": name,
+                "cached": True,
+            }
+
     try:
         backend = get_rerank_provider(name)
         result = backend.rerank(
@@ -1754,6 +2198,18 @@ def rerank(
         _log(PromptStatus.ERROR, error=reason)
         return {"status": "failure", "reason": reason}
 
+    # Checkpoint FIRST — before the ledger row, before the return.
+    payload = result.to_dict()
+    if key:
+        checkpoint.store(
+            key,
+            surface="rerank",
+            provider=name,
+            value=payload,
+            user_id=user_id,
+            workspace_id=workspace_id,
+        )
+
     _log(
         PromptStatus.SUCCESS,
         extra={
@@ -1764,8 +2220,9 @@ def rerank(
     )
     return {
         "status": "ok",
-        "rerank": result.to_dict(),
+        "rerank": payload,
         "provider_used": name,
+        "cached": False,
     }
 
 
@@ -1799,14 +2256,24 @@ def generate_image(
     n: int = 1,
     provider: str | None = None,
     timeout_seconds: int | None = None,
+    idempotency_key: str | None = None,
     user_id: str | None = None,
     workspace_id: str | None = None,
     metadata: dict | None = None,
 ) -> dict:
     """Generate images through the configured backend.
 
+    A checkpoint surface, but ONLY with an explicit *idempotency_key*
+    (see :mod:`stapel_agent.checkpoint`, and the same argument on
+    :func:`complete`): image generation is SAMPLED, so keying on the
+    prompt alone would hand a person who asked twice the same picture
+    twice. The key says "this is the same attempt at the same job" —
+    a task id, a stage id — and only then is a retry served from the
+    stored result instead of paying again.
+
     Returns ``{"status": "ok", "images": [{url?|data_b64?, mime}],
-    "provider_used": str}`` or ``{"status": "failure", "reason": ...}``.
+    "provider_used": str, "cached": bool}`` or ``{"status": "failure",
+    "reason": ...}``.
 
     The module boundary stops at raw results + the ledger: storing images
     into CDN/asset libraries is the CALLER's job (the system-design §8.8
@@ -1815,6 +2282,7 @@ def generate_image(
     the response body NOT logged raw (only ``{count, mimes, bytes_total}``
     in metadata), token columns null.
     """
+    from . import checkpoint
     from .images.base import ImageGenError, b64_decoded_size
 
     name = provider or agent_settings.DEFAULT_IMAGE_PROVIDER
@@ -1833,6 +2301,37 @@ def generate_image(
             **_identity(user_id, workspace_id),
             metadata={**(metadata or {}), "size": size, "n": n, **(extra or {})},
         )
+
+    key = ""
+    if idempotency_key:
+        key = checkpoint.call_key(
+            "generate_image",
+            user_id=user_id,
+            workspace_id=workspace_id,
+            parts={
+                "idempotency_key": str(idempotency_key),
+                "prompt": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                "provider": name,
+                "size": size,
+                "n": n,
+            },
+        )
+        hit = checkpoint.load(key, surface="generate_image")
+        if hit is not None:
+            images = (hit.value or {}).get("images") or []
+            _log(
+                PromptStatus.SUCCESS,
+                extra={
+                    "images": {"count": len(images)},
+                    "cached": True,
+                },
+            )
+            return {
+                "status": "ok",
+                "images": images,
+                "provider_used": name,
+                "cached": True,
+            }
 
     try:
         backend = get_image_provider(name)
@@ -1853,6 +2352,19 @@ def generate_image(
         _log(PromptStatus.ERROR, error=reason)
         return {"status": "failure", "reason": reason}
 
+    # Checkpoint FIRST — before the ledger row, before the caller stores
+    # the bytes anywhere (which is the step that fails).
+    payload = [img.to_dict() for img in results]
+    if key:
+        checkpoint.store(
+            key,
+            surface="generate_image",
+            provider=name,
+            value={"images": payload},
+            user_id=user_id,
+            workspace_id=workspace_id,
+        )
+
     _log(
         PromptStatus.SUCCESS,
         extra={
@@ -1865,8 +2377,9 @@ def generate_image(
     )
     return {
         "status": "ok",
-        "images": [img.to_dict() for img in results],
+        "images": payload,
         "provider_used": name,
+        "cached": False,
     }
 
 

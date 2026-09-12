@@ -130,6 +130,16 @@ COMPLETE_SCHEMA = {
             "answering the prose way. Pass the schema as pydantic emits it: "
             "the transport applies the strict-subset transform itself.",
         },
+        "idempotency_key": {
+            "type": "string",
+            "description": "The caller's name for THIS ATTEMPT at a job "
+            "— a task id, a stage id. Given, the provider's answer is "
+            "checkpointed under it and a retry of the same attempt is "
+            "served from the checkpoint at cost 0 instead of being "
+            "generated again. Omitted (the default), every call reaches "
+            "the provider: a completion is sampled, and two deliberate "
+            "asks must be allowed to differ.",
+        },
         **IDENTITY_PROPERTIES,
     },
     "required": ["prompt", "model"],
@@ -188,6 +198,7 @@ def llm_complete(payload: dict) -> dict:
         images=images or None,
         max_tokens=payload.get("max_tokens"),
         schema=payload.get("schema"),
+        idempotency_key=payload.get("idempotency_key"),
         **_identity_kwargs(payload),
     )
 
@@ -235,6 +246,26 @@ TRANSCRIBE_SCHEMA = {
             "type": "integer",
             "minimum": 1,
             "description": "Hard cap on one provider's submit+poll cycle.",
+        },
+        "audio_content_hash": {
+            "type": "string",
+            "description": "Content hash of the audio this URL points at "
+            "(``sha256:<hex>``). It is the identity of the media, and the "
+            "first component of the checkpoint key that makes a retry "
+            "free: without it a caller whose reply failed pays the "
+            "provider again. Pass the hash you computed when you stored "
+            "the object — the agent will not download a second copy to "
+            "compute one.",
+        },
+        "audio_duration_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "How much audio is being SUBMITTED. This, not "
+            "the transcript's own duration, is what the ledger meters: "
+            "several providers report the last word's end timestamp, so "
+            "trailing silence and an empty transcript would otherwise "
+            "meter as less than was billed. Omitted, the agent measures "
+            "local media and falls back to the provider's number.",
         },
         "keyterms": {
             "type": "array",
@@ -365,6 +396,8 @@ def llm_transcribe(payload: dict) -> dict:
         timeout_seconds=payload.get("timeout_seconds"),
         keyterms=payload.get("keyterms"),
         provider_options=payload.get("provider_options"),
+        audio_content_hash=payload.get("audio_content_hash"),
+        audio_duration_ms=payload.get("audio_duration_ms"),
         **_identity_kwargs(payload),
     )
 
@@ -383,6 +416,14 @@ def llm_transcribe(payload: dict) -> dict:
         # The transcription itself succeeded and is already paid for, so say
         # precisely what failed. The caller's stage treats this as retryable:
         # a fresh presigned URL is one of the two things that fixes it.
+        #
+        # RETRYING THIS IS NOW FREE, which is what makes it safe to keep
+        # retryable. The transcript was written to the checkpoint before
+        # this line ran, so the retry — same audio_content_hash, same
+        # provider, same language — is served from there at
+        # cost_basis="cached" and only the PUT is attempted again. Before
+        # 0.24.0 this exact branch is what bought one 148-minute
+        # recording six times.
         logger.warning("llm.transcribe: transcript handoff failed: %s", exc)
         return {"status": "failure", "reason": f"transcript_handoff_failed: {exc}"}
 
@@ -421,6 +462,12 @@ DIARIZE_SCHEMA = {
             "minimum": 1,
             "description": "Hard cap on the diarization request.",
         },
+        "audio_content_hash": {
+            "type": "string",
+            "description": "Content hash of the audio (``sha256:<hex>``) "
+            "— the checkpoint key that makes a retry of this priced call "
+            "free. See the same field on llm.transcribe.",
+        },
         "provider_options": {
             "type": "object",
             "description": "Free-form per-provider passthrough, applied "
@@ -457,6 +504,7 @@ def llm_diarize(payload: dict) -> dict:
         provider=payload.get("provider"),
         timeout_seconds=payload.get("timeout_seconds"),
         provider_options=payload.get("provider_options"),
+        audio_content_hash=payload.get("audio_content_hash"),
         **_identity_kwargs(payload),
     )
 
@@ -687,6 +735,14 @@ GENERATE_IMAGE_SCHEMA = {
             "minimum": 1,
             "description": "Hard cap on the generation request.",
         },
+        "idempotency_key": {
+            "type": "string",
+            "description": "The caller's name for THIS ATTEMPT at a job. "
+            "Given, the generated images are checkpointed under it and a "
+            "retry of the same attempt is served from the checkpoint at "
+            "cost 0. Omitted, every call generates: two deliberate asks "
+            "for the same prompt must be allowed to differ.",
+        },
         **IDENTITY_PROPERTIES,
     },
     "required": ["prompt"],
@@ -715,6 +771,7 @@ def llm_generate_image(payload: dict) -> dict:
         n=int(payload.get("n") or 1),
         provider=payload.get("provider"),
         timeout_seconds=payload.get("timeout_seconds"),
+        idempotency_key=payload.get("idempotency_key"),
         **_identity_kwargs(payload),
     )
 

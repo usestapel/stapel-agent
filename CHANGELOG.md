@@ -3,6 +3,100 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.24.0] — 2026-09-12
+
+### Fixed — one 148-minute recording, transcribed six times, because the step that failed was AFTER the money
+
+Production data from a client stand, the same quota the 0.23.0 entry
+above is about: **59.7% of a 23,736-credit ElevenLabs quota went to
+machine duplication of identical media.** One recording was transcribed
+six times — two tasks × three attempts — and not one of those retries was
+caused by a transcription failing. The transcription succeeded every
+time; what failed was the REPLY (a 8.6 MB transcript against a broker
+that carries 8), and every retry re-entered the handler from the top and
+bought the transcript again.
+
+**The rule, now shipped as a mechanism: a priced provider call is a
+CHECKPOINT, not a step a retry repeats.** The new
+`stapel_agent.checkpoint` stores the provider's answer under a key made
+of that call's whole input the instant it arrives, and BEFORE anything
+downstream runs — the ledger row, the reply, the caller's handoff PUT,
+the caller's own persistence. A retry from any layer recomputes the same
+key, is served from the stored result at `cost_usd=0` /
+`cost_basis="cached"`, and resumes after the spend.
+
+Applied to every priced call in the package:
+
+| surface | key | window |
+|---|---|---|
+| `transcribe` | audio content hash + provider + model + language + diarization + keyterms + provider_options | `STT_RESULT_TTL_SECONDS` (7 days) |
+| `diarize` | audio content hash + provider + speaker hint + provider_options | `STT_RESULT_TTL_SECONDS` |
+| `embed` | hash of the texts + count + provider + model | `CHECKPOINT_TTL_SECONDS` (15 min) |
+| `rerank` | hash of query + hash of documents + count + provider + top_n | `CHECKPOINT_TTL_SECONDS` |
+| `complete` (and `complete_json`, `translate`, `summarize` through it) | caller's `idempotency_key` + prompt/system hashes + provider + model + size + shape | `CHECKPOINT_TTL_SECONDS` |
+| `generate_image` | caller's `idempotency_key` + prompt hash + provider + size + n | `CHECKPOINT_TTL_SECONDS` |
+
+The two SAMPLED surfaces (`complete`, `generate_image`) checkpoint only
+when the caller names the attempt with `idempotency_key` — a task id, a
+stage id. Keying them on the input alone would hand a caller that
+deliberately asked twice the same sample twice, which is a cache, not a
+retry. The audio surfaces need no such flag: their input is a fixed
+recording, and a deliberate re-run costing nothing is the point.
+
+Scope is in every key (AGENT-02): two tenants holding the same file are
+not entitled to each other's transcripts.
+
+### Fixed — an empty transcript metered as zero minutes while the invoice counted it in full
+
+Two calls in the same incident returned an empty transcript and were
+metered at **0 ms**, because the meter read
+`transcript.duration_seconds` — which several adapters derive from the
+LAST WORD'S END TIMESTAMP (`providers/elevenlabs.py`). No words, no
+duration, no cost. Trailing silence was free for the same reason.
+
+The ledger now meters **what was submitted**:
+`services.transcribe(audio_duration_ms=...)` from the caller that
+uploaded the file, else measured from local media (WAV header, then
+`ffprobe` when it is on PATH — never a dependency, never a second
+download of a remote ref), and only then the provider's own number. The
+row carries `audio_submitted_ms`, `audio_submitted_source` and
+`audio_reported_ms` in metadata, so the two numbers disagreeing is
+visible rather than silently resolved. An empty transcript is metered and
+priced like any other — the provider charged for it.
+
+### Added
+
+- `stapel_agent.checkpoint` — `call_key` / `load` / `store` /
+  `purge_expired`, and the `ProviderCheckpoint` model behind them
+  (migration `0008`).
+- `CostBasis.CACHED` (`"cached"`) — a true 0 with its own basis. Summing
+  `cost_usd` gives what was paid; counting `cached` rows gives what the
+  checkpoint table saved. **A meter that bills AUDIO MINUTES must exclude
+  this basis**, or it bills the customer for a retry that cost nobody
+  anything.
+- `AudioRef.local_bytes()`, `stt.base.content_hash()`,
+  `stt.base.probe_duration_ms()`.
+- Settings: `CHECKPOINT_ENABLED`, `CHECKPOINT_SURFACES`,
+  `CHECKPOINT_TTL_SECONDS`, `STT_RESULT_TTL_SECONDS` — all `no_env`
+  (money safety is not an environment variable).
+- `retention.purge_checkpoints()`, run by the existing
+  `purge_prompt_logs` management command. Checkpoints are DELETED, not
+  scrubbed: a checkpoint is customer content with no accounting half to
+  keep. `gdpr.erase_subject` deletes the subject's outright (the receipt's
+  shape is unchanged; the count is logged).
+
+### Contract
+
+`make contract` moved four schemas, all ADDITIVE — every new property is
+optional, so no existing payload becomes invalid:
+
+- `llm.transcribe`: `+audio_content_hash`, `+audio_duration_ms`
+- `llm.diarize`: `+audio_content_hash`
+- `llm.complete`: `+idempotency_key`
+- `llm.generate_image`: `+idempotency_key`
+
+Every priced surface's OK envelope gains `"cached": bool`.
+
 ## [0.23.0] — 2026-09-12
 
 ### Fixed — an empty ElevenLabs wallet was read as bad audio, so the fallback chain never fired

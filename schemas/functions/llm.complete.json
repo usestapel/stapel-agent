@@ -73,6 +73,10 @@
       "type": "object",
       "description": "JSON Schema that CONSTRAINS the decoder, rather than asking for JSON in prose. Without this, a caller in another service could only ask nicely — structured output existed in-process and stopped at the service boundary, which is the one place a malformed answer is hardest to recover from. A provider that cannot constrain output fails the call instead of quietly answering the prose way. Pass the schema as pydantic emits it: the transport applies the strict-subset transform itself."
     },
+    "idempotency_key": {
+      "type": "string",
+      "description": "The caller's name for THIS ATTEMPT at a job — a task id, a stage id. Given, the provider's answer is checkpointed under it and a retry of the same attempt is served from the checkpoint at cost 0 instead of being generated again. Omitted (the default), every call reaches the provider: a completion is sampled, and two deliberate asks must be allowed to differ."
+    },
     "user_id": {
       "type": "string",
       "description": "Who this call is for — recorded on the PromptLog row so per-user cost is answerable. Opaque to this package: any id shape the host uses. Optional; omitting it leaves the row unattributed, never rejected."

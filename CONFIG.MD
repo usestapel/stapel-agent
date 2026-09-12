@@ -94,3 +94,19 @@ consuming project.
 | PROMPT_LOG_RETENTION_SCHEDULED | env | the operator declares that a scheduler this process cannot see (cron, systemd timer, CronJob) runs the purge. False + no beat entry = `stapel_agent.W014`/`W017` at boot. A beat entry for `stapel_agent.tasks.purge_prompt_logs` is detected and needs no declaration. | no | False |
 | MODEL_SIZE_CEILING_ENTITLEMENT | env | entitlement key (STAPEL_BILLING plan catalog) that caps how far up the `MODELS` size ladder a caller's plan reaches; unset = seam closed, no billing lookup at all. | no | (none) |
 | CACHE_POLICY | env | dotted path to a CachePolicy subclass (the cache seam). | no | stapel_agent.cache.PromptLogCachePolicy |
+
+### Checkpoints — a paid call is never bought twice (source: settings, `no_env`)
+
+A priced provider call's result is stored under a key made of that call's
+inputs the instant the provider answers, and BEFORE anything downstream
+runs. A retry from any layer resumes AFTER the spend. See
+`stapel_agent.checkpoint`; the keys are `no_env` because an environment
+variable in a shared shell must not be able to put a deployment back to
+paying for every retry.
+
+| Key | Source | Purpose | Required | Default |
+|-----|--------|---------|----------|---------|
+| CHECKPOINT_ENABLED | settings | master switch. False = every retry above this library pays the provider again. | no | True |
+| CHECKPOINT_SURFACES | settings | which priced surfaces checkpoint, by name. `embed` is the one with a real trade behind it (cheapest call, biggest stored value). | no | [transcribe, diarize, complete, embed, rerank, generate_image] |
+| CHECKPOINT_TTL_SECONDS | settings | seconds a NON-audio checkpoint is resumable for. Deliberately short — a retry ladder's life, not a product cache's: a long window would silently turn the completion facade into the cache `CACHE_LOOKUP` leaves off. | no | 900 |
+| STT_RESULT_TTL_SECONDS | settings | seconds a transcribe/diarize checkpoint is resumable for. A week, because the input is a fixed stored file and re-running a pipeline should cost nothing. | no | 604800 |

@@ -22,6 +22,10 @@
       "minimum": 1,
       "description": "Hard cap on the diarization request."
     },
+    "audio_content_hash": {
+      "type": "string",
+      "description": "Content hash of the audio (``sha256:<hex>``) — the checkpoint key that makes a retry of this priced call free. See the same field on llm.transcribe."
+    },
     "provider_options": {
       "type": "object",
       "description": "Free-form per-provider passthrough, applied AFTER the adapter's own request params — pin provider specifics without a core release. Unknown keys go to the provider as-is."

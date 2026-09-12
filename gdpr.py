@@ -32,7 +32,11 @@ question about whether the account still exists. 0.14.0/0.14.1 deleted;
 """
 from __future__ import annotations
 
+import logging
+
 from stapel_core.gdpr import GDPRProvider
+
+logger = logging.getLogger(__name__)
 
 
 def _jsonable(key: str, value):
@@ -236,6 +240,14 @@ def erase_subject(subject_type: str, subject_key, *, workspace_id=None) -> dict 
     :data:`PSEUDONYMIZED_COLUMNS`). The economics columns are not read and
     not written.
 
+    The subject's CHECKPOINTS are deleted outright in the same pass. A
+    ledger row is scrubbed because its counters are an accounting fact
+    worth keeping; a checkpoint is the customer's content and nothing
+    else — a transcript, a completion — so there is nothing in it to keep
+    once the subject asks to be gone. The count is logged rather than
+    added to the receipt: the receipt's shape is a published contract,
+    and this is the ledger's receipt.
+
     Returns ``{"prompt_logs": n}`` — rows **touched**, which is what the
     receipt carries — or ``None`` when *subject_type* is not one this
     module claims (the caller then owes no receipt: gdpr never created a
@@ -244,7 +256,7 @@ def erase_subject(subject_type: str, subject_key, *, workspace_id=None) -> dict 
     Idempotent: the subject's own id is a pseudonym after the first run,
     so a redelivery matches nothing and reports ``0``.
     """
-    from .models import PromptLog
+    from .models import PromptLog, ProviderCheckpoint
     from .retention import scrub_queryset
 
     key = str(subject_key) if subject_key is not None else ""
@@ -256,10 +268,22 @@ def erase_subject(subject_type: str, subject_key, *, workspace_id=None) -> dict 
         # one; narrowing by it here would leave the subject's rows in
         # every other tenant.
         selected = PromptLog.objects.filter(user_id=key)
+        checkpoints = ProviderCheckpoint.objects.filter(user_id=key)
     elif subject_type == "workspace":
         selected = PromptLog.objects.filter(workspace_id=key)
+        checkpoints = ProviderCheckpoint.objects.filter(workspace_id=key)
     else:
         return None
+
+    # Deleted, not scrubbed — see the docstring. Done BEFORE the ledger
+    # pass so an erasure that fails halfway has already removed the
+    # copies of the content, which is the half the subject asked about.
+    erased_checkpoints = checkpoints.delete()[0]
+    if erased_checkpoints:
+        logger.info(
+            "stapel-agent: erased %d provider checkpoint(s) for %s %s",
+            erased_checkpoints, subject_type, key,
+        )
 
     # Pin the row set by primary key first: the id columns are about to
     # change, and a queryset that filters on them would stop matching its

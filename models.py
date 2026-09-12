@@ -64,6 +64,13 @@ class CostBasis(models.TextChoices):
     PROVIDER_TICKS = "provider_ticks", "Reported by the provider"
     PRICING_ESTIMATE = "pricing_estimate", "Estimated from the rate card"
     UNPRICED = "unpriced", "No rate card — cost unknown"
+    #: Served from a checkpoint — the call was made, the provider was
+    #: not. ``cost_usd`` is a true 0, not an unknown: summing the column
+    #: gives what was actually paid, and counting THESE rows gives what
+    #: the checkpoint table saved. A meter that bills audio minutes must
+    #: exclude this basis, or it bills the customer for a retry that cost
+    #: nobody anything.
+    CACHED = "cached", "Served from a checkpoint — no provider call"
 
 
 @access.ops
@@ -174,3 +181,51 @@ class AnalysisJob(models.Model):
 
     def __str__(self):
         return f"{self.key} [{self.status}]"
+
+
+@access.ops
+class ProviderCheckpoint(models.Model):
+    """The result of one PAID provider call, stored under its input key.
+
+    See :mod:`stapel_agent.checkpoint` for the rule. The short version:
+    the provider has answered, the money is gone, and everything that
+    happens next (post-processing, the reply, a handoff PUT) is allowed
+    to fail and be retried without buying the same answer again.
+
+    ``@access.ops``: written by the services pipeline, read by it, and
+    never edited — a hand-edited checkpoint is a lie about what a
+    provider returned, which is worse than no checkpoint at all.
+
+    ``value`` is the surface's own payload (a NormalizedTranscript dict,
+    a completion's text + usage, an embedding batch). It is CUSTOMER
+    CONTENT with a short life: ``checkpoint.purge_expired`` deletes rows
+    past their window and ``gdpr.erase_subject`` deletes a subject's
+    outright — a cache of transcripts nobody deletes is the same audit
+    finding PromptLog already had (AGENT-02).
+
+    The key is a sha256, so the row is addressed by content; the two id
+    columns are here for erasure and for "whose spend did this save",
+    never for the lookup (scope is already inside the key).
+    """
+
+    key = models.CharField(max_length=64, primary_key=True)
+    surface = models.CharField(max_length=32, db_index=True)
+    provider = models.CharField(max_length=128, blank=True, default="")
+    value = models.JSONField(default=dict, blank=True)
+    user_id = models.CharField(max_length=64, null=True, blank=True, db_index=True)
+    workspace_id = models.CharField(
+        max_length=64, null=True, blank=True, db_index=True
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = "agent_provider_checkpoint"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(
+                fields=["surface", "-created_at"], name="agent_ckpt_surface_idx"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.surface}:{self.key[:12]} ({self.provider})"

@@ -282,6 +282,118 @@ class AudioRef:
             return f"path:{os.path.basename(self.path)}"
         return f"data:{len(self.data or b'')}b"
 
+    def local_bytes(self) -> Optional[bytes]:
+        """The audio bytes IF they are already here — never a download.
+
+        ``read_bytes`` fetches; this one refuses to. It exists for the
+        two jobs that must not add a second full transfer of a 148-minute
+        file to every call: hashing the media for the checkpoint key, and
+        measuring how much audio was submitted. A URL ref answers None,
+        and the caller falls back to what it was told (see
+        ``services.transcribe``'s *audio_content_hash* /
+        *audio_duration_ms* arguments — the uploader already knows both).
+        """
+        if self.data is not None:
+            return self.data
+        if self.path:
+            try:
+                with open(self.path, "rb") as fh:
+                    return fh.read()
+            except OSError:
+                return None
+        return None
+
+
+def content_hash(data: bytes) -> str:
+    """``sha256:<hex>`` of the media — the identity of the audio itself.
+
+    Prefixed with the algorithm because the value crosses a seam (a
+    caller stores it on its own row and hands it back), and a bare hex
+    string is the kind of value that gets silently re-hashed.
+    """
+    import hashlib
+
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def probe_duration_ms(audio: "AudioRef") -> tuple[Optional[int], str]:
+    """How much audio was SUBMITTED, and how we know. Never raises.
+
+    Returns ``(milliseconds | None, source)`` where source is one of
+    ``wave`` / ``ffprobe`` / ``unknown``.
+
+    This is the quantity STT is billed on, and it is NOT
+    ``transcript.duration_seconds``: several adapters derive that from
+    the last word's end timestamp (see ``providers/elevenlabs.py``), so
+    silence at the end of a meeting is unmetered and a call that returned
+    an EMPTY transcript meters as zero — which is how two paid
+    ElevenLabs calls landed in the ledger at 0 minutes while the invoice
+    counted them in full.
+
+    Only local media is measured (``AudioRef.local_bytes``); a URL ref
+    answers ``(None, "unknown")`` rather than downloading the file a
+    second time. The caller that HAS the file — the uploader — passes the
+    duration in instead.
+    """
+    data = audio.local_bytes()
+    if not data:
+        return None, "unknown"
+
+    # WAV/AIFF headers, stdlib, no subprocess: the normalized profile a
+    # recordings pipeline submits is very often exactly this.
+    try:
+        import io
+        import wave
+
+        with wave.open(io.BytesIO(data), "rb") as handle:
+            rate = handle.getframerate()
+            frames = handle.getnframes()
+            if rate > 0 and frames > 0:
+                return int(round(frames * 1000 / rate)), "wave"
+    except Exception:
+        pass
+
+    if audio.path:
+        ms = _ffprobe_duration_ms(audio.path)
+        if ms is not None:
+            return ms, "ffprobe"
+    return None, "unknown"
+
+
+def _ffprobe_duration_ms(path: str) -> Optional[int]:
+    """ffprobe's duration for *path*, or None when it is not installed.
+
+    Best effort by construction: ffprobe is not a dependency of this
+    package, and a missing binary must cost a metering detail, never a
+    transcription.
+    """
+    import shutil
+    import subprocess  # noqa: S404 - fixed argv, no shell
+
+    binary = shutil.which("ffprobe")
+    if not binary:
+        return None
+    try:
+        out = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            [
+                binary, "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except Exception:
+        return None
+    value = (out.stdout or "").strip()
+    try:
+        return int(round(float(value) * 1000))
+    except (TypeError, ValueError):
+        return None
+
 
 def _limit(key: str):
     """Read one download cap from ``STAPEL_AGENT``.
@@ -525,7 +637,9 @@ __all__ = [
     "SttProvider",
     "TranscriptionError",
     "biasing_metadata",
+    "content_hash",
     "normalize_language",
+    "probe_duration_ms",
     "transcript_from_dict",
     "unsupported_biasing",
     "utterances_from_words",

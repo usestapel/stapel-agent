@@ -87,6 +87,14 @@ NO_ENV = (
     "CACHE_LOOKUP",
     "CACHE_TTL",
     "CACHE_ALLOW_UNSCOPED",
+    # The checkpoint gate is a money-safety decision (see
+    # stapel_agent.checkpoint): an environment variable in a shared shell
+    # must not be able to switch a deployment back to paying for every
+    # retry, nor to widen the window a stored transcript lives in.
+    "CHECKPOINT_ENABLED",
+    "CHECKPOINT_SURFACES",
+    "CHECKPOINT_TTL_SECONDS",
+    "STT_RESULT_TTL_SECONDS",
     "PROMPT_LOG_RETENTION_DAYS",
     "PROMPT_LOG_RETENTION_SCHEDULED",
     "MODEL_SIZE_CEILING_ENTITLEMENT",
@@ -333,6 +341,40 @@ agent_settings = AppSettings(
         # (AGENT-02). Add "translate" here only if the strings translated
         # in that deployment are UI copy, never user content.
         "CACHE_ALLOW_UNSCOPED": [],
+        # ── Checkpoints (stapel_agent.checkpoint) ──────────────────────
+        # A priced provider call's result is stored under a key made of
+        # that call's inputs, the instant the provider answers and BEFORE
+        # anything downstream runs. A retry from any layer resumes AFTER
+        # the spend instead of buying the same answer again. On by
+        # default: the measured incident this closes is one 148-minute
+        # recording transcribed six times because the REPLY failed.
+        "CHECKPOINT_ENABLED": True,
+        # Seconds a non-audio checkpoint (complete/embed/rerank/image) is
+        # resumable for. Deliberately SHORT — the length of a retry
+        # ladder, not of a product cache. A long window here would
+        # silently turn the completion facade into the cache that
+        # CACHE_LOOKUP leaves off by default, and hand a caller the same
+        # sample twice when it asked for two.
+        "CHECKPOINT_TTL_SECONDS": 900,
+        # Which priced surfaces checkpoint. All of them by default; a
+        # host may drop one by NAME (never by the size of a particular
+        # answer — see checkpoint.enabled). "embed" is the one with a
+        # real trade behind it: the cheapest priced call, the biggest
+        # stored value.
+        "CHECKPOINT_SURFACES": [
+            "transcribe",
+            "diarize",
+            "complete",
+            "embed",
+            "rerank",
+            "generate_image",
+        ],
+        # Seconds a transcription checkpoint is resumable for (7 days).
+        # The audio pair gets its own window because the input is a fixed
+        # stored file, the call is the most expensive one in the package,
+        # and a deliberate re-run of a pipeline should cost nothing —
+        # which is what makes "reprocess this recording" a safe button.
+        "STT_RESULT_TTL_SECONDS": 604800,
         # Days after which a PromptLog row's TEXT (prompt, system prompt,
         # response, error) is scrubbed by ``purge_prompt_logs`` — the row
         # and its token counters stay for accounting. None = no retention
@@ -396,6 +438,11 @@ def prompt_log_retention_scheduled() -> bool:
     return _flag("PROMPT_LOG_RETENTION_SCHEDULED")
 
 
+def checkpoint_enabled() -> bool:
+    """``CHECKPOINT_ENABLED`` as a bool (see that key)."""
+    return _flag("CHECKPOINT_ENABLED")
+
+
 def pyannoteai_exclusive() -> bool:
     """``PYANNOTEAI_EXCLUSIVE`` as a bool (see that key).
 
@@ -411,6 +458,7 @@ def pyannoteai_exclusive() -> bool:
 __all__ = [
     "NO_ENV",
     "agent_settings",
+    "checkpoint_enabled",
     "prompt_log_retention_scheduled",
     "pyannoteai_exclusive",
     "stt_download_allow_any_host",

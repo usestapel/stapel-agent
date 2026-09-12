@@ -25,6 +25,15 @@
       "minimum": 1,
       "description": "Hard cap on one provider's submit+poll cycle."
     },
+    "audio_content_hash": {
+      "type": "string",
+      "description": "Content hash of the audio this URL points at (``sha256:<hex>``). It is the identity of the media, and the first component of the checkpoint key that makes a retry free: without it a caller whose reply failed pays the provider again. Pass the hash you computed when you stored the object — the agent will not download a second copy to compute one."
+    },
+    "audio_duration_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "How much audio is being SUBMITTED. This, not the transcript's own duration, is what the ledger meters: several providers report the last word's end timestamp, so trailing silence and an empty transcript would otherwise meter as less than was billed. Omitted, the agent measures local media and falls back to the provider's number."
+    },
     "keyterms": {
       "type": "array",
       "items": {

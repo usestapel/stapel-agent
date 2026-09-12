@@ -27,6 +27,10 @@
       "minimum": 1,
       "description": "Hard cap on the generation request."
     },
+    "idempotency_key": {
+      "type": "string",
+      "description": "The caller's name for THIS ATTEMPT at a job. Given, the generated images are checkpointed under it and a retry of the same attempt is served from the checkpoint at cost 0. Omitted, every call generates: two deliberate asks for the same prompt must be allowed to differ."
+    },
     "user_id": {
       "type": "string",
       "description": "Who this call is for — recorded on the PromptLog row so per-user cost is answerable. Opaque to this package: any id shape the host uses. Optional; omitting it leaves the row unattributed, never rejected."
