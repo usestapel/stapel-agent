@@ -35,6 +35,7 @@ from stapel_agent.providers.base import LlmProvider, ProviderResult
 from stapel_agent.stt.base import (
     NormalizedTranscript,
     NormalizedUtterance,
+    ProviderQuota,
     RetryableTranscriptionError,
     SttProvider,
     TranscriptionError,
@@ -327,6 +328,94 @@ class FatalSttProvider(FakeSttProvider):
             status_code=400,
             reason="media",
         )
+
+
+class LoopedFixtureSttProvider(FakeSttProvider):
+    """One distinct answer per CALL, so a collapsed call is visible.
+
+    The production incident this serves (see
+    ``tests/test_stt_chunk_integrity.py``) came from audio whose chunks
+    were byte-identical — a looped fixture. A fake whose answer is the
+    same every time cannot tell "the provider was called twice" from "the
+    second answer was served from the first call", which is exactly the
+    distinction under test. So each call returns a transcript stamped
+    with its own ordinal.
+    """
+
+    name = "looped-stt"
+
+    #: Seconds of audio each call is told it transcribed.
+    chunk_seconds = 74.31
+
+    @classmethod
+    def reset(cls):
+        super().reset()
+        cls.result = None
+
+    def transcribe(self, *, audio, language=None, diarization=False,
+                   timeout_seconds=None, keyterms=None, provider_options=None):
+        cls = type(self)
+        index = len(cls.calls)
+        cls.calls.append({"audio": audio, "language": language,
+                          "diarization": diarization,
+                          "timeout_seconds": timeout_seconds,
+                          "keyterms": keyterms,
+                          "provider_options": provider_options})
+        if cls.error is not None:
+            raise cls.error
+        # Local times, as a real chunked call returns them: every chunk
+        # starts at zero and the caller re-bases them onto the timeline.
+        return NormalizedTranscript(
+            provider=cls.name,
+            language=language or "en",
+            duration_seconds=cls.chunk_seconds,
+            utterances=[
+                NormalizedUtterance(
+                    text=f"chunk {index}", start=0.0,
+                    end=cls.chunk_seconds, speaker="A",
+                )
+            ],
+            speakers_detected=["A"],
+        )
+
+
+class QuotaProbeSttProvider(FakeSttProvider):
+    """Answers ``quota_status`` from class state — the watchdog's fake.
+
+    ``quota`` is what the balance endpoint "returns"; ``quota_error``
+    makes the probe raise, which the sweep must survive. ``probes``
+    counts the calls, so a test can prove the watchdog asked rather than
+    guessed.
+    """
+
+    name = "quota-probe-stt"
+
+    quota = None
+    quota_error: Exception | None = None
+    probes: list[dict] = []
+
+    @classmethod
+    def reset(cls):
+        super().reset()
+        cls.quota = ProviderQuota(
+            provider=cls.name, used=100.0, limit=1000.0, unit="characters"
+        )
+        cls.quota_error = None
+        cls.probes = []
+
+    def quota_status(self, *, timeout_seconds=None):
+        cls = type(self)
+        cls.probes.append({"timeout_seconds": timeout_seconds})
+        if cls.quota_error is not None:
+            raise cls.quota_error
+        return cls.quota
+
+
+class SilentQuotaSttProvider(FakeSttProvider):
+    """Exposes no balance endpoint — the majority case, and the one the
+    watchdog must skip rather than report as empty."""
+
+    name = "silent-quota-stt"
 
 
 class NotAnSttProvider:

@@ -3,6 +3,157 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.25.0] — 2026-09-14
+
+Three findings from a client fleet's production audit, all of the same family:
+the pipeline knew something and could not say it.
+
+### Fixed — `eng` did not route like `en`
+
+One deployment received `en`, `eng`, `ru`, `rus`, `es`, `spa` and `pt-BR`
+inside a week — a web client, a mobile SDK that speaks ISO 639-2 and two
+uploaders. Nothing reconciled them, and three things went wrong at once:
+
+* a language route stated as `{"ru": [...]}` **did not fire** for `rus`.
+  The request fell through to the default chain and was transcribed by
+  the wrong engine, silently, with a correct-looking result;
+* the checkpoint key carries the language, so `eng` and `en` were two
+  paid calls for one piece of audio;
+* the ledger stored whatever arrived, so "how much Russian did we
+  transcribe" needed a spelling-variant list nobody maintains.
+
+Adapters were already lenient (every one calls `normalize_language`), but
+leniency at the last layer only cleans up what the PROVIDER sees — the
+routing decision, the checkpoint key and the ledger row are all taken
+before it, from the raw string.
+
+**New `stapel_agent.stt.languages`.** One canonical form, produced once at
+the function boundary and again inside the route lookup: ISO 639-1,
+lowercase, region kept as `xx-YY` (`pt_br` → `pt-BR`, `zh-hans-cn` →
+`zh-Hans-CN`, cased per BCP-47). The full ISO 639-1 register (184 codes)
+with both ISO 639-2 sets — the /T terminological codes AND the twenty /B
+bibliographic ones an ad-hoc "first two letters" rule gets wrong (`ger`
+is not `ge`) — plus the withdrawn codes real clients still send (`iw`,
+`in`, `ji`, `jw`, `mo`). Both lookup directions are derived from one
+table, so they cannot disagree.
+
+* `services.transcribe` canonicalises `language` once; the adapter, the
+  checkpoint key and `PromptLog.metadata["language"]` all see that form.
+* `STT_LANGUAGE_ROUTES` keys are canonicalised too, and tried
+  most-specific first — so `{"pt-BR": [...], "pt": [...]}` is now
+  expressible, which region-stripping made impossible.
+* `normalize_language` (what adapters call) resolves aliases now and
+  stays lenient — it never raises.
+* **An unresolvable code is REFUSED**, not dropped: `UnknownLanguageError`
+  (a fatal `TranscriptionError`, `reason="language"`, new in
+  `stt/failures.py`'s vocabulary), raised before a provider is chosen so
+  nothing is bought. A hint silently demoted to auto-detect is how a
+  Russian meeting comes back in English with no error anywhere.
+* New `STT_LANGUAGE_ALIASES` for the codes outside ISO 639-1 that a
+  deployment's clients or providers genuinely use (`{"cmn": "zh", "yue":
+  "zh-HK"}`) — stated in settings, where a reviewer sees them.
+
+### Added — the empty wallet announces itself
+
+0.23.0 made a quota refusal survivable (it walks the fallback chain
+instead of reading as bad audio). It did not make the condition visible:
+the account that burned 41 recordings had been under 10% for nine days,
+and the only artefacts that said so were a support ticket and a log line
+nobody watched.
+
+**New `stapel_agent.stt.quota`**, asking from two sides:
+
+* **a scheduled sweep** — `stapel_agent.tasks.check_stt_quotas`, hourly,
+  with a beat entry in `get_agent_beat_schedule()` (which now returns
+  two). Every registered provider that exposes a balance is polled and
+  its remaining fraction recorded as the gauge
+  `stt_provider_quota_ratio{provider}` through `stapel_core.observability`;
+* **the live refusal** — a decline already classified `reason: quota`
+  raises the same alert at `ratio=0.0`, because the poll can be an hour
+  stale and some providers expose no endpoint at all.
+
+One alert, three seams, always in this order: a `logger.warning` (always,
+and the floor — it carries the absolute numbers, not just a ratio), the
+Django signal `stt.quota.provider_quota_low`, and `stapel_alerts.capture`
+**if stapel-alerts is installed** (import-guarded; it is not a dependency
+of this package and must not become one). Two thresholds,
+`WARN_RATIO` 10% and `CRITICAL_RATIO` 2%, as distinct severities: at 10%
+someone should plan a top-up, at 2% someone should do it now.
+
+New provider seam `SttProvider.quota_status()` — `None` by default and
+for most adapters, because few STT APIs expose a balance and a watchdog
+that invented a number for them would be worse than one that says
+nothing. `None` means *unknown*, never *empty*, so a provider with no
+endpoint is absent from the sweep rather than permanently at zero.
+ElevenLabs implements it against `GET /v1/user/subscription`
+(`character_count`/`character_limit`); AssemblyAI states `None` as an
+override rather than inheriting it, because a docs survey found no
+account/balance route at all and that finding is worth recording.
+Settings: `STT_QUOTA_WATCHDOG = {"ENABLED": True, "WARN_RATIO": 0.10,
+"CRITICAL_RATIO": 0.02}` — one switch over both paths, and
+`ELEVENLABS_SUBSCRIPTION_URL`.
+
+### Fixed — a 74-second hole in a transcript, and the silence that let it through
+
+Production, 2026-09-13: a 600-second recording (a 74.31-second fixture
+looped) came back with segment 3 ending at 24.88 s and segment 4 starting
+at 99.32 s. Exactly one fixture length of speech was missing. Timestamps
+were monotonic. The QA verdict was `passed`.
+
+**First: a content-keyed checkpoint is not safe for a caller that
+chunks.** Nothing in the fleet splits audio today — `stapel_recordings`
+submits one normalised object per recording and this package makes one
+provider call for it — but 0.24.0's checkpoint is keyed on the audio's
+CONTENT, and content is not identity for a chunked call: a looped
+fixture's chunks are **byte-identical**, so they compute one key, and
+every chunk after the first is served the first one's transcript, with
+the first one's timestamps. A latent hazard of exactly the observed
+shape, and the tests now hold both halves of it: without an offset eight
+identical chunks collapse to ONE provider call, and with one they are
+eight calls whose answers concatenate in order.
+
+`transcribe()` and `diarize()` take **`audio_offset_ms`** — "this ref is a
+piece of something longer, starting here" — which joins the checkpoint
+key and the ledger row. `llm.transcribe` / `llm.diarize` accept it on the
+wire (contract regenerated). Omitted, behaviour is byte-identical to
+0.24.0: for a whole recording the content-only key is exactly right, and
+a redelivered chunk at the same offset is still one paid call.
+
+**Second, and the one that applies whatever caused the hole: nothing was
+looking.** Every check that ran passes on a transcript covering one
+minute of a ninety-minute meeting — a monotonicity loop compares
+`start < prev_end` and so sees OVERLAP but not its mirror image, a gap;
+"max end in bounds" bounds the top of the timeline and says nothing about
+what is missing underneath; "segments present" counts them.
+
+**New `stapel_agent.stt.qa`.** A gap longer than `MAX_GAP_SECONDS` (5.0 —
+three times the p99 of 94 608 measured word gaps, an order of magnitude
+past this package's own 0.65 s utterance boundary) between consecutive
+segments flags `qa.gap` and clears `qa.passed`. The verdict rides the
+`transcribe()` result, the `llm.transcribe` reference reply and
+`PromptLog.metadata["qa"]`, and a failure is a `logger.warning` at the
+moment the transcript is produced — before it is persisted, exported or
+summarised. It is a LABEL, never a refusal: a partial transcript is worth
+more than none, as long as it arrives labelled. A checkpoint hit is
+re-judged rather than trusted, so the same answer always carries the same
+label. `STT_QA = {"MAX_GAP_SECONDS": 5.0}`; `0` disables.
+
+Note for hosts: `stapel_recordings.transcript_schema.run_qa` still has no
+gap check of its own. This release makes the hole visible at the point
+the transcript is produced; merging the two reports is the host's.
+
+### Changed
+
+* **Floor raised: `stapel-core>=0.36.0`** (was `>=0.24.0`) for
+  `stapel_core.observability`. Its backend is opt-in and a no-op by
+  default, so an un-configured deployment behaves identically; what the
+  floor buys is that the gauge is real where a backend is wired, rather
+  than a guarded import that silently records nothing.
+* `FATAL_REASONS` gains `language`. The classification invariant is
+  unchanged and now asserted directly: no branch of `classify_status`
+  can produce it, because it is raised at the boundary before a provider
+  is chosen.
+
 ## [0.24.0] — 2026-09-12
 
 ### Fixed — one 148-minute recording, transcribed six times, because the step that failed was AFTER the money

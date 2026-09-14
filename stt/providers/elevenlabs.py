@@ -26,6 +26,7 @@ Response shape relied upon::
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 import requests
@@ -36,10 +37,13 @@ from ..base import (
     AudioRef,
     NormalizedTranscript,
     NormalizedWord,
+    ProviderQuota,
     SttProvider,
     biasing_metadata,
     normalize_language,
 )
+
+logger = logging.getLogger(__name__)
 
 # Documented Scribe keyterm limits (docs survey 2026-07-18): out-of-limit
 # terms are truncated with counts in `biasing`, never raised.
@@ -157,6 +161,74 @@ class ElevenLabsProvider(SttProvider):
         transcript = _normalize(body, provider=self.name)
         transcript.biasing = biasing
         return transcript
+
+    def quota_status(self, *, timeout_seconds: Optional[int] = None):
+        """The account's character allowance — ``GET /v1/user/subscription``.
+
+        The answer carries ``character_count`` (spent this period) and
+        ``character_limit`` (the period's allowance); Scribe bills audio
+        against the same pool, so the ratio between them IS how close the
+        next transcription is to the 401 that ``stt/failures.py`` was
+        written for.
+
+        Never raises: this is a watchdog's call, and one unreachable
+        endpoint must not end the sweep over every other provider. A
+        missing key, a refusal, a non-JSON body and a zero/absent limit
+        all answer ``None`` — "we do not know", which the watchdog treats
+        as "nothing to alert about" rather than as an empty account.
+        """
+        api_key = agent_settings.ELEVENLABS_API_KEY
+        if not api_key:
+            return None
+        try:
+            resp = requests.get(
+                agent_settings.ELEVENLABS_SUBSCRIPTION_URL,
+                headers={"xi-api-key": api_key},
+                timeout=int(timeout_seconds or 30),
+            )
+            if not (200 <= int(resp.status_code) < 300):
+                logger.warning(
+                    "stapel-agent: ElevenLabs subscription endpoint answered "
+                    "%s — quota unknown for this sweep", resp.status_code,
+                )
+                return None
+            body = resp.json()
+        except Exception:
+            logger.warning(
+                "stapel-agent: could not read the ElevenLabs subscription "
+                "endpoint — quota unknown for this sweep", exc_info=True,
+            )
+            return None
+
+        limit = body.get("character_limit")
+        used = body.get("character_count")
+        if limit in (None, 0) or used is None:
+            logger.warning(
+                "stapel-agent: ElevenLabs subscription answered without a "
+                "usable character_limit/character_count (%r/%r)", limit, used,
+            )
+            return None
+        try:
+            return ProviderQuota(
+                provider=self.name,
+                used=float(used),
+                limit=float(limit),
+                unit="characters",
+                raw={
+                    # Two scalars, never the whole body: the subscription
+                    # payload carries the account's plan, billing period
+                    # and next-invoice date, and none of that belongs in a
+                    # log line or an alert context.
+                    "tier": str(body.get("tier") or ""),
+                    "next_reset_unix": body.get("next_character_count_reset_unix"),
+                },
+            )
+        except (TypeError, ValueError):
+            logger.warning(
+                "stapel-agent: ElevenLabs subscription numbers are not "
+                "numeric (%r/%r)", used, limit,
+            )
+            return None
 
 
 def _normalize(payload: dict, *, provider: str) -> NormalizedTranscript:

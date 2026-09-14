@@ -1148,6 +1148,34 @@ def _stt_cost(provider_name: str, language: str | None, duration_ms: int | None)
     }
 
 
+def _run_qa(transcript, *, provider: str, cached: bool) -> dict:
+    """The transcript's QA verdict, logged when it fails.
+
+    The log line is the point as much as the returned block: the
+    production hole that :mod:`stapel_agent.stt.qa` was written for went
+    unnoticed for a fortnight because the only artefact that could have
+    named it — the QA verdict — said "passed", and nothing else in the
+    pipeline was looking. A failure here is a WARNING at the moment the
+    transcript is produced, before it is persisted, exported or summarised.
+    """
+    from .stt.qa import transcript_qa
+
+    qa = transcript_qa(transcript)
+    if not qa.get("passed"):
+        logger.warning(
+            "stapel-agent: transcript from %r%s did not pass QA: %s — the "
+            "transcript is returned anyway, labelled.",
+            provider,
+            " (checkpoint hit)" if cached else "",
+            "; ".join(
+                f"{name}: {value}"
+                for name, value in (qa.get("checks") or {}).items()
+                if str(value).startswith("FAIL")
+            ),
+        )
+    return qa
+
+
 def transcribe(
     audio,
     *,
@@ -1159,6 +1187,7 @@ def transcribe(
     provider_options: dict | None = None,
     audio_content_hash: str | None = None,
     audio_duration_ms: int | None = None,
+    audio_offset_ms: int | None = None,
     user_id: str | None = None,
     workspace_id: str | None = None,
     metadata: dict | None = None,
@@ -1221,6 +1250,20 @@ def transcribe(
     computed from local bytes, and a URL ref with no hash simply does not
     participate — it is logged, never guessed.
 
+    *audio_offset_ms* SAYS THIS REF IS A PIECE OF SOMETHING LONGER, and
+    where in it the piece starts. It exists because the checkpoint key
+    above is derived from the audio's CONTENT, and content is not identity
+    when a caller splits a recording: two chunks of a looped fixture, of a
+    tone, of a silence, or of any repeated passage are byte-identical, so
+    they compute the same key, and the second call is served the first
+    one's transcript with the first one's timestamps. Nothing downstream
+    can tell that apart from a real answer — which is how a 600-second
+    recording came back missing exactly one 74.31-second loop, with
+    monotonic timestamps and a QA verdict of "passed". Pass the chunk's
+    offset (or any distinct per-chunk value) and the calls are distinct
+    calls; leave it off for a whole recording, where it is meaningless and
+    the content-only key is exactly right.
+
     *audio_duration_ms* is HOW MUCH AUDIO WAS SUBMITTED, and it — not
     ``transcript.duration_seconds`` — is what the row meters. Several
     adapters derive the transcript's duration from the last word's end
@@ -1231,9 +1274,20 @@ def transcribe(
     provider's number only when nothing measured it. An empty transcript
     is metered like any other — the provider billed for it.
 
+    *language* IS CANONICALISED HERE, once, and the canonical form is what
+    routes, what enters the checkpoint key and what the ledger stores:
+    ``eng`` is ``en`` by the time anything looks at it (see
+    :mod:`stapel_agent.stt.languages`). A code that resolves to nothing is
+    REFUSED rather than dropped — an unroutable hint silently demoted to
+    auto-detect is how a Russian meeting comes back in English.
+
     Returns ``{"status": "ok", "transcript": {...}, "provider_used": str,
-    "fallback_used": bool, "cached": bool}`` or ``{"status": "failure",
-    "reason": ...}``.
+    "fallback_used": bool, "cached": bool, "qa": {"passed", "checks"}}``
+    or ``{"status": "failure", "reason": ...}``. The ``qa`` block is the
+    transcript's own verdict (:mod:`stapel_agent.stt.qa`) — today one
+    check, for holes in the timeline — and it is a LABEL, never a refusal:
+    a partial transcript is worth more than none, as long as it arrives
+    labelled.
     """
     from . import checkpoint
     from .stt.base import (
@@ -1244,10 +1298,22 @@ def transcribe(
         probe_duration_ms,
         transcript_from_dict,
     )
+    from .stt.languages import UnknownLanguageError, canonical_language
     from .stt.router import select_chain
 
     if not isinstance(audio, AudioRef):
         return {"status": "failure", "reason": "audio must be an AudioRef"}
+
+    # ── One spelling, decided before anything reads the code ───────────
+    try:
+        language = canonical_language(language)
+    except UnknownLanguageError as exc:
+        # Fatal and answered before a provider is even chosen: no engine
+        # in the chain would resolve a code we could not, and dropping
+        # the hint would transcribe the meeting in the wrong language
+        # with nothing anywhere saying so.
+        logger.warning("stapel-agent: transcribe refused — %s", exc)
+        return {"status": "failure", "reason": str(exc)}
 
     chain = select_chain(language, provider=provider)
     if not chain:
@@ -1298,6 +1364,7 @@ def transcribe(
         error: str | None,
         transcript=None,
         cached: bool = False,
+        qa: dict | None = None,
     ):
         # THE BILLABLE QUANTITY IS WHAT WE SUBMITTED. The provider's own
         # number is kept beside it (``audio_reported_ms``) because the two
@@ -1364,6 +1431,18 @@ def transcribe(
                 "audio_submitted_ms": submitted_ms,
                 "audio_submitted_source": submitted_source,
                 "audio_reported_ms": reported_ms,
+                # Where this piece sits in a longer recording, when the
+                # caller said — the part that makes two byte-identical
+                # chunks two calls (see the docstring).
+                **(
+                    {"audio_offset_ms": int(audio_offset_ms)}
+                    if audio_offset_ms is not None
+                    else {}
+                ),
+                # The transcript's own verdict. On the row, not only in
+                # the reply, because the reply is read once and the row is
+                # what an operator queries a week later.
+                **({"qa": qa} if qa else {}),
                 **({"cached": True} if cached else {}),
                 # Which card produced cost_usd — a config id, a provider
                 # name, or absent when nothing priced it. Without this the
@@ -1413,6 +1492,19 @@ def transcribe(
                 workspace_id=workspace_id,
                 parts={
                     "audio": media_hash,
+                    # WHERE this audio sits, when the caller is chunking.
+                    # The content hash alone is not the identity of a
+                    # chunked call: identical bytes at two offsets are two
+                    # calls, and collapsing them serves the first chunk's
+                    # timestamps for the second — a hole in the transcript
+                    # that nothing downstream can see. None for a whole
+                    # recording, which is the case the content hash
+                    # describes exactly.
+                    "offset": (
+                        int(audio_offset_ms)
+                        if audio_offset_ms is not None
+                        else None
+                    ),
                     "provider": name,
                     "model": getattr(backend, "speech_model", None),
                     "language": language,
@@ -1430,6 +1522,10 @@ def transcribe(
                     "written %ss ago by %s — no provider call, no charge",
                     hit.age_seconds, hit.provider or name,
                 )
+                # A hit is re-checked rather than trusted: the verdict
+                # belongs to the transcript, and a caller that receives
+                # the same answer must receive the same label with it.
+                qa = _run_qa(transcript, provider=name, cached=True)
                 _log(
                     PromptStatus.SUCCESS,
                     provider_used=name,
@@ -1437,6 +1533,7 @@ def transcribe(
                     error=None,
                     transcript=transcript,
                     cached=True,
+                    qa=qa,
                 )
                 return {
                     "status": "ok",
@@ -1444,6 +1541,7 @@ def transcribe(
                     "provider_used": name,
                     "fallback_used": fallback_used,
                     "cached": True,
+                    "qa": qa,
                 }
 
         try:
@@ -1461,6 +1559,22 @@ def transcribe(
             logger.warning(
                 "stapel-agent: STT provider %s declined (%s): %s", name, reason, exc
             )
+            if reason == "quota":
+                # The account just said, about this second, that it will
+                # not serve the request — a stronger statement than any
+                # hourly poll, and for the providers that expose no
+                # balance endpoint the only one available. Raised on the
+                # same seams as the watchdog so an operator has one thing
+                # to watch, not two. Never allowed to break the walk.
+                try:
+                    from .stt.quota import report_quota_refusal
+
+                    report_quota_refusal(name, detail=str(exc)[:300])
+                except Exception:  # pragma: no cover - defensive
+                    logger.warning(
+                        "stapel-agent: quota alert failed for %s", name,
+                        exc_info=True,
+                    )
             continue  # walk the fallback chain
         except TranscriptionError as exc:
             # Fatal — the MEDIA itself is bad; the next provider would
@@ -1494,12 +1608,14 @@ def transcribe(
             )
 
         _attempt(name, error_kind=None, reason=None, error=None)
+        qa = _run_qa(transcript, provider=name, cached=False)
         _log(
             PromptStatus.SUCCESS,
             provider_used=name,
             response=transcript.text,
             error=None,
             transcript=transcript,
+            qa=qa,
         )
         return {
             "status": "ok",
@@ -1507,6 +1623,7 @@ def transcribe(
             "provider_used": name,
             "fallback_used": fallback_used,
             "cached": False,
+            "qa": qa,
         }
 
     # The chain is exhausted: the answer names EVERY provider and why it
@@ -1553,6 +1670,7 @@ def diarize(
     timeout_seconds: int | None = None,
     provider_options: dict | None = None,
     audio_content_hash: str | None = None,
+    audio_offset_ms: int | None = None,
     user_id: str | None = None,
     workspace_id: str | None = None,
     metadata: dict | None = None,
@@ -1573,6 +1691,10 @@ def diarize(
     and a retry is served from it at ``cost_basis="cached"``.
     *audio_content_hash* is the caller's; absent, it is computed from
     local bytes, and a remote ref without one does not participate.
+    *audio_offset_ms* says this ref is a PIECE of a longer recording and
+    where it starts — the same seam, and the same reason, as on
+    :func:`transcribe`: byte-identical chunks are not the same call, and
+    a content-only key would serve one chunk's turns for another's.
 
     Returns ``{"status": "ok", "diarization": {...}, "provider_used":
     str, "cached": bool}`` or ``{"status": "failure", "reason": ...}``.
@@ -1641,6 +1763,11 @@ def diarize(
             workspace_id=workspace_id,
             parts={
                 "audio": media_hash,
+                # See transcribe(): identical bytes at two offsets of one
+                # recording are two calls, not one cached answer.
+                "offset": (
+                    int(audio_offset_ms) if audio_offset_ms is not None else None
+                ),
                 "provider": name,
                 "num_speakers": num_speakers,
                 "provider_options": provider_options or None,

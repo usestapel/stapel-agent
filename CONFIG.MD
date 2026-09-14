@@ -41,6 +41,9 @@ consuming project.
 | DEFAULT_STT_PROVIDER | env | STT provider when a request names none. | no | whisper-http |
 | STT_FALLBACK_CHAIN | env | providers tried in order after the default on retryable failure. | no | [] |
 | STT_LANGUAGE_ROUTES | env | {iso-639-1: [provider names]} language routing matrix. | no | {} |
+| STT_LANGUAGE_ALIASES | settings | extra language codes this deployment's clients/providers use, mapped onto canonical ones ({"cmn": "zh"}); ISO 639-1 and its 639-2 aliases are built in, anything else is refused unless listed here. | no | {} |
+| STT_QUOTA_WATCHDOG | settings | {ENABLED, WARN_RATIO, CRITICAL_RATIO} — the scheduled provider-balance sweep and the alert raised on a live quota refusal. | no | {"ENABLED": True, "WARN_RATIO": 0.10, "CRITICAL_RATIO": 0.02} |
+| STT_QA | settings | {MAX_GAP_SECONDS} — silence between consecutive transcript segments that flags `qa.gap`; 0 disables the check. | no | {"MAX_GAP_SECONDS": 5.0} |
 | STT_TIMEOUT | env | hard cap (seconds) on one provider's submit+poll cycle. | no | 1800 |
 | STT_DOWNLOAD_MAX_BYTES | env | byte cap on an audio-URL download; the transfer aborts mid-stream when crossed. | no | 134217728 |
 | STT_DOWNLOAD_TIMEOUT | env | per-socket connect/read timeout for one hop of that download. | no | 30.0 |
@@ -54,6 +57,7 @@ consuming project.
 | ELEVENLABS_API_KEY | vault | ElevenLabs Scribe key. | no | (empty) |
 | ELEVENLABS_STT_URL | env | ElevenLabs speech-to-text URL. | no | https://api.elevenlabs.io/v1/speech-to-text |
 | ELEVENLABS_STT_MODEL | env | ElevenLabs STT model. | no | scribe_v2 |
+| ELEVENLABS_SUBSCRIPTION_URL | env | ElevenLabs character-allowance endpoint, read by the quota watchdog. | no | https://api.elevenlabs.io/v1/user/subscription |
 | ASSEMBLYAI_API_KEY | vault | AssemblyAI key. | no | (empty) |
 | ASSEMBLYAI_BASE_URL | env | AssemblyAI base URL. | no | https://api.assemblyai.com |
 | ASSEMBLYAI_MODEL | env | AssemblyAI model. | no | universal |

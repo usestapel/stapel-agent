@@ -69,7 +69,23 @@ class TestClassifyStatus:
         assert fatal is (reason in failures.FATAL_REASONS)
 
     def test_only_media_and_job_are_fatal(self):
-        assert failures.FATAL_REASONS == {"media", "job"}
+        # The invariant is about what a PROVIDER RESPONSE can be classified
+        # as, and that is still exactly two: only the media itself fails
+        # identically on the next provider. ``language`` joined
+        # FATAL_REASONS in 0.25.0 but is raised at the boundary, before a
+        # provider is chosen, so no branch of classify_status may produce
+        # it — which is what this now asserts, rather than the size of a
+        # set that has grown for an unrelated reason.
+        assert failures.FATAL_REASONS == {"media", "job", "language"}
+        produced = set()
+        for status in (200, 301, 400, 401, 402, 403, 404, 407, 409, 413,
+                       415, 422, 429, 451, 500, 503):
+            for body in ("", "quota exceeded", "invalid api key", "corrupt"):
+                fatal, reason = failures.classify_status(status, body)
+                produced.add(reason)
+                assert fatal is (reason in failures.FATAL_REASONS)
+        assert produced & failures.FATAL_REASONS == {"media"}
+        assert failures.REASON_LANGUAGE not in produced
 
     def test_markers_are_case_insensitive(self):
         _, reason = failures.classify_status(401, "QUOTA_EXCEEDED")

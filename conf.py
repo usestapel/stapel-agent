@@ -56,6 +56,9 @@ NO_ENV = (
     "DEFAULT_STT_PROVIDER",
     "STT_FALLBACK_CHAIN",
     "STT_LANGUAGE_ROUTES",
+    # An alias picks WHICH route (and therefore which adapter) a call
+    # takes, so it belongs beside the routes it feeds, not in a shell.
+    "STT_LANGUAGE_ALIASES",
     "STT_PRICING_MODULES",
     "STT_MODEL_CONFIGS",
     "DIARIZATION_PROVIDERS",
@@ -80,6 +83,12 @@ NO_ENV = (
     "STT_DOWNLOAD_ALLOWED_HOSTS",
     "STT_DOWNLOAD_ALLOW_ANY_HOST",
     "STT_SEGMENTATION",
+    # Both are dict-shaped, and both are gates rather than endpoints: the
+    # watchdog decides whether the empty-wallet alert exists at all, and
+    # STT_QA decides whether a hole in a transcript is reported. A gate an
+    # outsider can close is not a gate.
+    "STT_QUOTA_WATCHDOG",
+    "STT_QA",
     "DIARIZATION_TIMEOUT",
     "EMBEDDINGS_TIMEOUT",
     "RERANK_TIMEOUT",
@@ -158,7 +167,19 @@ agent_settings = AppSettings(
         # Language matrix: {iso-639-1: [provider names]}. An explicit
         # `provider` in the request wins over this; this wins over
         # DEFAULT_STT_PROVIDER + STT_FALLBACK_CHAIN.
+        # Since 0.25.0 the keys are CANONICALISED before the lookup, so
+        # {"ru": ...} fires for "ru", "rus" and "RUS" alike, and a region
+        # is a key of its own: {"pt-BR": [...], "pt": [...]} routes
+        # Brazilian Portuguese separately, which the old region-stripping
+        # lookup could not express.
         "STT_LANGUAGE_ROUTES": {},
+        # Extra language codes this deployment's clients or providers use,
+        # mapped onto a canonical one: {"cmn": "zh", "yue": "zh-HK"}. ISO
+        # 639-3 has thousands of codes with no 639-1 equivalent and this
+        # package is not their registry — a code outside ISO 639-1 (and
+        # its 639-2 aliases, which are built in) is REFUSED unless it is
+        # named here, where a reviewer sees it. See stt/languages.py.
+        "STT_LANGUAGE_ALIASES": {},
         # Hard cap (seconds) on one provider's submit+poll cycle.
         "STT_TIMEOUT": 1800,
         # Audio-download guards (AudioRef.read_bytes → stapel_core.net).
@@ -182,6 +203,26 @@ agent_settings = AppSettings(
         # word gaps. Keys: gap_seconds, max_seconds, max_chars,
         # min_seconds, min_words. Empty = the measured defaults.
         "STT_SEGMENTATION": {},
+        # The provider-balance watchdog (stt/quota.py). ENABLED gates BOTH
+        # the scheduled sweep and the alert raised on a live `reason:
+        # quota` refusal — one switch, so turning it off cannot leave half
+        # the mechanism running. The ratios are of the allowance still
+        # UNSPENT: WARN_RATIO 0.10 = "plan a top-up", CRITICAL_RATIO 0.02 =
+        # "do it now". Providers that expose no balance endpoint are
+        # simply absent from the sweep; the refusal path still covers them.
+        "STT_QUOTA_WATCHDOG": {
+            "ENABLED": True,
+            "WARN_RATIO": 0.10,
+            "CRITICAL_RATIO": 0.02,
+        },
+        # Transcript QA (stt/qa.py) — the checks run on a provider's answer
+        # before it leaves services.transcribe. MAX_GAP_SECONDS is the
+        # silence between two consecutive segments that stops looking like
+        # a pause and starts looking like lost audio; 5.0 is an order of
+        # magnitude above p99 of the measured word-gap distribution (1.58s,
+        # see stt/segmentation.py) and above this package's own
+        # utterance-cut threshold. 0 disables the check.
+        "STT_QA": {"MAX_GAP_SECONDS": 5.0},
         # What an EMPTY allowlist means. False (the default) = refuse the
         # download: an unconfigured deployment must not be one where any
         # caller-supplied host on the public internet is fetchable, and
@@ -209,6 +250,14 @@ agent_settings = AppSettings(
         "ELEVENLABS_API_KEY": "",
         "ELEVENLABS_STT_URL": "https://api.elevenlabs.io/v1/speech-to-text",
         "ELEVENLABS_STT_MODEL": "scribe_v2",
+        # The account's character allowance, read by the quota watchdog
+        # (stt/quota.py). Its own key rather than a path derived from
+        # ELEVENLABS_STT_URL: a deployment behind a proxy that rewrites
+        # one of the two would otherwise have the watchdog silently ask
+        # the wrong origin.
+        "ELEVENLABS_SUBSCRIPTION_URL": (
+            "https://api.elevenlabs.io/v1/user/subscription"
+        ),
         # AssemblyAI (async submit+poll).
         "ASSEMBLYAI_API_KEY": "",
         "ASSEMBLYAI_BASE_URL": "https://api.assemblyai.com",

@@ -110,6 +110,9 @@ retry on another provider.
 | `DEFAULT_STT_PROVIDER` | `"whisper-http"` | STT provider used when a request pins none and no language route matches |
 | `STT_FALLBACK_CHAIN` | `[]` | STT providers tried in order after the default — on transient failure only |
 | `STT_LANGUAGE_ROUTES` | `{}` | `{"ru": ["gigaam", "whisper-http"], ...}` language matrix (beats the default chain) |
+| `STT_LANGUAGE_ALIASES` | `{}` | Extra language codes mapped onto canonical ones (`{"cmn": "zh"}`). ISO 639-1 and its 639-2 aliases are built in; anything else is REFUSED unless listed here |
+| `STT_QUOTA_WATCHDOG` | `{"ENABLED": True, "WARN_RATIO": 0.10, "CRITICAL_RATIO": 0.02}` | Provider-balance sweep + the alert on a live quota refusal. One switch covers both |
+| `STT_QA` | `{"MAX_GAP_SECONDS": 5.0}` | Silence between consecutive transcript segments that flags `qa.gap`; `0` disables |
 | `STT_TIMEOUT` | `1800` | Hard cap (seconds) on one STT provider's submit+poll cycle |
 | `STT_DOWNLOAD_MAX_BYTES` | `134217728` | Byte cap on an audio-URL download (128 MiB), enforced mid-stream |
 | `STT_DOWNLOAD_TIMEOUT` | `30.0` | Per-socket connect/read timeout for one hop of that download |
@@ -118,6 +121,7 @@ retry on another provider.
 | `STT_DOWNLOAD_ALLOW_ANY_HOST` | `False` | Opt-out: accept audio from any public host when the allowlist is empty. The other fetch guards still apply |
 | `WHISPER_BASE_URL` / `WHISPER_API_KEY` / `WHISPER_MODEL` | `""` / `""` / `"whisper-1"` | OpenAI-compatible Whisper endpoint — the OpenAI API or self-hosted faster-whisper (key optional) |
 | `ELEVENLABS_API_KEY` / `ELEVENLABS_STT_URL` / `ELEVENLABS_STT_MODEL` | `""` / Scribe URL / `"scribe_v2"` | ElevenLabs Scribe |
+| `ELEVENLABS_SUBSCRIPTION_URL` | `.../v1/user/subscription` | Character-allowance endpoint the quota watchdog polls |
 | `ASSEMBLYAI_API_KEY` / `ASSEMBLYAI_BASE_URL` / `ASSEMBLYAI_MODEL` | `""` / `"https://api.assemblyai.com"` / `"universal"` | AssemblyAI (async submit+poll) |
 | `IMAGE_PROVIDERS` | `{}` | Overlay **merged over** the built-in image registry (openai-images) — same semantics as `PROVIDERS` |
 | `DEFAULT_IMAGE_PROVIDER` | `"openai-images"` | Image provider used when a request pins none |

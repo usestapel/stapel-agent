@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-agent"
-version = "0.24.0"
+version = "0.25.0"
 description = "LLM facade Django app for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -25,30 +25,21 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    # >=0.24.0 for stapel_core.net — the fleet's single SSRF-hardened fetcher
-    # (https-only, every resolved address validated, the socket pinned to that
-    # IP, every redirect re-validated, body capped mid-stream, total deadline).
-    # stt/base.py imports `fetch_bytes` / `SafeFetchError` from it on the
-    # AudioRef.read_bytes path, which is the fix for AGENT-01; without that
-    # module the package does not import at all.
+    # >=0.36.0 since 0.25.0 for `stapel_core.observability` — the quota
+    # watchdog records `stt_provider_quota_ratio{provider}` through the
+    # fleet's metrics facade rather than inventing a second one. The
+    # facade's own backend is opt-in and a no-op by default, so this
+    # raises the FLOOR without changing what an un-configured deployment
+    # does; what it buys is that the gauge is real where a backend is
+    # wired, instead of a guarded import that silently records nothing.
     #
-    # This floor was knowingly WRONG until now, and said so in the commit that
-    # introduced the import: `stapel_core.net` existed only on core's
-    # sec/audit-2026-08-11 branch, so no released core contained it and no
-    # honest floor could be written. Core 0.24.0 is the release that ships it
-    # (v0.24.0 is the first — and only — tag containing that module), so this
-    # is the first version of stapel-agent whose declared floor is true.
-    #
-    # It also covers the second dependency this audit created: CACHE_POLICY is
-    # an `import_strings` key, and core 0.24.0 makes such keys implicitly
-    # `no_env`, so an environment variable cannot pick the class that mediates
-    # the now tenant-scoped prompt cache. This package's own conf.NO_ENV list
-    # closes the same door for the keys core cannot know about.
-    #
-    # Superseded floors, both still satisfied: >=0.15.11 for
-    # stapel_core.schema_strict (the strict-subset transform the
-    # OpenAI-compatible transport applies before every constrained call).
-    "stapel-core>=0.24.0,<1.0",
+    # Superseded floors, all still satisfied: >=0.24.0 for
+    # `stapel_core.net` (the fleet's single SSRF-hardened fetcher, which
+    # stt/base.py imports on the AudioRef.read_bytes path — without it the
+    # package does not import at all) and for the implicit `no_env` on
+    # `import_strings` keys that keeps CACHE_POLICY out of the
+    # environment; >=0.15.11 for `stapel_core.schema_strict`.
+    "stapel-core>=0.36.0,<1.0",
     # Provider-response validation and LLM-authored contracts are declared
     # as pydantic models. This is deliberate rather than incidental: the
     # models being ported in carry `extra="forbid"` plus field/model

@@ -147,6 +147,58 @@ def transcript_from_dict(data: dict) -> NormalizedTranscript:
     )
 
 
+@dataclass(frozen=True)
+class ProviderQuota:
+    """What a provider says is left on the account.
+
+    Two absolute numbers and the ratio between them, never a bare
+    percentage: an operator asked to act on "8% left" needs to know
+    whether that is 8% of a free trial or 8% of a million minutes, and a
+    ratio alone cannot say. ``unit`` names what is being counted
+    (``characters`` for ElevenLabs, ``seconds``/``credits`` elsewhere) so
+    two providers' numbers are never added together by accident.
+
+    Providers that expose no balance endpoint answer ``None`` from
+    :meth:`SttProvider.quota_status` — which is NOT the same as a zero
+    balance, and is the reason this is a dataclass rather than a float.
+    """
+
+    provider: str
+    used: float
+    limit: float
+    unit: str = ""
+    raw: dict = field(default_factory=dict)
+
+    @property
+    def remaining(self) -> float:
+        return max(float(self.limit) - float(self.used), 0.0)
+
+    @property
+    def remaining_ratio(self) -> float:
+        """Fraction of the allowance still unspent, 0.0–1.0.
+
+        A non-positive limit is not a full account and not an empty one —
+        it is a provider answer we cannot read. Adapters must return
+        ``None`` rather than construct such a quota; this clamp exists so
+        a provider that starts sending ``0`` cannot make the watchdog
+        divide by zero in the middle of a scheduled run.
+        """
+        limit = float(self.limit)
+        if limit <= 0:
+            return 0.0
+        return max(min(self.remaining / limit, 1.0), 0.0)
+
+    def to_dict(self) -> dict:
+        return {
+            "provider": self.provider,
+            "used": self.used,
+            "limit": self.limit,
+            "unit": self.unit,
+            "remaining": self.remaining,
+            "remaining_ratio": self.remaining_ratio,
+        }
+
+
 def biasing_metadata(
     *, applied: bool, terms_sent: int, terms_truncated: int
 ) -> dict:
@@ -620,12 +672,38 @@ class SttProvider(ABC):
         """
         raise NotImplementedError
 
+    def quota_status(self, *, timeout_seconds: Optional[int] = None):
+        """What is left on this provider's account, or ``None``.
+
+        ``None`` is the honest default and the base implementation: most
+        STT APIs expose no balance endpoint, and a watchdog that invented
+        a number for them would be worse than one that says nothing.
+        Adapters that CAN ask (ElevenLabs' ``GET /v1/user/subscription``)
+        override this and return a
+        :class:`~stapel_agent.stt.base.ProviderQuota`.
+
+        Never raises — the caller is a scheduled job that must survey
+        every provider, and one unreachable endpoint may not end the
+        sweep. An adapter that cannot answer returns ``None`` and logs.
+        """
+        return None
+
 
 def normalize_language(language: Optional[str]) -> Optional[str]:
-    """BCP-47 → bare ISO-639-1 (``en-US``/``en_us`` → ``en``)."""
-    if not language:
-        return None
-    return language.lower().split("-")[0].split("_")[0]
+    """BCP-47 → bare ISO 639-1 (``en-US``/``en_us`` → ``en``).
+
+    What every ADAPTER calls to build a provider parameter. Since 0.25.0 it
+    resolves ISO 639-2 aliases too (``eng`` → ``en``, ``rus`` → ``ru``), so a
+    three-letter code no longer reaches a provider that only understands two
+    — see :mod:`stapel_agent.stt.languages`. Still lenient: a code it cannot
+    resolve comes back as its lowercased primary subtag rather than raising,
+    because the refusal belongs at the boundary
+    (:func:`stapel_agent.stt.languages.canonical_language`, called once in
+    ``services.transcribe``), not at the last layer before the wire.
+    """
+    from .languages import base_language
+
+    return base_language(language)
 
 
 __all__ = [
@@ -633,6 +711,7 @@ __all__ = [
     "NormalizedTranscript",
     "NormalizedUtterance",
     "NormalizedWord",
+    "ProviderQuota",
     "RetryableTranscriptionError",
     "SttProvider",
     "TranscriptionError",

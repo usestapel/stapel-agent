@@ -43,6 +43,7 @@ reason           fatal?     means
 ``transport``    no         network/TLS failure below the HTTP answer
 ``media``        **yes**    the audio or its reference is the problem
 ``job``          **yes**    the provider ran the job and it failed on the audio
+``language``     **yes**    the language code itself is unresolvable (0.25.0)
 ===============  =========  ===================================================
 """
 from __future__ import annotations
@@ -61,9 +62,16 @@ REASON_TIMEOUT = "timeout"
 REASON_TRANSPORT = "transport"
 REASON_MEDIA = "media"
 REASON_JOB = "job"
+#: The caller named a language nothing can resolve — raised by
+#: ``stt.languages.canonical_language`` at the boundary, before a provider
+#: is chosen. Fatal for the same reason ``media`` is: the next engine in
+#: the chain would fail on it identically. It is never produced by
+#: classifying a provider RESPONSE, which is why no branch of
+#: ``classify_status`` returns it.
+REASON_LANGUAGE = "language"
 
-#: The two reasons that stop the fallback chain. Everything else walks it.
-FATAL_REASONS = frozenset({REASON_MEDIA, REASON_JOB})
+#: The reasons that stop the fallback chain. Everything else walks it.
+FATAL_REASONS = frozenset({REASON_MEDIA, REASON_JOB, REASON_LANGUAGE})
 
 #: Statuses providers use for "the request/media itself is wrong". They are
 #: fatal ONLY when the body does not say quota/auth — see ``classify_status``.
@@ -277,6 +285,7 @@ __all__ = [
     "QUOTA_MARKERS",
     "REASON_AUTH",
     "REASON_JOB",
+    "REASON_LANGUAGE",
     "REASON_MEDIA",
     "REASON_QUOTA",
     "REASON_RATE",

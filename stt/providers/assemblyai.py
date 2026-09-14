@@ -117,6 +117,22 @@ class AssemblyAIProvider(SttProvider):
     def default_speech_model(self) -> Optional[str]:
         return agent_settings.ASSEMBLYAI_MODEL
 
+    def quota_status(self, *, timeout_seconds: Optional[int] = None):
+        """``None`` — AssemblyAI publishes no balance endpoint.
+
+        Stated as an override rather than inherited so the answer is a
+        RECORD, not an omission: the API surface was surveyed for the
+        quota watchdog (docs survey 2026-09-14) and there is no
+        account/balance/usage route in it — billing lives in the
+        dashboard, and the only signal an integration gets is the refusal
+        itself. That path is covered: a quota-classified decline alerts
+        through ``stt.quota.report_quota_refusal``.
+
+        If AssemblyAI ships one, implement it here and the watchdog picks
+        it up with no other change.
+        """
+        return None
+
     def keyterms_supported_for(self, language: Optional[str]) -> bool:
         """Does THIS registration's model honor ``keyterms_prompt`` for
         *language*? Unknown model or no language pinned → True (send;

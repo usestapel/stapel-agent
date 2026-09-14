@@ -56,7 +56,10 @@ same name → environment variable → default. All keys are read **lazily at ca
 | `STT_PROVIDERS` | `{}` | Overlay **merged over** `stt.BUILTIN_STT_PROVIDERS` (whisper-http / elevenlabs / assemblyai / deepgram / gladia / soniox / speechmatics / xai-stt) — same merge semantics as `PROVIDERS`; see "STT providers" below. |
 | `DEFAULT_STT_PROVIDER` | `"whisper-http"` | STT provider used when the request pins none and no language route matches. |
 | `STT_FALLBACK_CHAIN` | `[]` | Provider names tried in order after the default — on **retryable** failure only (which now includes a provider's quota/billing/auth refusal; only bad media is fatal). |
-| `STT_LANGUAGE_ROUTES` | `{}` | `{iso-639-1: [provider names]}` language matrix; beats the default chain, loses to an explicit `provider` in the request. |
+| `STT_LANGUAGE_ROUTES` | `{}` | `{iso-639-1: [provider names]}` language matrix; beats the default chain, loses to an explicit `provider` in the request. Keys are CANONICALISED before the lookup (0.25.0), so `{"ru": ...}` fires for `ru`/`rus`/`RUS`, and a region is a key of its own (`{"pt-BR": ..., "pt": ...}`). |
+| `STT_LANGUAGE_ALIASES` | `{}` | Extra language codes this deployment's clients or providers use, mapped onto canonical ones (`{"cmn": "zh", "yue": "zh-HK"}`). ISO 639-1 and both ISO 639-2 sets are built in; anything else is **refused** (`UnknownLanguageError`, `reason="language"`) unless it is listed here. `NO_ENV`: an alias picks which adapter a call reaches. |
+| `STT_QUOTA_WATCHDOG` | `{"ENABLED": True, "WARN_RATIO": 0.10, "CRITICAL_RATIO": 0.02}` | The provider-balance watchdog (`stt/quota.py`). `ENABLED` gates **both** the scheduled sweep and the alert raised on a live `reason: quota` refusal. Ratios are of the allowance still unspent. `NO_ENV`. |
+| `STT_QA` | `{"MAX_GAP_SECONDS": 5.0}` | Transcript QA (`stt/qa.py`). Silence between two consecutive segments longer than this flags `qa.gap` and clears `qa.passed`; `0` disables the check. `NO_ENV`. |
 | `STT_TIMEOUT` | `1800` | Hard cap (seconds) on one STT provider's submit+poll cycle. |
 | `STT_DOWNLOAD_MAX_BYTES` | `134217728` | Byte cap on an audio URL download (128 MiB). The transfer aborts mid-stream when it is crossed — an oversized body is never buffered whole. |
 | `STT_DOWNLOAD_TIMEOUT` | `30.0` | Per-socket connect/read timeout for one hop of that download. |
@@ -65,6 +68,7 @@ same name → environment variable → default. All keys are read **lazily at ca
 | `STT_DOWNLOAD_ALLOW_ANY_HOST` | `False` | The explicit opt-out for deployments that genuinely accept audio from arbitrary origins: an empty allowlist then means any **public** host, with the fetcher's https-only / private-IP / redirect guards still applied. Ignored when the allowlist is non-empty. |
 | `WHISPER_BASE_URL` / `WHISPER_API_KEY` / `WHISPER_MODEL` | `""` / `""` / `"whisper-1"` | OpenAI-compatible Whisper endpoint (OpenAI API or self-hosted faster-whisper — the key is optional for self-hosted). |
 | `ELEVENLABS_API_KEY` / `ELEVENLABS_STT_URL` / `ELEVENLABS_STT_MODEL` | `""` / Scribe URL / `"scribe_v2"` | ElevenLabs Scribe credentials/endpoint/model. |
+| `ELEVENLABS_SUBSCRIPTION_URL` | `https://api.elevenlabs.io/v1/user/subscription` | Where the quota watchdog reads `character_count`/`character_limit`. Its own key, not a path derived from the STT URL: a deployment behind a proxy that rewrites one of the two would otherwise poll the wrong origin silently. |
 | `ASSEMBLYAI_API_KEY` / `ASSEMBLYAI_BASE_URL` / `ASSEMBLYAI_MODEL` | `""` / `"https://api.assemblyai.com"` / `"universal"` | AssemblyAI credentials/endpoint/`speech_model`. |
 | `DEEPGRAM_API_KEY` / `DEEPGRAM_BASE_URL` / `DEEPGRAM_MODEL` | `""` / `"https://api.deepgram.com"` / `"nova-3"` | Deepgram credentials/endpoint/model (synchronous `/v1/listen`). |
 | `GLADIA_API_KEY` / `GLADIA_BASE_URL` / `GLADIA_MODEL` | `""` / `"https://api.gladia.io"` / `"solaria-1"` | Gladia credentials/endpoint/model (async upload+create+poll). |
@@ -186,7 +190,8 @@ per name:
 
 **Routing** (`stt/router.py`, `select_chain()`): explicit `provider` in the
 request → single-name chain, **no fallback** (a pinned provider's failures must
-stay visible) → `STT_LANGUAGE_ROUTES[lang]` (language normalized `en-US` → `en`)
+stay visible) → `STT_LANGUAGE_ROUTES[lang]` (the language CANONICALISED — `eng` → `en`,
+`pt_br` → `pt-BR` — and tried most-specific first, so `pt-BR` beats `pt`)
 → `[DEFAULT_STT_PROVIDER] + STT_FALLBACK_CHAIN`. The service walks the chain on
 `RetryableTranscriptionError`, and **`stt/failures.py` is the single place that
 decides what that is** — per provider RESPONSE, never per status class. Only
@@ -254,6 +259,7 @@ ABC contract (`stt/base.py`, Django-free):
 | `transcribe` | `(*, audio: AudioRef, language: str \| None = None, diarization: bool = False, timeout_seconds: int \| None = None, keyterms: list[str] \| None = None, provider_options: dict \| None = None) -> NormalizedTranscript` | Synchronous (polling-based) batch transcription. Classify a provider answer through `stt.failures` (`raise_for_status` / `missing_credentials` / `unsupported` / `timed_out` / `transport` / `unavailable` / `job_failed`) instead of hand-rolling the taxonomy: `TranscriptionError` is for the media alone, everything else is `RetryableTranscriptionError` so the chain walks. `keyterms` = the generic vocabulary-biasing seam (see below); `provider_options` = free-form per-provider passthrough applied AFTER the adapter's own request params — never silently dropped. |
 | `name` / `supports_diarization` / `supports_keyterms` / `supported_languages` / `cost_per_hour` | class attributes | Stable id (stored on the PromptLog row), capability flags, optional USD/hour for billing hosts. |
 | `speech_model` | class attribute (`str \| None`, default None) | **Per-registration model pin** — the STT mirror of fixing a model on an LLM registration. Set it on a subclass to force one engine/model for that registered name, overriding the provider's configured default (`WHISPER_MODEL` / `ELEVENLABS_STT_MODEL` / `ASSEMBLYAI_MODEL`); None falls back to that default. `effective_model()` returns the pin-or-default and `default_speech_model()` the configured default (providers override it to read their setting). Two registrations of one adapter class can thus carry different models without a settings change or a fork. |
+| `quota_status` | `(*, timeout_seconds: int \| None = None) -> ProviderQuota \| None` | **Optional** (0.25.0). What is left on the account, for the quota watchdog (`stt/quota.py`). The base returns `None` and most adapters keep it: few STT APIs expose a balance, and a watchdog that invented a number for them would be worse than one that says nothing. `None` means *unknown*, never *empty*. ElevenLabs implements it against `GET /v1/user/subscription`. Must never raise — one unreachable endpoint may not end the sweep over the others. |
 
 **Vocabulary biasing** (`keyterms`): a normalized list of plain terms (no
 provider weight syntax). Adapters with `supports_keyterms = True` map it onto

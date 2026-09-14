@@ -267,6 +267,19 @@ TRANSCRIBE_SCHEMA = {
             "meter as less than was billed. Omitted, the agent measures "
             "local media and falls back to the provider's number.",
         },
+        "audio_offset_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Where this audio sits inside a LONGER "
+            "recording, in milliseconds. Pass it only when you are "
+            "submitting a piece of something: the checkpoint key is "
+            "derived from the audio's content, and two chunks of a "
+            "repeated passage (a looped fixture, a tone, a silence) are "
+            "byte-identical, so without an offset the second call is "
+            "served the first one's transcript — with the first one's "
+            "timestamps, and a hole where the second chunk should be. "
+            "Omit it for a whole recording.",
+        },
         "keyterms": {
             "type": "array",
             "items": {"type": "string"},
@@ -398,6 +411,7 @@ def llm_transcribe(payload: dict) -> dict:
         provider_options=payload.get("provider_options"),
         audio_content_hash=payload.get("audio_content_hash"),
         audio_duration_ms=payload.get("audio_duration_ms"),
+        audio_offset_ms=payload.get("audio_offset_ms"),
         **_identity_kwargs(payload),
     )
 
@@ -433,6 +447,12 @@ def llm_transcribe(payload: dict) -> dict:
         "transcript_meta": transcript_summary(transcript),
         "provider_used": result.get("provider_used"),
         "fallback_used": bool(result.get("fallback_used")),
+        # Bounded by construction (a verdict and a handful of check
+        # strings), so it rides the reference reply too — a caller that
+        # gets a KEY instead of a transcript still learns the transcript
+        # has a hole in it, which is the one reply shape where it could
+        # not find out for itself without another round trip.
+        "qa": result.get("qa"),
     }
 
 
@@ -467,6 +487,19 @@ DIARIZE_SCHEMA = {
             "description": "Content hash of the audio (``sha256:<hex>``) "
             "— the checkpoint key that makes a retry of this priced call "
             "free. See the same field on llm.transcribe.",
+        },
+        "audio_offset_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Where this audio sits inside a LONGER "
+            "recording, in milliseconds. Pass it only when you are "
+            "submitting a piece of something: the checkpoint key is "
+            "derived from the audio's content, and two chunks of a "
+            "repeated passage (a looped fixture, a tone, a silence) are "
+            "byte-identical, so without an offset the second call is "
+            "served the first one's transcript — with the first one's "
+            "timestamps, and a hole where the second chunk should be. "
+            "Omit it for a whole recording.",
         },
         "provider_options": {
             "type": "object",
@@ -505,6 +538,7 @@ def llm_diarize(payload: dict) -> dict:
         timeout_seconds=payload.get("timeout_seconds"),
         provider_options=payload.get("provider_options"),
         audio_content_hash=payload.get("audio_content_hash"),
+        audio_offset_ms=payload.get("audio_offset_ms"),
         **_identity_kwargs(payload),
     )
 

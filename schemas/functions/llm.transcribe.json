@@ -34,6 +34,11 @@
       "minimum": 0,
       "description": "How much audio is being SUBMITTED. This, not the transcript's own duration, is what the ledger meters: several providers report the last word's end timestamp, so trailing silence and an empty transcript would otherwise meter as less than was billed. Omitted, the agent measures local media and falls back to the provider's number."
     },
+    "audio_offset_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Where this audio sits inside a LONGER recording, in milliseconds. Pass it only when you are submitting a piece of something: the checkpoint key is derived from the audio's content, and two chunks of a repeated passage (a looped fixture, a tone, a silence) are byte-identical, so without an offset the second call is served the first one's transcript — with the first one's timestamps, and a hole where the second chunk should be. Omit it for a whole recording."
+    },
     "keyterms": {
       "type": "array",
       "items": {
