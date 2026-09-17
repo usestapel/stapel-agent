@@ -3,6 +3,25 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.26.0] — 2026-09-17
+
+### Fixed — this package shipped its own copy of core's gdpr schemas
+
+`schemas/emits/gdpr.section.erased.json` and `gdpr.owner.alive.json` describe
+facts emitted by `stapel_core.gdpr.owners`. Core owns them, and as of
+stapel-core 0.81.0 core SHIPS them — which it did not before, and that absence
+is why three separate libraries each vendored a copy.
+
+The copies here were current, not stale, and are deleted anyway.
+**Current-but-vendored is the state that goes stale next**: stapel-workspaces'
+copy of the same two files was current once too, and by 2026-09-16 it declared
+five properties with `additionalProperties: false` against core's eight — which
+refused core's receipt inside an erasure's own transaction and silently rolled
+a completed anonymisation back.
+
+`stapel_core.comm.E010` now fails `manage.py check` for exactly this. Floor
+raised to `stapel-core>=0.81.0`.
+
 ## [0.25.0] — 2026-09-14
 
 Three findings from a client fleet's production audit, all of the same family:

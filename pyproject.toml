@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-agent"
-version = "0.25.0"
+version = "0.26.0"
 description = "LLM facade Django app for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -39,7 +39,7 @@ dependencies = [
     # package does not import at all) and for the implicit `no_env` on
     # `import_strings` keys that keeps CACHE_POLICY out of the
     # environment; >=0.15.11 for `stapel_core.schema_strict`.
-    "stapel-core>=0.36.0,<1.0",
+    "stapel-core>=0.81.0,<1.0",
     # Provider-response validation and LLM-authored contracts are declared
     # as pydantic models. This is deliberate rather than incidental: the
     # models being ported in carry `extra="forbid"` plus field/model
