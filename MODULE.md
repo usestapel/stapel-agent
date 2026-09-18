@@ -606,13 +606,19 @@ microservices — same code). JSON Schemas live in `schemas/functions/`.
 | `gdpr.section.erased` | `owner: "agent"`, `subject_type`, `subject_key`, `correlation_id`, `receipt_id`, `counts: {prompt_logs}` | This module finished erasing one subject — see "Erasure" below. Emitted inside the erasure's transaction |
 | `gdpr.owner.alive` | `owner: "agent"`, `subject_types`, `correlation_id` | Answer to `gdpr.owner.probe`, from the same subscriber that erases |
 
-**Consumes** (schemas in `schemas/consumes/`):
+**Consumes** (schemas in `schemas/consumes/`). The erasure protocol is not
+written here: `AgentConfig.ready()` calls
+`stapel_core.gdpr.register_gdpr_owner("agent", SUBJECT_TYPES, erase_subject)`
+and core supplies the three handlers, with the deterministic receipt id and
+the receipt inside the erase's transaction. Registering by name is also what
+stands core's provider bridge down for this section exactly rather than for
+the whole app (`gdpr.W012`):
 
 | Action | Handler | What it does |
 |---|---|---|
-| `gdpr.erasure.requested` | `actions.handle_erasure_requested` | Erases the named subject from the `PromptLog` rows — content scrubbed, ids pseudonymized, ledger kept — and receipts with counts. Subject types not claimed are ignored |
-| `gdpr.owner.probe` | `actions.handle_owner_probe` | Answers `gdpr.owner.alive` |
-| `user.deleted` | `actions.handle_user_deleted` | DEPRECATED account signal (stapel-gdpr drops it in its 0.6.0); routed through the same erase call |
+| `gdpr.erasure.requested` | core, via `register_gdpr_owner` | Erases the named subject from the `PromptLog` rows — content scrubbed, ids pseudonymized, ledger kept — and receipts with counts. Subject types not claimed are ignored |
+| `gdpr.owner.probe` | core, via `register_gdpr_owner` | Answers `gdpr.owner.alive`, from the same module as the erasure |
+| `user.deleted` | core, via `register_gdpr_owner` | DEPRECATED account signal (stapel-gdpr drops it in its 0.6.0); routed through the same erase call |
 | `user.merged` | `actions.handle_user_merged` | The other half of an account's life cycle (stapel-auth 0.30.0). **Merge policy: re-point, keep everything** — `PromptLog.user_id` moves from `from_user_id` to `into_user_id`; content, tokens, cost and `workspace_id` are untouched, because a prompt log row is metering the deployment already paid for and a merge joins two people, not two tenants. Idempotent (a redelivery re-points 0 rows). Answering only `user.deleted` is `stapel_core.lifecycle.E001` |
 
 **Functions provided** (`functions.py`, registered in `AgentConfig.ready()`):

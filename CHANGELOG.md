@@ -3,6 +3,43 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.27.0] — 2026-09-18
+
+### Changed — the erasure protocol is core's; `erase_subject` stays ours
+
+This module hand-wrote the data-owner side of the erasure protocol:
+`gdpr.erasure.requested`, `gdpr.owner.probe` and the deprecated
+`user.deleted`, plus the receipt id and the emit — sixty lines that nine
+libraries carried verbatim. `ready()` now declares the owner instead:
+
+```python
+register_gdpr_owner("agent", SUBJECT_TYPES, gdpr.erase_subject)
+```
+
+Core builds the same three handlers. The owner name (`agent`), the subject
+types it claims (`account`, `workspace`), the rows it touches and the
+receipt payload — `owner`, `subject_type`, `subject_key`, `correlation_id`,
+`receipt_id`, `counts` — are unchanged, receipt id included
+(`agent:<subject_type>:<key>:<correlation_id>`).
+
+Why it matters beyond tidiness: a library that both registers a
+`GDPRProvider` and hand-writes the protocol made core's provider bridge
+stand down for the whole **app** rather than for the named **section** —
+`gdpr.W012`. A named registration makes that question exact, and one
+erasure leaves exactly one receipt per part. Two receipts assert the
+deletion happened twice, which is a false legal record rather than a
+duplicate log line.
+
+`stapel_agent.gdpr.erase_subject` now takes `workspace_id` positionally (it
+was keyword-only), because that is how core drives it:
+`erase(subject_type, subject_key, workspace_id)`. Keyword callers are
+unaffected. `stapel_agent.actions` no longer exports
+`handle_erasure_requested`, `handle_owner_probe` or `handle_user_deleted`;
+reach them through the `GdprOwner` the registration returns.
+
+Floor moves to `stapel-core>=0.85.1`, the release whose provider bridge
+yields to a registered owner.
+
 ## [0.26.0] — 2026-09-17
 
 ### Fixed — this package shipped its own copy of core's gdpr schemas

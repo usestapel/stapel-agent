@@ -11,6 +11,10 @@ def pytest_configure(config):
                 # contrib.admin so the ModelAdmin registrations in admin.py
                 # are importable (and covered) in tests.
                 "django.contrib.admin",
+                # Core's app: it is what registers the GDPR provider bridge
+                # and its system checks, so `manage.py check` sees the same
+                # wiring here that a host does.
+                "stapel_core.django.apps.CommonDjangoConfig",
                 "stapel_core.django.users",
                 "rest_framework",
                 "stapel_agent",

@@ -232,7 +232,7 @@ def _strip_metadata(rows) -> None:
         PromptLog.objects.bulk_update(changed, ["metadata"])
 
 
-def erase_subject(subject_type: str, subject_key, *, workspace_id=None) -> dict | None:
+def erase_subject(subject_type: str, subject_key, workspace_id=None) -> dict | None:
     """Erase one subject from the prompt ledger: content out, bill kept.
 
     Scrubs the content columns, cuts ``metadata`` to the accounting keys,
@@ -255,6 +255,9 @@ def erase_subject(subject_type: str, subject_key, *, workspace_id=None) -> dict 
 
     Idempotent: the subject's own id is a pseudonym after the first run,
     so a redelivery matches nothing and reports ``0``.
+
+    ``workspace_id`` is positional because ``register_gdpr_owner`` drives
+    this callable as ``erase(subject_type, subject_key, workspace_id)``.
     """
     from .models import PromptLog, ProviderCheckpoint
     from .retention import scrub_queryset

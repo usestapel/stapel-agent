@@ -22,10 +22,25 @@ class AgentConfig(AppConfig):
             gdpr_registry.register(AgentGDPRProvider())
 
         # Erasure over comm (gdpr.erasure.requested / gdpr.owner.probe /
-        # the deprecated user.deleted). The in-process provider above is
+        # the deprecated user.deleted), implemented once in stapel-core:
+        # the deterministic receipt id, the receipt inside the erase's
+        # transaction, and the probe answered from the same module — which
+        # is what makes "alive" evidence. The in-process provider above is
         # only reachable in a monolith; a service that consumes actions
-        # participates through this module — and answering the probe from
-        # the same module is what makes "alive" evidence.
+        # participates through this registration. What stays ours is
+        # erase_subject (gdpr.py).
+        #
+        # Registering by name is also what stands core's provider bridge
+        # down for this section exactly: until 0.27.0 this module carried
+        # its own copy of the protocol, and the bridge could only tell they
+        # were the same APP, not the same section (gdpr.W012).
+        from stapel_core.gdpr import register_gdpr_owner
+
+        from .gdpr import OWNER, SUBJECT_TYPES, erase_subject
+
+        register_gdpr_owner(OWNER, SUBJECT_TYPES, erase_subject)
+
+        # The rest of the account life cycle (user.merged).
         from . import actions  # noqa: F401
 
         # Django system checks (provider registry / DEFAULT_PROVIDER

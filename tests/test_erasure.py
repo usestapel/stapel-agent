@@ -17,11 +17,8 @@ from decimal import Decimal
 import pytest
 from unittest.mock import patch
 
-from stapel_agent.actions import (
-    handle_erasure_requested,
-    handle_owner_probe,
-    handle_user_deleted,
-)
+from stapel_core.gdpr import register_gdpr_owner
+
 from stapel_agent.gdpr import (
     OWNER,
     PSEUDONYM_PREFIX,
@@ -30,6 +27,14 @@ from stapel_agent.gdpr import (
     pseudonymize,
 )
 from stapel_agent.models import PromptLog, PromptSource, PromptStatus
+
+#: The registration ``apps.ready()`` made. Same terms, so the helper hands
+#: back the existing registration rather than subscribing twice — which is
+#: both how these tests reach the handlers and an assertion that ready() ran.
+AGENT_OWNER = register_gdpr_owner(OWNER, SUBJECT_TYPES, erase_subject)
+handle_erasure_requested = AGENT_OWNER.handle_erasure_requested
+handle_owner_probe = AGENT_OWNER.handle_owner_probe
+handle_user_deleted = AGENT_OWNER.handle_user_deleted
 
 
 def _row(**kwargs):
@@ -370,14 +375,78 @@ class TestOwnerProbe:
     def test_the_answer_comes_from_the_module_that_erases(self):
         """Co-location IS the evidence: `alive` proves the erasure
         subscriber is consumed, not that a container is deployed. Two
-        modules would make it prove nothing."""
-        from stapel_core.comm.registry import action_registry
+        modules would make it prove nothing.
 
+        Both handlers are now the ones ``register_gdpr_owner`` built, and
+        the registration is what ``apps.ready()`` performed — so this also
+        asserts the hand-written copy is gone rather than shadowed.
+        """
+        from stapel_core.comm.registry import action_registry
+        from stapel_core.gdpr import registered_gdpr_owners
+
+        import stapel_agent.actions as actions
+
+        assert registered_gdpr_owners()[OWNER] == SUBJECT_TYPES
+        assert AGENT_OWNER.erase is erase_subject
         erasers = action_registry.handlers("gdpr.erasure.requested")
         probes = action_registry.handlers("gdpr.owner.probe")
         assert handle_erasure_requested in erasers
         assert handle_owner_probe in probes
         assert handle_owner_probe.__module__ == handle_erasure_requested.__module__
+        for gone in ("handle_erasure_requested", "handle_owner_probe",
+                     "handle_user_deleted"):
+            assert not hasattr(actions, gone)
+
+    def test_boot_reports_no_double_answerer_and_no_stranded_section(self):
+        """``manage.py check`` is silent about this module's GDPR wiring.
+
+        ``gdpr.W012`` is what a library carrying its own copy of the
+        protocol beside a registered provider looks like, and ``gdpr.E011``
+        is a declared section nothing in the process can answer for. Both
+        are boot-time facts, so they are asserted at boot rather than by
+        running an erasure and counting the receipts afterwards.
+        """
+        from django.core.checks.registry import registry
+
+        checks = [
+            c for c in registry.get_checks()
+            if getattr(c, "__module__", "") == "stapel_core.gdpr.provider_bridge"
+        ]
+        # Two of them, registered by core's AppConfig: an empty list here
+        # would be a gate that runs nothing and passes.
+        assert len(checks) == 2
+        assert [m for check in checks for m in check(app_configs=None)] == []
+
+    def test_one_erasure_leaves_exactly_one_receipt_per_part(self):
+        """The provider bridge yields to the registered owner.
+
+        Both wirings are live in this process — ``gdpr_registry`` has the
+        provider and ``register_gdpr_owner`` has the owner — and an erasure
+        is one part, so it is one receipt. Two would assert the deletion
+        happened twice, which is a false legal record rather than a
+        duplicate log line.
+        """
+        from stapel_core.comm.actions import deliver_to_subscribers
+        from stapel_core.comm.registry import action_registry
+
+        _row()
+        event = _event(
+            correlation_id="corr-one-part",
+            subject_type="account",
+            subject_key="u-1",
+        )
+        with patch("stapel_core.comm.emit") as m_emit:
+            assert deliver_to_subscribers(
+                event, action_registry.handlers("gdpr.erasure.requested")
+            ) == []
+
+        receipts = [
+            call.args[1] for call in m_emit.call_args_list
+            if call.args[0] == "gdpr.section.erased"
+        ]
+        assert len(receipts) == 1
+        assert receipts[0]["owner"] == "agent"
+        assert receipts[0]["receipt_id"] == "agent:account:u-1:corr-one-part"
 
     def test_the_alive_answer_validates_against_the_committed_schema(self):
         from stapel_core.comm import subscribe_action
