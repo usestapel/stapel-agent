@@ -21,6 +21,9 @@ Registered from ``AgentConfig.ready()``. IDs:
 - ``stapel_agent.W018`` — a model THIS deployment is configured to call is
   not in ``pricing.PRICES_USD_PER_MTOK``, so every call it makes stores
   ``cost_basis=unpriced`` and metering cannot cost the feature.
+- ``stapel_agent.W019`` — ``PROVIDER_FALLBACK_CHAIN`` names a provider
+  that is unknown or unusable, so the redundancy the settings file
+  claims does not exist on the day the primary runs out of credits.
 
 Import/subclass problems are warnings, not errors, on purpose: providers
 resolve lazily per request and degrade to ``status: "failure"`` — a
@@ -103,6 +106,55 @@ def check_providers(app_configs, **kwargs):
                         "anywhere."
                     ),
                     id="stapel_agent.W016",
+                )
+            )
+
+    # The fallback chain is only a fallback if every name in it resolves
+    # AND is usable. A chain of one misspelling is worse than no chain:
+    # it reads as redundancy in settings.py and delivers none, and the
+    # day it is needed is the day nobody is reading system checks.
+    for ref in agent_settings.PROVIDER_FALLBACK_CHAIN or []:
+        if not ref:
+            continue
+        if ref not in effective:
+            issues.append(
+                checks.Warning(
+                    f"STAPEL_AGENT['PROVIDER_FALLBACK_CHAIN'] references "
+                    f"unknown LLM provider {ref!r} (effective registry: "
+                    f"{sorted(effective) or 'empty'}).",
+                    hint=(
+                        "Register it via STAPEL_AGENT['PROVIDERS'] / "
+                        "stapel_agent.providers.register_provider(), or fix "
+                        "the name. Until then the chain is decorative: when "
+                        "the primary runs out of credits the call still fails."
+                    ),
+                    id="stapel_agent.W019",
+                )
+            )
+            continue
+        fallback_target = effective.get(ref)
+        try:
+            resolved = (
+                import_string(fallback_target)
+                if isinstance(fallback_target, str)
+                else fallback_target
+            )
+            reason = resolved.configuration_error()
+        except Exception:  # import/interface problems are W001/W002's job
+            reason = None
+        if reason:
+            issues.append(
+                checks.Warning(
+                    f"Fallback LLM provider {ref!r} is registered but not "
+                    f"usable: {reason}. It cannot answer when "
+                    f"{default!r} refuses.",
+                    hint=(
+                        "Configure its credentials, or remove it from "
+                        "STAPEL_AGENT['PROVIDER_FALLBACK_CHAIN'] so the "
+                        "settings file does not claim redundancy the "
+                        "deployment does not have."
+                    ),
+                    id="stapel_agent.W019",
                 )
             )
 

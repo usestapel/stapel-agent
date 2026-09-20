@@ -10,7 +10,14 @@ from __future__ import annotations
 import requests
 
 from ..conf import agent_settings
-from .base import LlmProvider, ProviderError, ProviderResult, ProviderTimeout
+from .base import (
+    LlmProvider,
+    ProviderError,
+    ProviderResult,
+    ProviderTimeout,
+    RetryableProviderError,
+    status_error,
+)
 
 
 # The token ceiling is spelled two ways across OpenAI-dialect endpoints:
@@ -140,21 +147,36 @@ class OpenAICompatProvider(LlmProvider):
                 proxies=self._proxies(),
             )
         except requests.Timeout as exc:
-            raise ProviderTimeout("Execution timed out") from exc
+            raise ProviderTimeout(
+                "Execution timed out", provider=self.name
+            ) from exc
         except requests.RequestException as exc:
-            raise ProviderError(f"OpenAI-compatible endpoint unreachable: {exc}") from exc
+            raise RetryableProviderError(
+                f"OpenAI-compatible endpoint unreachable: {exc}",
+                provider=self.name,
+                reason="transport",
+            ) from exc
 
         if response.status_code >= 400:
-            raise ProviderError(
-                f"OpenAI-compatible endpoint returned HTTP "
-                f"{response.status_code}: {response.text[:500]}"
+            # Classified, not flattened. This endpoint answers an
+            # exhausted account with 403 and a sentence about credits;
+            # as one undifferentiated ProviderError that ended every
+            # summary of that day rather than moving to the next
+            # provider (2026-09-20).
+            raise status_error(
+                response.status_code,
+                response.text,
+                provider=self.name,
+                label="OpenAI-compatible endpoint",
             )
         try:
             data = response.json()
             text = data["choices"][0]["message"]["content"] or ""
         except (ValueError, LookupError, TypeError) as exc:
-            raise ProviderError(
-                f"Unexpected response from OpenAI-compatible endpoint: {exc}"
+            raise RetryableProviderError(
+                f"Unexpected response from OpenAI-compatible endpoint: {exc}",
+                provider=self.name,
+                reason="unavailable",
             ) from exc
 
         usage = data.get("usage") or {}

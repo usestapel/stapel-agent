@@ -1,4 +1,12 @@
-"""One classification of a provider's refusal, shared by every adapter.
+"""The STT spelling of :mod:`stapel_agent.failures` — one classification
+of a provider's refusal, shared by every adapter.
+
+The table and the classifier itself now live one level up, because the
+text surface learned the same lesson the same way a year later (see that
+module). This one keeps what is genuinely about transcription: the
+exception classes the STT chain raises and the constructors that pick
+between them.
+
 
 The defect this module closes (a client stand in production, 2026-09-09 →
 2026-09-12): every adapter classified by STATUS CLASS — 429 retryable,
@@ -50,124 +58,26 @@ from __future__ import annotations
 
 from typing import Optional
 
+from ..failures import (  # noqa: F401  (re-exported: this module is the STT spelling)
+    AUTH_MARKERS,
+    FATAL_REASONS,
+    MEDIA_STATUSES,
+    QUOTA_MARKERS,
+    REASON_AUTH,
+    REASON_JOB,
+    REASON_LANGUAGE,
+    REASON_MEDIA,
+    REASON_QUOTA,
+    REASON_RATE,
+    REASON_SERVER,
+    REASON_TIMEOUT,
+    REASON_TRANSPORT,
+    REASON_UNAVAILABLE,
+    REASON_UNSUPPORTED,
+    classify_status,
+)
+from ..failures import PHRASES as _PHRASES  # noqa: F401  (kept: tests read it)
 from .base import RetryableTranscriptionError, TranscriptionError
-
-REASON_QUOTA = "quota"
-REASON_AUTH = "auth"
-REASON_RATE = "rate"
-REASON_SERVER = "server"
-REASON_UNAVAILABLE = "unavailable"
-REASON_UNSUPPORTED = "unsupported"
-REASON_TIMEOUT = "timeout"
-REASON_TRANSPORT = "transport"
-REASON_MEDIA = "media"
-REASON_JOB = "job"
-#: The caller named a language nothing can resolve — raised by
-#: ``stt.languages.canonical_language`` at the boundary, before a provider
-#: is chosen. Fatal for the same reason ``media`` is: the next engine in
-#: the chain would fail on it identically. It is never produced by
-#: classifying a provider RESPONSE, which is why no branch of
-#: ``classify_status`` returns it.
-REASON_LANGUAGE = "language"
-
-#: The reasons that stop the fallback chain. Everything else walks it.
-FATAL_REASONS = frozenset({REASON_MEDIA, REASON_JOB, REASON_LANGUAGE})
-
-#: Statuses providers use for "the request/media itself is wrong". They are
-#: fatal ONLY when the body does not say quota/auth — see ``classify_status``.
-MEDIA_STATUSES = frozenset({400, 413, 415, 422})
-
-#: Substrings that mean "the account cannot pay for this call". Matched
-#: case-insensitively anywhere in the body, so they hit both a JSON error
-#: code (``"code": "quota_exceeded"``) and prose ("You have 18 credits
-#: remaining").
-QUOTA_MARKERS = (
-    "quota",
-    "credit",
-    "billing",
-    "insufficient_funds",
-    "insufficient funds",
-    "insufficient balance",
-    "payment",
-    "past_due",
-    "unpaid",
-    "subscription",
-    "free tier",
-    "usage limit",
-    "limit_exceeded",
-    "plan_limit",
-    "out of funds",
-    "top up",
-    "top-up",
-    "upgrade your",
-)
-
-#: Substrings that mean "these credentials are not usable" — needed because
-#: some providers answer a bad key with 400/422 rather than 401.
-AUTH_MARKERS = (
-    "api key",
-    "api_key",
-    "apikey",
-    "unauthorized",
-    "unauthenticated",
-    "authentication",
-    "not authorized",
-    "invalid_token",
-    "invalid token",
-    "forbidden",
-    "permission",
-)
-
-#: Human half of the message, so a log line reads without a lookup table.
-_PHRASES = {
-    REASON_QUOTA: "quota/billing refused",
-    REASON_AUTH: "auth refused",
-    REASON_RATE: "rate-limited",
-    REASON_SERVER: "server error",
-    REASON_UNAVAILABLE: "provider unavailable",
-    REASON_UNSUPPORTED: "unsupported request",
-    REASON_MEDIA: "rejected the media",
-}
-
-
-def _has(text: str, markers: tuple[str, ...]) -> bool:
-    return any(marker in text for marker in markers)
-
-
-def classify_status(status_code: int, body: str = "") -> tuple[bool, str]:
-    """``(fatal, reason)`` for one non-2xx provider answer.
-
-    The body is advisory — an empty one still classifies, it just cannot
-    upgrade a status to ``quota``/``auth``.
-    """
-    text = (body or "").lower()
-
-    if status_code >= 500:
-        return False, REASON_SERVER
-    if status_code == 402:  # Payment Required — never ambiguous
-        return False, REASON_QUOTA
-    if status_code == 429:
-        # A 429 can be throttling OR the monthly allowance; the body is
-        # what tells them apart, and an operator needs the difference
-        # (one clears by itself, the other needs a card).
-        return False, REASON_QUOTA if _has(text, QUOTA_MARKERS) else REASON_RATE
-    if status_code in (401, 403, 407):
-        return False, REASON_QUOTA if _has(text, QUOTA_MARKERS) else REASON_AUTH
-    if status_code in MEDIA_STATUSES:
-        if _has(text, QUOTA_MARKERS):
-            return False, REASON_QUOTA
-        if _has(text, AUTH_MARKERS):
-            return False, REASON_AUTH
-        # Unsupported format, too long, corrupt, malformed params: the
-        # only family the next provider would fail on identically.
-        return True, REASON_MEDIA
-    if status_code >= 400:
-        # 404/405/409/451/... — the endpoint, the deployment's config or
-        # the provider's own state. Never the audio.
-        return False, REASON_UNAVAILABLE
-    # A non-2xx below 400 is a redirect the client did not follow: the
-    # provider did not answer the call, so the next one gets a turn.
-    return False, REASON_UNAVAILABLE
 
 
 def status_error(

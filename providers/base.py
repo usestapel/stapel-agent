@@ -19,11 +19,52 @@ class ProviderError(Exception):
 
     The service layer converts it into a ``status: "failure"`` response
     (HTTP 200) and an ``error`` PromptLog row.
+
+    *reason* is the classification from :mod:`stapel_agent.failures` —
+    ``quota``, ``auth``, ``server``, ``media`` and the rest. It is what
+    the provider chain walks on, what the ledger row records per
+    attempt, and what tells "this account is out of credits" from "this
+    prompt is malformed" without matching on message text. ``None``
+    means an adapter that predates the taxonomy raised it; the service
+    treats that as terminal, which is what it did before this field
+    existed.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str = "",
+        status_code: int | None = None,
+        reason: str | None = None,
+    ):
+        super().__init__(message)
+        self.provider = provider
+        self.status_code = status_code
+        self.reason = reason
+
+
+class RetryableProviderError(ProviderError):
+    """The provider could not serve this call — the request is fine.
+
+    Quota, auth, throttling, 5xx, an endpoint that is down. The service
+    walks the rest of the configured chain instead of failing the
+    caller's work, exactly as the STT chain does for the same conditions
+    (see :mod:`stapel_agent.failures` for the incident on each side).
     """
 
 
-class ProviderTimeout(ProviderError):
-    """A completion timed out. Logged with status ``timeout``."""
+class ProviderTimeout(RetryableProviderError):
+    """A completion timed out. Logged with status ``timeout``.
+
+    Retryable since 0.28.0: it was a plain ``ProviderError``, which the
+    chain would have read as "this prompt cannot be completed by
+    anyone". A provider that stalls says nothing about the next one.
+    """
+
+    def __init__(self, message: str, *, provider: str = "", **kwargs):
+        kwargs.setdefault("reason", "timeout")
+        super().__init__(message, provider=provider, **kwargs)
 
 
 @dataclass
@@ -128,4 +169,37 @@ class LlmProvider(ABC):
         """
 
 
-__all__ = ["LlmProvider", "ProviderError", "ProviderResult", "ProviderTimeout"]
+def status_error(
+    status_code: int,
+    body: str = "",
+    *,
+    provider: str,
+    label: str = "",
+) -> ProviderError:
+    """The classified exception for a non-2xx answer (raise it).
+
+    The one place an HTTP status becomes a disposition for text calls,
+    so an adapter never has to decide — and never again turns "your team
+    has used all available credits" into the same object as "this image
+    is corrupt" (2026-09-20; see :mod:`stapel_agent.failures`).
+    """
+    from ..failures import PHRASES, classify_status
+
+    fatal, reason = classify_status(status_code, body)
+    phrase = PHRASES.get(reason, reason)
+    where = label or provider
+    message = (
+        f"{where} returned HTTP {status_code} ({phrase}): {(body or '')[:500]}"
+    )
+    cls = ProviderError if fatal else RetryableProviderError
+    return cls(message, provider=provider, status_code=status_code, reason=reason)
+
+
+__all__ = [
+    "LlmProvider",
+    "ProviderError",
+    "ProviderResult",
+    "ProviderTimeout",
+    "RetryableProviderError",
+    "status_error",
+]

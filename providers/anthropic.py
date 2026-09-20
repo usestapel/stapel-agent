@@ -8,7 +8,13 @@ clear ProviderError on first use, never at import.
 from __future__ import annotations
 
 from ..conf import agent_settings
-from .base import LlmProvider, ProviderError, ProviderResult
+from .base import (
+    LlmProvider,
+    ProviderError,
+    ProviderResult,
+    RetryableProviderError,
+    status_error,
+)
 
 
 class AnthropicProvider(LlmProvider):
@@ -82,7 +88,20 @@ class AnthropicProvider(LlmProvider):
         try:
             message = client.messages.create(**kwargs)
         except Exception as exc:
-            raise ProviderError(str(exc)) from exc
+            # The SDK's exceptions carry the HTTP status, which is the
+            # whole input the taxonomy needs; an SDK that does not is
+            # classified by its message alone (an empty status reads as
+            # "the provider did not answer" — retryable, never the
+            # customer's prompt).
+            status = getattr(exc, "status_code", None)
+            body = getattr(exc, "message", None) or str(exc)
+            if isinstance(status, int):
+                raise status_error(
+                    status, body, provider=self.name, label="Anthropic"
+                ) from exc
+            raise RetryableProviderError(
+                str(exc), provider=self.name, reason="unavailable"
+            ) from exc
 
         text = "".join(
             block.text

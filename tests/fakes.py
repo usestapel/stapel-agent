@@ -31,7 +31,7 @@ from stapel_agent.rerank.base import (
     rank_results,
     require_rerank_inputs,
 )
-from stapel_agent.providers.base import LlmProvider, ProviderResult
+from stapel_agent.providers.base import LlmProvider, ProviderResult, status_error
 from stapel_agent.stt.base import (
     NormalizedTranscript,
     NormalizedUtterance,
@@ -102,6 +102,71 @@ class CustomProvider(FakeProvider):
     """A second provider class so tests can tell registrations apart."""
 
     name = "custom"
+
+
+class OutOfCreditsProvider(FakeProvider):
+    """A provider whose team has spent its allowance.
+
+    The body is the one a client's endpoint actually returned on
+    2026-09-20, because the classification hangs on the words in it.
+    """
+
+    name = "out-of-credits"
+    body = (
+        '{"code": "The model is not available for your team. Your team has '
+        'either used all available credits or reached its monthly spending '
+        'limit."}'
+    )
+
+    def complete(self, *, prompt, model, system_prompt=None, images=None,
+                 max_tokens=None, schema=None):
+        cls = type(self)
+        cls.calls.append({"prompt": prompt, "model": model})
+        raise status_error(
+            403, cls.body, provider=cls.name, label="OpenAI-compatible endpoint"
+        )
+
+
+class BadRequestProvider(FakeProvider):
+    """A provider that refuses the REQUEST — the one thing a chain must
+    not walk, because the next provider refuses it identically."""
+
+    name = "bad-request"
+
+    def complete(self, *, prompt, model, system_prompt=None, images=None,
+                 max_tokens=None, schema=None):
+        cls = type(self)
+        cls.calls.append({"prompt": prompt, "model": model})
+        raise status_error(
+            422,
+            '{"error": "prompt contains an unsupported content block"}',
+            provider=cls.name,
+        )
+
+
+class UnreachableProvider(FakeProvider):
+    """The endpoint is down — retryable, and the chain walks on."""
+
+    name = "unreachable"
+
+    def complete(self, *, prompt, model, system_prompt=None, images=None,
+                 max_tokens=None, schema=None):
+        cls = type(self)
+        cls.calls.append({"prompt": prompt, "model": model})
+        raise status_error(503, "upstream connect error", provider=cls.name)
+
+
+class SecondaryProvider(FakeProvider):
+    """The fallback that answers when the primary cannot."""
+
+    name = "secondary"
+
+    @classmethod
+    def reset(cls):
+        super().reset()
+        cls.result = ProviderResult(
+            text="the fallback's answer", input_tokens=7, output_tokens=3
+        )
 
 
 class NoVisionProvider(FakeProvider):

@@ -45,10 +45,36 @@ TWO THRESHOLDS, EACH FIRING ONCE PER CROSSING
     ``WARN_RATIO`` (10%) and ``CRITICAL_RATIO`` (2%). Both are alerted, and
     they are separate severities rather than one repeated line, because
     they ask for different things: at 10% someone should plan a top-up, at
-    2% someone should do it now. The scheduled poll is the deduplication —
-    once an hour per provider per severity — so no suppression state is
-    kept here; a watchdog that remembers what it already said is a watchdog
-    that goes quiet after a restart at exactly the wrong moment.
+    2% someone should do it now. The scheduled poll is its own
+    deduplication — once an hour per provider — so the sweep keeps no
+    suppression state; a watchdog that remembers what it already said is a
+    watchdog that goes quiet after a restart at exactly the wrong moment.
+
+THE REFUSAL PATH IS RATE-LIMITED, AND ONLY IT
+    The sweep runs hourly; refusals run at the rate customers upload. A
+    client stand exhausted one provider's allowance and every recording
+    that hit it raised its own alert — ten recordings, ten pages, one
+    fact. So the live-refusal path (and only it) carries a throttle:
+    ``ERROR_LOG_INTERVAL_SECONDS`` (3600) per provider, the first refusal
+    in the window logged at ERROR and alerted, the rest counted and
+    folded into the next one. The count is carried in the message, so the
+    line still says how bad it is rather than hiding the scale it
+    suppressed.
+
+    The throttle is per PROCESS, deliberately: shared state would need a
+    cache every deployment has to configure, and the failure mode of
+    getting it wrong is silence. Four workers mean at most four lines an
+    hour instead of four hundred, which is the difference that matters.
+
+THE STATE IS A GAUGE, NOT ONLY A LINE
+    ``stt_provider_quota_exhausted{provider}`` is 1 while a provider is
+    known to be refusing for quota and 0 once one of its calls succeeds
+    or a poll finds headroom. A log line answers "did something happen";
+    a gauge answers "is it happening NOW", which is the question an alert
+    rule and a dashboard both ask. It is recorded for every provider that
+    refuses, including the ones with no balance endpoint at all — which
+    is most of them, and exactly the case
+    ``stt_provider_quota_ratio`` cannot cover.
 """
 from __future__ import annotations
 
@@ -79,8 +105,17 @@ provider_quota_low = django.dispatch.Signal()
 #: the deployment's own namespace.
 QUOTA_GAUGE = "stt_provider_quota_ratio"
 
+#: 1 while a provider is known to be refusing calls for quota, 0 once one
+#: of its calls succeeds or a poll finds headroom. Unlike the ratio gauge
+#: this one needs no balance endpoint, so it covers every provider.
+EXHAUSTED_GAUGE = "stt_provider_quota_exhausted"
+
 SEVERITY_WARNING = "warning"
 SEVERITY_CRITICAL = "critical"
+
+#: The throttle key for one provider's refusals, in the shared slot table.
+def _slot_key(provider: str) -> str:
+    return f"stt_provider_out_of_credits:{provider}"
 
 
 def watchdog_settings() -> dict:
@@ -159,6 +194,69 @@ def record_gauge(provider: str, ratio: float) -> None:
         )
 
 
+def record_exhausted(provider: str, exhausted: bool) -> None:
+    """Record ``stt_provider_quota_exhausted{provider}``. Never raises.
+
+    Written on both edges — 1 when a call is refused for quota, 0 when
+    one succeeds — because a gauge that is only ever set to 1 is a
+    counter with a misleading name, and an operator watching it would
+    never see the recovery.
+    """
+    from ..provider_health import record_state_gauge
+
+    record_state_gauge(
+        EXHAUSTED_GAUGE,
+        provider,
+        1.0 if exhausted else 0.0,
+        description=(
+            "1 while this STT provider is refusing calls because its "
+            "quota/billing allowance is exhausted, 0 otherwise."
+        ),
+    )
+
+
+def error_log_interval(settings: dict | None = None) -> float:
+    """Seconds between two loud refusals for one provider.
+
+    ``STT_QUOTA_WATCHDOG["ERROR_LOG_INTERVAL_SECONDS"]`` when the
+    deployment states one — the STT chain may legitimately want a
+    different cadence from the text one — otherwise the fleet-wide
+    ``PROVIDER_ALERT_INTERVAL_SECONDS``.
+    """
+    from ..provider_health import alert_interval
+
+    conf = settings if settings is not None else watchdog_settings()
+    stated = conf.get("ERROR_LOG_INTERVAL_SECONDS")
+    if stated is None:
+        return alert_interval()
+    try:
+        return float(stated)
+    except (TypeError, ValueError):
+        logger.warning(
+            "stapel-agent: STT_QUOTA_WATCHDOG['ERROR_LOG_INTERVAL_SECONDS'] "
+            "is not a number — using the fleet default.",
+        )
+        return alert_interval()
+
+
+def _claim_refusal_slot(provider: str, interval: float) -> tuple[bool, int]:
+    """``(be_loud, suppressed_since_the_last_loud_one)`` for one refusal."""
+    from ..provider_health import claim_slot
+
+    return claim_slot(_slot_key(provider), interval)
+
+
+def reset_refusal_throttle(provider: str = "") -> None:
+    """Forget what was already said, for *provider* or for all of them.
+
+    Called when a provider serves a request again: the next exhaustion is
+    a NEW fact and has to be as loud as the first one was.
+    """
+    from ..provider_health import clear_slot
+
+    clear_slot(_slot_key(provider) if provider else "")
+
+
 def notify_quota_low(
     provider: str,
     ratio: float,
@@ -167,6 +265,7 @@ def notify_quota_low(
     quota: ProviderQuota | None = None,
     source: str = "watchdog",
     detail: str = "",
+    log_level: int = logging.WARNING,
 ) -> None:
     """Raise the alert on all three seams. Never raises.
 
@@ -185,7 +284,7 @@ def notify_quota_low(
         )
     if detail:
         message += f" — {detail}"
-    logger.warning("%s [source=%s]", message, source)
+    logger.log(log_level, "%s [source=%s]", message, source)
 
     context = {
         "provider": provider,
@@ -237,10 +336,33 @@ def report_quota_refusal(provider: str, detail: str = "") -> None:
 
     Quiet when the watchdog is disabled — one switch owns both paths, so
     turning it off turns off all of it rather than half.
+
+    LOUD ONCE PER PROVIDER PER WINDOW. The gauges are written on every
+    refusal (they are idempotent and carry no volume), the ERROR line and
+    the alert at most once per ``ERROR_LOG_INTERVAL_SECONDS``, carrying
+    the number of refusals folded into it. An exhausted account refuses
+    once per upload, and a page per upload is a page nobody reads.
     """
     if not enabled():
         return
     record_gauge(provider, 0.0)
+    record_exhausted(provider, True)
+
+    loud, suppressed = _claim_refusal_slot(provider, error_log_interval())
+    if not loud:
+        logger.info(
+            "stapel-agent: STT provider %r refused for quota again "
+            "(%d since the last alert, suppressed for up to %.0fs)",
+            provider, suppressed, error_log_interval(),
+        )
+        return
+
+    if suppressed:
+        detail = (
+            f"{detail} [+{suppressed} further refusal(s) since the last alert]"
+            if detail
+            else f"+{suppressed} further refusal(s) since the last alert"
+        )
     notify_quota_low(
         provider,
         0.0,
@@ -248,7 +370,25 @@ def report_quota_refusal(provider: str, detail: str = "") -> None:
         quota=None,
         source="refusal",
         detail=detail,
+        # ERROR, not WARNING: unlike a low balance, this is not a
+        # forecast — recordings are failing right now.
+        log_level=logging.ERROR,
     )
+
+
+def report_quota_served(provider: str) -> None:
+    """*provider* answered a call — it is not exhausted. Never raises.
+
+    The other edge of :data:`EXHAUSTED_GAUGE`, and the reset of the
+    refusal throttle: after a top-up the first new exhaustion has to be
+    as loud as the first one ever was, and a gauge that only ever rises
+    would keep an alert rule firing over an account that was refilled an
+    hour ago.
+    """
+    if not enabled():
+        return
+    reset_refusal_throttle(provider)
+    record_exhausted(provider, False)
 
 
 def provider_quota(name: str, *, timeout_seconds: int | None = None):
@@ -304,6 +444,13 @@ def check_provider_quotas(*, timeout_seconds: int | None = None) -> list[dict]:
             continue
         ratio = quota.remaining_ratio
         record_gauge(name, ratio)
+        # The poll is the only thing that can clear the exhausted gauge
+        # for a provider nobody is calling any more — a stand that fell
+        # back to a second engine would otherwise stay red until someone
+        # re-routed traffic back at the refilled one.
+        record_exhausted(name, ratio <= 0.0)
+        if ratio > 0.0:
+            reset_refusal_throttle(name)
         severity = severity_for(ratio, conf)
         if severity:
             notify_quota_low(
@@ -321,16 +468,21 @@ def check_provider_quotas(*, timeout_seconds: int | None = None) -> list[dict]:
 
 
 __all__ = [
+    "EXHAUSTED_GAUGE",
     "QUOTA_GAUGE",
     "SEVERITY_CRITICAL",
     "SEVERITY_WARNING",
     "check_provider_quotas",
     "enabled",
+    "error_log_interval",
     "notify_quota_low",
     "provider_quota",
     "provider_quota_low",
+    "record_exhausted",
     "record_gauge",
     "report_quota_refusal",
+    "report_quota_served",
+    "reset_refusal_throttle",
     "severity_for",
     "watchdog_settings",
 ]

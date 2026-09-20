@@ -472,39 +472,167 @@ def complete(
 
     schema, _model = _resolve_schema(schema)
 
+    chain = provider_chain(provider)
+    if not chain:
+        return {"status": "failure", "reason": "No LLM provider configured"}
+
+    # The forensic record, one entry per provider tried — the same shape
+    # the STT chain writes, for the same reason: when the whole chain
+    # declines, the answer has to name each provider and why, or the
+    # interesting half ("out of credits") hides behind the boring one.
+    attempts: list[dict] = []
+    fallback_used = False
+
+    def _attempt(name: str, *, reason: str | None, error) -> None:
+        attempts.append(
+            {
+                "provider": name,
+                "reason": reason,
+                "error": str(error)[:500] if error is not None else None,
+            }
+        )
+
+    def _chain_failure() -> dict:
+        # One provider declining is reported in its own words — that is
+        # what every caller of this function has always received. Several
+        # are named together, because with a chain the last message alone
+        # is the least informative one.
+        if len(attempts) == 1:
+            return {"status": "failure", "reason": attempts[0]["error"] or ""}
+        return {
+            "status": "failure",
+            "reason": "all LLM providers failed: "
+            + "; ".join(
+                f"{a['provider']} ({a['reason'] or 'unknown'}): "
+                f"{(a['error'] or '')[:200]}"
+                for a in attempts
+            ),
+            "attempts": attempts,
+        }
+
+    for chain_index, provider_name in enumerate(chain):
+        fallback_used = chain_index > 0
+        result_or_none = _complete_once(
+            provider_name=provider_name,
+            models=models,
+            model_size=model_size,
+            prompt=prompt,
+            system_prompt=system_prompt,
+            source=source,
+            images=images,
+            schema=schema,
+            max_tokens=max_tokens,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            metadata=metadata,
+            idempotency_key=idempotency_key,
+            skip_cache=skip_cache,
+            fallback_used=fallback_used,
+            attempts=attempts,
+            record_attempt=_attempt,
+        )
+        if result_or_none is not None:
+            return result_or_none
+
+    return _chain_failure()
+
+
+def provider_chain(provider: str | None = None) -> list[str]:
+    """Ordered, de-duplicated text-LLM provider names to try.
+
+    Mirrors ``stt.router.select_chain``, deliberately: one fleet should
+    not have two different answers to "which provider answers this, and
+    who answers when it cannot".
+
+    1. an explicit *provider* → that one alone, no fallback (a caller
+       that pinned a provider is measuring it, and masking its failures
+       would defeat the purpose);
+    2. otherwise ``[DEFAULT_PROVIDER] + PROVIDER_FALLBACK_CHAIN``.
+    """
+    if provider:
+        return [provider]
+    chain = [agent_settings.DEFAULT_PROVIDER] + list(
+        agent_settings.PROVIDER_FALLBACK_CHAIN or []
+    )
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for name in chain:
+        if name and name not in seen:
+            seen.add(name)
+            ordered.append(name)
+    return ordered
+
+
+def _complete_once(
+    *,
+    provider_name: str,
+    models: dict,
+    model_size: str,
+    prompt: str,
+    system_prompt: str | None,
+    source: str,
+    images,
+    schema,
+    max_tokens,
+    user_id,
+    workspace_id,
+    metadata,
+    idempotency_key,
+    skip_cache: bool,
+    fallback_used: bool,
+    attempts: list[dict],
+    record_attempt,
+) -> dict | None:
+    """One provider's turn. A dict ends the chain; ``None`` walks on.
+
+    ``None`` is returned exactly for the conditions another provider may
+    serve — this one is unregistered, unloadable, lacks a capability, is
+    out of credits, is throttled, is down. A refusal of the REQUEST
+    itself (see :mod:`stapel_agent.failures`) returns the failure dict,
+    because the next provider would refuse it identically.
+    """
+    from . import checkpoint
+    from .failures import TERMINAL_INPUT, disposition, is_out_of_credits
+
     # Resolve the provider/model BEFORE the cache lookup: the cache key
     # now includes the resolved provider + model + size, so we need them
     # in hand before consulting the policy (instantiation is cheap and
     # side-effect-free — no network call happens until backend.complete).
-    provider_name = provider or agent_settings.DEFAULT_PROVIDER
     try:
         backend = get_provider(provider_name)
     except ProviderError as exc:
-        return {"status": "failure", "reason": str(exc)}
+        record_attempt(provider_name, reason="unavailable", error=exc)
+        return None
     except ImportError as exc:
-        return {
-            "status": "failure",
-            "reason": f"Provider '{provider_name}' could not be loaded: {exc}",
-        }
+        record_attempt(
+            provider_name,
+            reason="unavailable",
+            error=f"Provider '{provider_name}' could not be loaded: {exc}",
+        )
+        return None
 
     if images and not backend.supports_images:
-        return {
-            "status": "failure",
-            "reason": f"Provider '{provider_name}' does not support image input",
-        }
+        record_attempt(
+            provider_name,
+            reason="unsupported",
+            error=f"Provider '{provider_name}' does not support image input",
+        )
+        return None
 
     if schema and not backend.supports_schema:
         # Deliberately a failure, not a warning-and-continue: the caller
         # asked for an answer that parses by construction, and answering
         # from an unconstrained decoder returns something that may parse
         # and still be structurally wrong (see supports_schema).
-        return {
-            "status": "failure",
-            "reason": (
+        record_attempt(
+            provider_name,
+            reason="unsupported",
+            error=(
                 f"Provider '{provider_name}' cannot constrain output to a "
                 f"JSON schema — pick a provider that can, or drop the schema"
             ),
-        }
+        )
+        return None
 
     model = backend.resolve_model(model_size, models[model_size])
 
@@ -531,6 +659,8 @@ def complete(
                 "status": "ok",
                 "result": cached,
                 "usage": {"input_tokens": 0, "output_tokens": 0},
+                "provider_used": provider_name,
+                "fallback_used": fallback_used,
             }
 
     # ── The checkpoint, read side ──────────────────────────────────────
@@ -538,8 +668,6 @@ def complete(
     # prompt travels as a hash: this table is storage, and a second
     # verbatim copy of every prompt is a second thing retention has to
     # find.
-    from . import checkpoint
-
     ckpt_key = ""
     if idempotency_key:
         ckpt_key = checkpoint.call_key(
@@ -600,7 +728,13 @@ def complete(
                     "cached": True,
                 },
             )
-            return {"status": "ok", "result": stored.get("text"), "usage": usage}
+            return {
+                "status": "ok",
+                "result": stored.get("text"),
+                "usage": usage,
+                "provider_used": provider_name,
+                "fallback_used": fallback_used,
+            }
 
     extra_meta = {}
     if images:
@@ -643,18 +777,59 @@ def complete(
         result = backend.complete(
             prompt=prompt, model=model, system_prompt=system_prompt, **call_kwargs
         )
-    except ProviderTimeout as exc:
-        log.status = PromptStatus.TIMEOUT
-        log.error_message = str(exc)
-        log.duration_ms = int((time.monotonic() - start) * 1000)
-        log.save()
-        return {"status": "failure", "reason": str(exc)}
     except ProviderError as exc:
-        log.status = PromptStatus.ERROR
+        # One exception family, three outcomes — the taxonomy decides,
+        # never the message text. A timeout keeps its own ledger status
+        # because that is the column operators query; everything else is
+        # an error row.
+        reason = getattr(exc, "reason", None)
+        log.status = (
+            PromptStatus.TIMEOUT
+            if isinstance(exc, ProviderTimeout)
+            else PromptStatus.ERROR
+        )
         log.error_message = str(exc)
         log.duration_ms = int((time.monotonic() - start) * 1000)
+        if reason or fallback_used:
+            log.metadata = {
+                **(log.metadata or {}),
+                **({"reason": reason} if reason else {}),
+                **({"fallback_used": True} if fallback_used else {}),
+            }
         log.save()
-        return {"status": "failure", "reason": str(exc)}
+
+        if is_out_of_credits(reason):
+            # The provider has just said, about this second, that this
+            # account cannot pay. Raised once per provider per window so
+            # an exhausted key is one alert, not one per recording.
+            try:
+                from .provider_health import report_llm_out_of_credits
+
+                report_llm_out_of_credits(provider_name, detail=str(exc)[:300])
+            except Exception:  # pragma: no cover - defensive
+                logger.warning(
+                    "stapel-agent: out-of-credits alert failed for %s",
+                    provider_name, exc_info=True,
+                )
+
+        record_attempt(provider_name, reason=reason, error=exc)
+        if disposition(reason) == TERMINAL_INPUT:
+            # The request itself is what was refused; the next provider
+            # would refuse it identically, so the chain ends here.
+            return {"status": "failure", "reason": str(exc)}
+        return None
+
+    # This provider just answered, so whatever it refused an hour ago it
+    # is not refusing now: clear its gauge and re-arm its alert.
+    try:
+        from .provider_health import report_llm_served
+
+        report_llm_served(provider_name)
+    except Exception:  # pragma: no cover - defensive
+        logger.debug(
+            "stapel-agent: could not clear the credit state for %s",
+            provider_name, exc_info=True,
+        )
 
     # Checkpoint FIRST — the tokens are paid for; the ledger row, the
     # parse, the caller's own persistence may all still fail and retry.
@@ -683,6 +858,19 @@ def complete(
     log.cache_read_tokens = result.cache_read_tokens
     log.cache_write_tokens = result.cache_write_tokens
     log.duration_ms = int((time.monotonic() - start) * 1000)
+    # WHICH provider produced this, and what the chain cost to get here.
+    # On the row, not only in the reply: pricing reads the row, and a
+    # fallback answer priced against the primary's card is an invoice
+    # that does not describe what happened.
+    # Only when there was a chain to walk: on the single-provider
+    # deployment that is most of the fleet, an always-present
+    # "fallback_used": false is noise in every row forever.
+    if fallback_used or attempts:
+        log.metadata = {
+            **(log.metadata or {}),
+            "fallback_used": fallback_used,
+            **({"attempts": attempts} if attempts else {}),
+        }
     # Computed once and used twice: the caller's ``usage`` and the ledger
     # row carry the same number by construction, so a dashboard and an
     # invoice cannot disagree about one call.
@@ -714,7 +902,13 @@ def complete(
             user_id=scope,
         )
 
-    return {"status": "ok", "result": result.text, "usage": usage}
+    return {
+        "status": "ok",
+        "result": result.text,
+        "usage": usage,
+        "provider_used": provider_name,
+        "fallback_used": fallback_used,
+    }
 
 
 def complete_json(
@@ -1592,6 +1786,19 @@ def transcribe(
             _attempt(name, error_kind="unloadable", reason="unavailable", error=exc)
             logger.warning("stapel-agent: %s", failure_reason)
             continue
+
+        # This provider just served a request, so whatever it refused an
+        # hour ago it is not refusing now: clear the exhausted gauge and
+        # re-arm its alert. Never allowed to break a paid answer.
+        try:
+            from .stt.quota import report_quota_served
+
+            report_quota_served(name)
+        except Exception:  # pragma: no cover - defensive
+            logger.debug(
+                "stapel-agent: could not clear the quota state for %s", name,
+                exc_info=True,
+            )
 
         # ── The checkpoint, write side ─────────────────────────────────
         # FIRST, before the ledger row, before the return, before the

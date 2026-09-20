@@ -3,6 +3,69 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.28.0] — 2026-09-20
+
+### Fixed — an out-of-credits TEXT provider ended the customer's work
+
+A client stand's summariser endpoint answered
+`403 {"code": "... your team has either used all available credits or
+reached its monthly spending limit"}`. `providers/openai_compat.py`
+turned every status >= 400 into one flat `ProviderError`, `complete()`
+had no chain to walk, and summarisation is best-effort at the caller —
+so three of that day's seven completed recordings simply had no summary,
+and nothing was alerted.
+
+This is the STT defect of `stt/failures.py` (41 recordings, an ElevenLabs
+quota 401 read as bad audio) arriving on the text surface. Two surfaces,
+one defect, so now one classifier:
+
+* **`stapel_agent.failures`** (new) holds the taxonomy both surfaces
+  read: `classify_status(status, body)` and `disposition(reason)` →
+  `retryable_same_provider` / `fallback_next_provider` /
+  `terminal_input`. `stt/failures` keeps its names and re-exports them,
+  so nothing that imported them moves. A second copy of the quota
+  markers is a copy that goes stale the first time a vendor invents a
+  new phrase for "pay us" — `spending limit` is this release's.
+* **`STAPEL_AGENT["PROVIDER_FALLBACK_CHAIN"]`** (new, empty by default,
+  `NO_ENV`) is the text twin of `STT_FALLBACK_CHAIN`. `complete()` walks
+  it for every condition that is the PROVIDER's — out of credits, a
+  spending limit, a refused key, a 5xx, a capability it lacks — and
+  never for one that is the REQUEST's. An explicitly pinned `provider`
+  is still answered alone, unmasked.
+* Every attempt is journaled on the ledger row
+  (`metadata.attempts[] = {provider, reason, error}`, `fallback_used`),
+  and the reply now carries `provider_used` / `fallback_used`. **Pricing
+  follows the provider that actually answered**, because the row it
+  prices is that provider's.
+* `ProviderError` carries `provider` / `status_code` / `reason`;
+  `RetryableProviderError` is new and `ProviderTimeout` now derives from
+  it (a provider that stalls says nothing about the next one). Adapters
+  raise through `providers.base.status_error`. Third-party adapters that
+  raise a bare `ProviderError` are unchanged in behaviour: no reason
+  means terminal, which is what they got before.
+* `stapel_agent.W019` fails `manage.py check` when the chain names a
+  provider that is unknown or unusable — a chain of one misspelling
+  reads as redundancy in settings.py and delivers none.
+
+### Added — is a provider refusing RIGHT NOW, and was anyone told once
+
+The 2026-09-19 audit of a client stand found ten recordings lost to one
+exhausted STT account, each raising its own alert about the same fact,
+and nothing anywhere answering "is it exhausted now".
+
+* Gauges `stt_provider_quota_exhausted{provider}` and
+  `llm_provider_out_of_credits{provider}`: 1 while the provider is
+  refusing for quota/billing, 0 once one of its calls succeeds or a poll
+  finds headroom. Unlike `stt_provider_quota_ratio` they need no balance
+  endpoint, so they cover every provider — which is most of them.
+* One ERROR + one `stapel_alerts` capture per provider per
+  `PROVIDER_ALERT_INTERVAL_SECONDS` (3600, new), carrying the count of
+  refusals folded into it, under the stable fingerprint token
+  `llm_provider_out_of_credits:<provider>`. The gauges are still written
+  on every refusal: throttling the page must not throttle the state.
+* `stapel_agent.provider_health` (new) holds the shared mechanics;
+  `stt.quota` keeps its public surface and delegates to it.
+
 ## [0.27.0] — 2026-09-18
 
 ### Changed — the erasure protocol is core's; `erase_subject` stays ours

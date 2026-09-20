@@ -52,6 +52,10 @@ NO_ENV = (
     "CLI_BINARY",
     "PROVIDERS",
     "DEFAULT_PROVIDER",
+    # Which provider answers when the first cannot is code selection, and
+    # a second bill: it is stated in settings.py where a reviewer sees it,
+    # never assembled from a shell variable.
+    "PROVIDER_FALLBACK_CHAIN",
     "STT_PROVIDERS",
     "DEFAULT_STT_PROVIDER",
     "STT_FALLBACK_CHAIN",
@@ -134,6 +138,23 @@ agent_settings = AppSettings(
         # import_string in services.get_provider(name).
         "PROVIDERS": {},
         "DEFAULT_PROVIDER": "anthropic",
+        # Who answers when DEFAULT_PROVIDER cannot — the text twin of
+        # STT_FALLBACK_CHAIN, and empty for the same reason that one is:
+        # a second provider is a second bill, so a deployment states it.
+        #
+        # The chain is walked for every condition that is the PROVIDER's
+        # (out of credits, a spending limit, a refused key, a 5xx, a
+        # model it does not carry) and never for one that is the
+        # REQUEST's — see stapel_agent.failures. Until 0.28.0 there was
+        # no chain at all and every one of those conditions ended the
+        # caller's work: a client's summariser answered 403 "used all
+        # available credits" and a day of recordings completed with no
+        # summary (2026-09-20).
+        "PROVIDER_FALLBACK_CHAIN": [],
+        # How often ONE provider's out-of-credits refusals may raise an
+        # ERROR + alert. An exhausted account refuses once per customer
+        # upload; a page per upload is a page nobody reads.
+        "PROVIDER_ALERT_INTERVAL_SECONDS": 3600,
         # Anthropic SDK (read lazily at call time, never frozen at import).
         "ANTHROPIC_API_KEY": "",
         # Any OpenAI-compatible /chat/completions endpoint

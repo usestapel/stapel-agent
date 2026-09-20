@@ -249,6 +249,79 @@ class TestLiveRefusal:
         assert "quota" in result["reason"]
 
 
+@pytest.mark.django_db
+class TestExhaustedState:
+    """The gauge and the throttle added after the 2026-09-19 audit.
+
+    Ten recordings hit an exhausted ElevenLabs account in one week. Ten
+    refusals raised ten alerts about one fact, and nothing anywhere
+    answered "is it exhausted RIGHT NOW" — which is the question a
+    dashboard and an alert rule both ask, and the one a log line cannot.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clean(self):
+        quota.reset_refusal_throttle()
+        yield
+        quota.reset_refusal_throttle()
+
+    def test_a_refusal_raises_the_exhausted_gauge(self, probes, monkeypatch):
+        seen: list[tuple[str, str, float]] = []
+        monkeypatch.setattr(
+            "stapel_agent.provider_health.record_state_gauge",
+            lambda name, provider, value, description="": seen.append(
+                (name, provider, value)
+            ),
+        )
+
+        services.transcribe(AUDIO, provider="quota-stt")
+
+        assert ("stt_provider_quota_exhausted", "quota-stt", 1.0) in seen
+
+    def test_ten_refusals_in_a_window_raise_ONE_error(self, probes, caplog):
+        with caplog.at_level(logging.ERROR, logger="stapel_agent.stt.quota"):
+            for _ in range(10):
+                services.transcribe(AUDIO, provider="quota-stt")
+
+        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert len(errors) == 1
+        # ERROR, not WARNING: a low balance is a forecast, a refusal is
+        # recordings failing now.
+        assert "quota-stt" in errors[0].getMessage()
+
+    def test_every_refusal_still_reaches_the_gauge(self, probes, monkeypatch):
+        """Throttling the PAGE must not throttle the STATE."""
+        seen: list[tuple[str, str, float]] = []
+        monkeypatch.setattr(
+            "stapel_agent.provider_health.record_state_gauge",
+            lambda name, provider, value, description="": seen.append(
+                (name, provider, value)
+            ),
+        )
+
+        for _ in range(5):
+            services.transcribe(AUDIO, provider="quota-stt")
+
+        exhausted = [row for row in seen if row[0] == "stt_provider_quota_exhausted"]
+        assert len(exhausted) == 5
+
+    def test_a_provider_that_transcribes_again_clears_the_gauge(
+        self, probes, monkeypatch
+    ):
+        seen: list[tuple[str, str, float]] = []
+        monkeypatch.setattr(
+            "stapel_agent.provider_health.record_state_gauge",
+            lambda name, provider, value, description="": seen.append(
+                (name, provider, value)
+            ),
+        )
+
+        result = services.transcribe(AUDIO, provider="quota-probe-stt")
+
+        assert result["status"] == "ok"
+        assert ("stt_provider_quota_exhausted", "quota-probe-stt", 0.0) in seen
+
+
 class TestBeatEntry:
     def test_the_watchdog_has_a_schedulable_entry(self):
         celery = pytest.importorskip("celery")
