@@ -26,11 +26,18 @@ SO: A GAUGE FOR THE STATE, A THROTTLED ERROR FOR THE NEWS
       (``llm_provider_out_of_credits:<provider>``) so the alert store
       groups every occurrence into one issue instead of one per message.
 
-    The throttle is per PROCESS, deliberately: shared state would need a
-    cache every deployment has to configure, and the failure mode of
-    getting that wrong is silence. Four workers mean at most four lines
-    an hour instead of four hundred, which is the difference that
-    matters.
+    The throttle is per SERVICE. It used to be per PROCESS, on the
+    argument that shared state needs a cache every deployment has to
+    configure — and then a client host ran its services as gunicorn with
+    two workers plus a Celery pool, so "one alert per provider per hour"
+    became one per provider per hour PER WORKER. Six processes refusing
+    produce six pages about one fact, and the operator's answer to that
+    is a filter rule, after which the seventh — the real one — is
+    filtered too. The slot now lives on the shared cache
+    (``stapel_core.observability.throttle``), which falls back to the
+    per-process dict when no shared cache is configured; that fallback is
+    exactly the old behaviour, so a deployment without a cache loses
+    nothing it had.
 
 Nothing here raises. A provider that cannot be paid is a bad hour; an
 alerting path that can end a request is a bad architecture.
@@ -64,8 +71,18 @@ ALERT_KIND = "manual"
 #: Fallback when no deployment states one.
 DEFAULT_ALERT_INTERVAL_SECONDS = 3600
 
-#: key -> (monotonic time of the last loud report, reports suppressed since)
+#: key -> (monotonic time of the last loud report, reports suppressed since).
+#: The fallback for a core too old to carry the shared-cache slot; see
+#: :func:`claim_slot`.
 _slots: dict[str, tuple[float, int]] = {}
+
+#: Providers THIS process has seen refuse since they last served. It drives
+#: one INFO line ("serving again, alerts re-armed") and nothing else — the
+#: alert window itself is shared across the service's workers, but whether
+#: this particular process watched a provider fail is a per-process fact and
+#: reading the shared cache to decide whether to log would be a round trip
+#: on the success path of every call.
+_refusing: set[str] = set()
 
 
 def alert_interval() -> float:
@@ -81,9 +98,25 @@ def alert_interval() -> float:
 def claim_slot(key: str, interval: float) -> tuple[bool, int]:
     """``(be_loud, suppressed_since_the_last_loud_one)`` for one report.
 
+    Claimed on the SHARED cache where the deployment has one, so the window
+    holds across every gunicorn worker and Celery child of the service —
+    ten refusals spread over two workers raise one alert, not two.
     ``interval <= 0`` disables the throttle — a test's setting, not a
     stand's.
+
+    Falls back to the per-process dict below when the core is too old to
+    carry the shared slot. Never raises.
     """
+    try:
+        from stapel_core.observability.throttle import claim_slot as shared
+
+        return shared(key, interval)
+    except ImportError:
+        return _claim_local(key, interval)
+
+
+def _claim_local(key: str, interval: float) -> tuple[bool, int]:
+    """The per-process throttle, for a core with no shared slot."""
     now = time.monotonic()
     last, suppressed = _slots.get(key, (None, 0))
     if last is None or interval <= 0 or (now - last) >= interval:
@@ -97,27 +130,56 @@ def clear_slot(key: str = "") -> None:
     """Forget what was already said, for *key* or for all of them.
 
     Called when a provider serves a request again: the next exhaustion is
-    a NEW fact and has to be as loud as the first one was.
+    a NEW fact and has to be as loud as the first one was — and making it
+    wait out the remainder of a window claimed before the recovery would
+    delay the second outage by up to an hour.
     """
     if key:
         _slots.pop(key, None)
     else:
         _slots.clear()
+        _refusing.clear()
+    try:
+        from stapel_core.observability import throttle
+    except ImportError:
+        return
+    if key:
+        throttle.release_slot(key)
+    else:
+        throttle.clear_slots()
 
 
 def record_state_gauge(
-    name: str, provider: str, value: float, *, description: str = ""
+    name: str,
+    provider: str,
+    value: float,
+    *,
+    description: str = "",
+    multiprocess_mode: str = "livemax",
 ) -> None:
     """Record ``<name>{provider}``. Never raises.
 
     ``stapel_core.observability`` already swallows a backend failure; the
     guard here is for a core too old to have the module at all — a metric
     is not worth a crash even when the floor is wrong.
+
+    ``multiprocess_mode="livemax"`` because these are FLAGS about something
+    outside this process: the provider's account, not this worker's state.
+    One worker being refused is the whole fact, so while any living worker
+    says 1 the series is 1. ``live`` rather than plain ``max`` so a
+    recycled worker's last 1 cannot outlive it — a ``max`` over a dead
+    process is an alert that can never clear. Without it
+    ``prometheus_client`` would emit one series per pid and an alert rule
+    written against the metric would change shape the day a deployment adds
+    a second worker.
     """
     try:
         from stapel_core.observability.metrics import gauge
 
-        gauge(name, float(value), {"provider": provider}, description=description)
+        gauge(
+            name, float(value), {"provider": provider},
+            description=description, multiprocess_mode=multiprocess_mode,
+        )
     except Exception:  # pragma: no cover - no backend / ancient core
         logger.debug(
             "stapel-agent: could not record the %s gauge for %s",
@@ -214,6 +276,7 @@ def report_llm_out_of_credits(provider: str, detail: str = "") -> bool:
         ),
     )
 
+    _refusing.add(provider)
     fingerprint = f"{LLM_OUT_OF_CREDITS_FINGERPRINT}:{provider}"
     loud, suppressed = claim_slot(fingerprint, alert_interval())
     if not loud:
@@ -251,7 +314,10 @@ def report_llm_out_of_credits(provider: str, detail: str = "") -> bool:
 def report_llm_served(provider: str) -> None:
     """*provider* answered a call — clear its gauge and re-arm its alert."""
     fingerprint = f"{LLM_OUT_OF_CREDITS_FINGERPRINT}:{provider}"
-    if _slots.pop(fingerprint, None) is not None:
+    was_refusing = provider in _refusing or fingerprint in _slots
+    _refusing.discard(provider)
+    clear_slot(fingerprint)
+    if was_refusing:
         logger.info(
             "stapel-agent: LLM provider %r is serving calls again — alerts "
             "for it are armed anew", provider,

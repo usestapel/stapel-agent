@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-agent"
-version = "0.30.1"
+version = "0.31.0"
 description = "LLM facade Django app for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -44,7 +44,7 @@ dependencies = [
     # (`register_gdpr_owner`, called from ready()), and 0.85.1 is where the
     # provider bridge yields to it. An older core has no such symbol, so it
     # is an ImportError at startup rather than a silent half-wiring.
-    "stapel-core>=0.85.1,<1.0",
+    "stapel-core>=0.88.1,<1.0",
     # Provider-response validation and LLM-authored contracts are declared
     # as pydantic models. This is deliberate rather than incidental: the
     # models being ported in carry `extra="forbid"` plus field/model

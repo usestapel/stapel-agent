@@ -186,6 +186,12 @@ def record_gauge(provider: str, ratio: float) -> None:
                 "Fraction of the STT provider's prepaid allowance still "
                 "unspent (1.0 = untouched, 0.0 = exhausted)."
             ),
+            # Every worker reads the SAME number from the provider's API, so
+            # the freshest reading is the truth: `livesum` would multiply the
+            # remaining allowance by the worker count and `livemax` would
+            # keep reporting the most optimistic stale one. The library
+            # default would emit one series per pid.
+            multiprocess_mode="livemostrecent",
         )
     except Exception:  # pragma: no cover - no backend / ancient core
         logger.debug(

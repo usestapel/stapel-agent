@@ -3,6 +3,59 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.31.0] — 2026-09-20
+
+Minor: the provider alert window holds per SERVICE instead of per worker,
+and both provider gauges declare how several workers combine. Floor
+`stapel-core>=0.88.1` — 0.88.0 carries the shared slot but drops the
+suppressed count when a window is turned off, which this package's own
+"+N further refusal(s)" line depends on.
+
+### Fixed — "one alert per provider per hour" was one per WORKER per hour
+
+A client host runs its services as gunicorn with two workers plus a Celery
+pool. `claim_slot` held the window in a module-level dict, which exists once
+per PROCESS — so an exhausted provider refusing every upload produced one
+ERROR and one tracker issue per worker per hour. Six processes is six pages
+about one fact, and the operator's answer to that is a filter rule, after
+which the seventh alert is filtered too.
+
+The slot now lives on the shared cache via
+`stapel_core.observability.throttle`: `cache.add()` is atomic, so exactly one
+process in the service wins the window and the rest count themselves into the
+next one's "suppressed since" figure. With no shared cache configured
+(locmem, dummy, none) it falls back to the per-process dict — exactly the old
+behaviour, so nothing is lost where nothing was configured. Verified with two
+real interpreters over a file-based cache: 10 refusals across 2 processes
+raise 1 alert.
+
+`clear_slot()` releases the shared slot too, so a provider that starts
+serving again re-arms the alert immediately instead of leaving the next
+outage to wait out the remainder of an hour claimed before the recovery.
+
+### Fixed — the gauges were invisible on most scrapes
+
+`stapel_llm_provider_out_of_credits` was set in whichever worker took the
+refusal, and a scrape reaches only one worker: an instant query for it came
+back EMPTY on the host where this was measured, while a twenty-minute range
+showed samples of 1. That is a deployment fix (`PROMETHEUS_MULTIPROC_DIR`),
+but half of it belongs here — under multiprocess mode `prometheus_client`
+emits one series PER PID unless the gauge says how the values combine:
+
+| metric | mode | why |
+|---|---|---|
+| `stapel_llm_provider_out_of_credits` | `livemax` | a flag about the PROVIDER's account, not this worker's state: one worker being refused is the whole fact. `live` so a recycled worker's last 1 cannot outlive it and pin an alert that can never clear. |
+| `stapel_stt_provider_quota_exhausted` | `livemax` | same shape. |
+| `stapel_stt_provider_quota_ratio` | `livemostrecent` | every worker reads the same allowance from the same provider API; summing would multiply it by the worker count and `max` would keep the most optimistic stale reading. |
+
+`record_state_gauge()` takes `multiprocess_mode` (default `livemax`) for
+callers with a flag of their own.
+
+### Compatibility
+
+Nothing is removed. A deployment that does not run multiprocess metrics sees
+no change at all — the mode is inert in a single process.
+
 ## [0.30.1] — 2026-09-20
 
 ### The provider alert was never filed, and the code that swallowed it said WARNING
