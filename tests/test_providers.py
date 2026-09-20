@@ -411,3 +411,49 @@ class TestOpenAICompatProxyAndTokenParam:
             "OPENAI_COMPAT_PROXY": "http://proxy.test:3128",
         }
         assert OpenAICompatProvider.configuration_error() is None
+
+
+class TestASecondEndpointOfTheSameDialect:
+    """A deployment needs somewhere for the fallback chain to GO.
+
+    The primary reads ``OPENAI_COMPAT_*``. A second vendor's endpoint is
+    a second registration naming its own settings — not a fork of this
+    adapter, and not settings juggled around a call.
+    """
+
+    def test_a_subclass_reads_the_settings_it_declares(self, settings):
+        from stapel_agent.providers.openai_compat import OpenAICompatProvider
+
+        class Secondary(OpenAICompatProvider):
+            name = "openai-compat-secondary"
+            base_url_setting = "SECOND_BASE_URL"
+            api_key_setting = "SECOND_API_KEY"
+            models_setting = "SECOND_MODELS"
+
+        settings.STAPEL_AGENT = {
+            **getattr(settings, "STAPEL_AGENT", {}),
+            "OPENAI_COMPAT_BASE_URL": "https://primary.test/v1",
+            "SECOND_BASE_URL": "https://secondary.test/v1",
+            "SECOND_API_KEY": "k",
+            "SECOND_MODELS": {"medium": "their-model-name"},
+        }
+
+        assert Secondary.configuration_error() is None
+        assert Secondary().resolve_model("medium", "ours") == "their-model-name"
+
+    def test_its_configuration_error_names_ITS_setting(self, settings):
+        from stapel_agent.providers.openai_compat import OpenAICompatProvider
+
+        class Secondary(OpenAICompatProvider):
+            name = "openai-compat-secondary"
+            base_url_setting = "SECOND_BASE_URL"
+
+        settings.STAPEL_AGENT = {
+            **getattr(settings, "STAPEL_AGENT", {}),
+            "OPENAI_COMPAT_BASE_URL": "https://primary.test/v1",
+            "SECOND_BASE_URL": "",
+        }
+
+        # Naming the primary's key here would send an operator to fix a
+        # setting that is already correct.
+        assert "SECOND_BASE_URL" in Secondary.configuration_error()

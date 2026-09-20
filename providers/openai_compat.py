@@ -35,18 +35,37 @@ class OpenAICompatProvider(LlmProvider):
     supports_max_tokens = True
     supports_schema = True
 
+    # WHICH settings this registration reads. Declared, so a deployment
+    # that needs a SECOND OpenAI-dialect endpoint — the fallback for when
+    # the first is out of credits — registers a subclass that names its
+    # own keys instead of forking this adapter or juggling settings at
+    # call time. Exactly the pattern the STT side uses for a second tier
+    # of one provider.
+    #
+    # A subclass overriding these must also add them to the deployment's
+    # STAPEL_AGENT dict; they are read lazily, like everything here.
+    base_url_setting = "OPENAI_COMPAT_BASE_URL"
+    api_key_setting = "OPENAI_COMPAT_API_KEY"
+    models_setting = "OPENAI_COMPAT_MODELS"
+    proxy_setting = "OPENAI_COMPAT_PROXY"
+    max_tokens_param_setting = "OPENAI_COMPAT_MAX_TOKENS_PARAM"
+
+    @classmethod
+    def _setting(cls, which: str, default=""):
+        return getattr(agent_settings, getattr(cls, which), default)
+
     @classmethod
     def configuration_error(cls) -> str | None:
         # Only the base URL is mandatory: a self-hosted endpoint (vLLM,
         # Ollama, TEI) legitimately needs no key, so a missing API key is
         # not reported — the endpoint itself will 401 if it wanted one.
-        if not (agent_settings.OPENAI_COMPAT_BASE_URL or "").strip():
+        if not (cls._setting("base_url_setting") or "").strip():
             return (
-                "OPENAI_COMPAT_BASE_URL is empty — set "
-                "STAPEL_AGENT['OPENAI_COMPAT_BASE_URL'] to a "
+                f"{cls.base_url_setting} is empty — set "
+                f"STAPEL_AGENT['{cls.base_url_setting}'] to a "
                 "/chat/completions-compatible endpoint"
             )
-        proxy = (agent_settings.OPENAI_COMPAT_PROXY or "").strip()
+        proxy = (cls._setting("proxy_setting") or "").strip()
         if proxy.startswith("socks"):
             # requests only learns SOCKS from PySocks; without it every call
             # dies with InvalidSchema at request time. Say so at boot instead.
@@ -54,24 +73,24 @@ class OpenAICompatProvider(LlmProvider):
                 import socks  # noqa: F401  (PySocks)
             except ImportError:
                 return (
-                    "OPENAI_COMPAT_PROXY is a SOCKS URL but PySocks is not "
+                    f"{cls.proxy_setting} is a SOCKS URL but PySocks is not "
                     "installed — install stapel-agent[socks]"
                 )
-        param = agent_settings.OPENAI_COMPAT_MAX_TOKENS_PARAM
+        param = cls._setting("max_tokens_param_setting")
         if param not in _MAX_TOKENS_PARAMS:
             return (
-                f"OPENAI_COMPAT_MAX_TOKENS_PARAM={param!r} is not one of "
+                f"{cls.max_tokens_param_setting}={param!r} is not one of "
                 f"{sorted(_MAX_TOKENS_PARAMS)}"
             )
         return None
 
-    @staticmethod
-    def _proxies() -> dict | None:
-        proxy = (agent_settings.OPENAI_COMPAT_PROXY or "").strip()
+    @classmethod
+    def _proxies(cls) -> dict | None:
+        proxy = (cls._setting("proxy_setting") or "").strip()
         return {"http": proxy, "https": proxy} if proxy else None
 
     def resolve_model(self, model_size: str, default: str) -> str:
-        models = agent_settings.OPENAI_COMPAT_MODELS or {}
+        models = type(self)._setting("models_setting") or {}
         return models.get(model_size) or default
 
     def complete(
@@ -84,11 +103,14 @@ class OpenAICompatProvider(LlmProvider):
         max_tokens: int | None = None,
         schema: dict | None = None,
     ) -> ProviderResult:
-        base_url = (agent_settings.OPENAI_COMPAT_BASE_URL or "").rstrip("/")
+        cls = type(self)
+        base_url = (cls._setting("base_url_setting") or "").rstrip("/")
         if not base_url:
             raise ProviderError(
                 "OpenAI-compatible endpoint not configured — set "
-                "STAPEL_AGENT['OPENAI_COMPAT_BASE_URL']"
+                f"STAPEL_AGENT['{cls.base_url_setting}']",
+                provider=self.name,
+                reason="unavailable",
             )
         messages = []
         if system_prompt:
@@ -103,14 +125,14 @@ class OpenAICompatProvider(LlmProvider):
             messages.append({"role": "user", "content": prompt})
 
         headers = {"Content-Type": "application/json"}
-        api_key = agent_settings.OPENAI_COMPAT_API_KEY
+        api_key = cls._setting("api_key_setting")
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
         payload = {
             "model": model,
             "messages": messages,
-            agent_settings.OPENAI_COMPAT_MAX_TOKENS_PARAM: int(
+            cls._setting("max_tokens_param_setting"): int(
                 max_tokens or agent_settings.MAX_TOKENS
             ),
         }

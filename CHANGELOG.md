@@ -3,6 +3,26 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.30.0] — 2026-09-20
+
+### Added — a second endpoint of the same dialect, without a fork
+
+0.28.0 gave `complete()` a fallback chain; a deployment then has to have
+somewhere for it to GO. `OpenAICompatProvider` reads `OPENAI_COMPAT_*`,
+so a SECOND OpenAI-dialect endpoint (a different vendor, a different
+key) had no way to exist but a copy of the adapter or settings juggled
+around the call — a client's first attempt at it reached for
+`django.test.override_settings` in production code.
+
+The adapter now DECLARES which settings it reads —
+`base_url_setting`, `api_key_setting`, `models_setting`,
+`proxy_setting`, `max_tokens_param_setting` — so a second registration
+is a six-line subclass naming its own keys, exactly as the STT side
+registers a second tier of one provider. `configuration_error()` names
+the subclass's own setting rather than the primary's, which is the
+difference between an operator fixing the right key and re-checking a
+correct one.
+
 ## [0.29.0] — 2026-09-20
 
 ### Added — `llm.summarize` takes an `idempotency_key`, and a retry stops re-buying
