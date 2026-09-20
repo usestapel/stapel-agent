@@ -309,21 +309,21 @@ def notify_quota_low(
             "stapel-agent: a provider_quota_low receiver raised", exc_info=True
         )
 
-    try:
-        from stapel_alerts import capture
-    except ImportError:
-        # stapel-alerts is not installed. The WARNING above is the alert;
-        # this branch is the whole reason it is unconditional.
-        return
-    try:
-        capture(
-            message,
-            level="error" if severity == SEVERITY_CRITICAL else "warning",
-            kind="provider_quota",
-            context=context,
-        )
-    except Exception:  # pragma: no cover - alerting must not break the caller
-        logger.warning("stapel-agent: alerts.capture failed", exc_info=True)
+    # Through provider_health.capture_alert, not through its own copy of the
+    # import-and-swallow: that copy is how the STT surface inherited the same
+    # silence as the text one when `from stapel_alerts import capture` started
+    # returning a module. One helper means one place where a broken alert path
+    # becomes a loud ERROR (`alert_path_broken:<exc class>`), for both
+    # surfaces. An absent stapel-alerts stays silent — the log line above is
+    # the alert, which is the whole reason it is unconditional.
+    from ..provider_health import ALERT_KIND, capture_alert
+
+    capture_alert(
+        message,
+        level="error" if severity == SEVERITY_CRITICAL else "warning",
+        kind=ALERT_KIND,
+        context=context,
+    )
 
 
 def report_quota_refusal(provider: str, detail: str = "") -> None:

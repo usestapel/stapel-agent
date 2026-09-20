@@ -46,6 +46,21 @@ logger = logging.getLogger(__name__)
 LLM_OUT_OF_CREDITS_GAUGE = "llm_provider_out_of_credits"
 LLM_OUT_OF_CREDITS_FINGERPRINT = "llm_provider_out_of_credits"
 
+#: The fingerprint token for "the alert path itself is broken" — the one
+#: failure an alert library cannot report through itself. See capture_alert.
+ALERT_PATH_BROKEN_FINGERPRINT = "alert_path_broken"
+
+#: The stapel-alerts event KIND every alert here is filed under.
+#:
+#: "manual" is that library's name for an explicit ``capture(...)`` — its kind
+#: is a closed set (exception / log / dlq / monitoring / manual) describing the
+#: INPUT, not the subject. We used to pass "provider_quota", which is not a
+#: member: the store silently normalised it to "exception", so every provider
+#: alert we raised was filed in the tracker as an unhandled exception. What the
+#: alert is ABOUT is carried by the fingerprint token and the context, which is
+#: where a reader (and a query) can actually use it.
+ALERT_KIND = "manual"
+
 #: Fallback when no deployment states one.
 DEFAULT_ALERT_INTERVAL_SECONDS = 3600
 
@@ -110,22 +125,77 @@ def record_state_gauge(
         )
 
 
-def capture_alert(message: str, *, kind: str, context: dict, level: str) -> None:
+def capture_alert(message: str, *, kind: str, context: dict, level: str) -> bool:
     """File the alert with stapel-alerts if the deployment has it.
+
+    Returns whether the alert path was walked without raising. The single
+    place in this package that talks to the alert store, so the two rules
+    below hold for every alert we raise rather than for whichever call site
+    remembered them.
 
     IMPORT-GUARDED: stapel-alerts is not a dependency of this package and
     must not become one. A deployment that installed it gets the alert
-    filed; one that did not loses nothing it had, because the log line
-    the caller already emitted is the floor.
+    filed; one that did not loses nothing it had, because the log line the
+    caller already emitted is the floor. ``ImportError`` is therefore a
+    configuration, not a fault, and is silent.
+
+    A FAILURE OF THE ALERT PATH ITSELF IS LOUD, ONCE
+        Until 0.30.1 this swallowed everything into a WARNING on this
+        module's own logger, and on a production host that is indistinguishable
+        from silence. stapel-alerts 0.2.3 exported ``capture`` as a function
+        AND shipped a submodule of the same name, so once anything imported
+        the submodule — its own log handler does, on the first WARNING record
+        of the process — ``from stapel_alerts import capture`` handed back a
+        MODULE and every call here raised ``TypeError: 'module' object is not
+        callable``. This except clause caught it, wrote a WARNING nobody
+        routes, and the provider-out-of-credits alert reached the tracker zero
+        times across two days of a provider refusing.
+
+        So a broken alert path now logs at ERROR — the level the fleet's
+        Telegram handler carries — under the distinct fingerprint
+        ``alert_path_broken:<exception class>``, throttled by the same
+        per-process slot the alerts themselves use so a per-request failure
+        cannot become a per-request page. An alerting failure still never
+        reaches the caller: this returns False, it does not raise.
     """
     try:
         from stapel_alerts import capture
     except ImportError:
-        return
+        return False
     try:
         capture(message, level=level, kind=kind, context=context)
-    except Exception:  # pragma: no cover - alerting must not break the caller
-        logger.warning("stapel-agent: alerts.capture failed", exc_info=True)
+        return True
+    except Exception as exc:
+        report_alert_path_broken(exc)
+        return False
+
+
+def report_alert_path_broken(exc: BaseException) -> bool:
+    """The alert path itself failed. Say so at ERROR, once per window.
+
+    Returns whether this one was loud. Deliberately NOT routed back through
+    :func:`capture_alert`: the thing that is broken is the alert store, and
+    a report about it that goes through the alert store is a report nobody
+    gets.
+    """
+    fingerprint = f"{ALERT_PATH_BROKEN_FINGERPRINT}:{type(exc).__name__}"
+    loud, suppressed = claim_slot(fingerprint, alert_interval())
+    if not loud:
+        logger.info(
+            "stapel-agent: %s — again (%d since the last ERROR)",
+            fingerprint, suppressed,
+        )
+        return False
+    message = (
+        f"stapel-agent: {fingerprint} — filing an alert with stapel-alerts "
+        f"raised {type(exc).__name__}: {exc}. ALERTS FROM THIS PROCESS ARE "
+        f"NOT REACHING THE TRACKER; every alert raised while this holds is "
+        f"lost, not delayed"
+    )
+    if suppressed:
+        message += f" [+{suppressed} further failure(s) since the last ERROR]"
+    logger.error(message, exc_info=True)
+    return True
 
 
 def report_llm_out_of_credits(provider: str, detail: str = "") -> bool:
@@ -165,7 +235,7 @@ def report_llm_out_of_credits(provider: str, detail: str = "") -> bool:
     logger.error(message)
     capture_alert(
         message,
-        kind="provider_quota",
+        kind=ALERT_KIND,
         level="error",
         context={
             "fingerprint": fingerprint,
@@ -198,6 +268,7 @@ def report_llm_served(provider: str) -> None:
 
 
 __all__ = [
+    "ALERT_PATH_BROKEN_FINGERPRINT",
     "DEFAULT_ALERT_INTERVAL_SECONDS",
     "LLM_OUT_OF_CREDITS_FINGERPRINT",
     "LLM_OUT_OF_CREDITS_GAUGE",
@@ -206,6 +277,7 @@ __all__ = [
     "claim_slot",
     "clear_slot",
     "record_state_gauge",
+    "report_alert_path_broken",
     "report_llm_out_of_credits",
     "report_llm_served",
 ]

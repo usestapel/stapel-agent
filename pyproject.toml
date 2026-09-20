@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-agent"
-version = "0.30.0"
+version = "0.30.1"
 description = "LLM facade Django app for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -65,6 +65,16 @@ Issues = "https://github.com/usestapel/stapel-agent/issues"
 anthropic = ["anthropic>=0.34"]
 # SOCKS for OPENAI_COMPAT_PROXY — requests learns socks5h:// only from PySocks.
 socks = ["PySocks>=1.7"]
+# The alert store, when a deployment files provider alerts with it. NOT a
+# dependency and deliberately not in `all`: provider_health.capture_alert is
+# import-guarded and a host without the store loses nothing it had. The extra
+# exists to state the FLOOR, because below it the alerts are silently dropped
+# — 0.2.3 exported `capture` as a function and also shipped a submodule of
+# that name, so the export resolved to a module for the life of any process
+# that touched the submodule first, and every capture raised TypeError into a
+# caller's except. 0.2.4 is the release where the public name is the callable
+# under every import order.
+alerts = ["stapel-alerts>=0.2.4"]
 all = ["stapel-agent[anthropic,socks]"]
 
 [tool.setuptools]

@@ -3,6 +3,74 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.30.1] — 2026-09-20
+
+### The provider alert was never filed, and the code that swallowed it said WARNING
+
+0.30.0 shipped the "LLM provider is out of credits" alert and a unit test
+proving it. On a production host it reached the alert tracker ZERO times while
+the provider had been refusing for two days.
+
+The seam was in stapel-alerts (fixed in its 0.2.4): it exported `capture` as a
+function and also shipped a submodule of that name, so once anything imported
+the submodule — its own log handler does, on the first WARNING record of the
+process — `from stapel_alerts import capture` returned a MODULE and the call
+raised `TypeError: 'module' object is not callable`. What made it a two-day
+outage instead of a stack trace is on THIS side: `capture_alert` caught every
+exception into a `logger.warning` on its own logger. Nobody routes that.
+
+So an alerting failure is still never allowed to reach the caller — the
+alert path returns False, it does not raise — but a failure of the alert path
+ITSELF is now loud, once: ERROR (the level the fleet's Telegram handler
+carries) under the distinct fingerprint `alert_path_broken:<exception class>`,
+throttled through the same per-process slot the alerts use so a per-request
+failure cannot become a per-request page, with the suppressed count carried
+into the next loud report. `capture_alert` returns whether the path was walked.
+
+An absent stapel-alerts stays silent: that is a deployment choice, not a
+fault, and the log line the caller already emitted is the floor. The new
+optional extra `stapel-agent[alerts]` states the floor (>=0.2.4) for the
+deployments that do want the store.
+
+### The STT quota alert had its own copy of the same swallow
+
+`stt/quota.py` repeated the import-and-swallow rather than calling the helper,
+which is how it inherited the identical silence. It now goes through
+`provider_health.capture_alert`, so both surfaces get the loud path from one
+place instead of from whichever call site remembered it.
+
+### Every provider alert was filed in the tracker as an unhandled exception
+
+Found while writing the test below. Both surfaces passed `kind="provider_quota"`
+to `capture`, and the store's `kind` is a closed set describing the INPUT —
+exception / log / dlq / monitoring / manual. `provider_quota` is not a member,
+so it was normalised to `exception` and every quota alert read as a crash. The
+kind is now `manual` (an explicit `capture(...)`, which is what it is); what
+the alert is ABOUT was already in the fingerprint token and the context.
+
+### The test that proved the alert now goes through the real store
+
+`tests/test_alert_path_real.py` replaces the assertion that could not fail:
+it configures a throwaway Django with the REAL `stapel_alerts` installed in
+owner mode, runs the real `report_llm_out_of_credits` / `notify_quota_low`, and
+asserts a row landed carrying the expected fingerprint token — in clean
+SUBPROCESSES, under three import orders (export first, submodule first, and the
+log handler first, which is the order a live service actually takes), because
+the binding is per-process and permanent and a shared interpreter is precisely
+what hid this.
+
+It asserts on the per-occurrence `ErrorEvent`, not on the `Issue`, and that
+distinction is the test's whole value. The first draft asserted that some issue
+carried the fingerprint token and PASSED against the broken alerts release: the
+ERROR we log immediately before filing was itself captured by the alert store's
+root log handler, so the tracker held a row with all the right words in it
+while the call under test was raising into a swallowed except. The log
+handler's event carries `kind="log"` and its own context; ours carries
+`kind="manual"` and the context we passed.
+
+CI installs stapel-alerts for the same reason — the file `importorskip`s
+without it, and a gate that skips is indistinguishable from a gate that passes.
+
 ## [0.30.0] — 2026-09-20
 
 ### Added — a second endpoint of the same dialect, without a fork

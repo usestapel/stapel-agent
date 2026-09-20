@@ -40,7 +40,15 @@ jobs:
         # stapel-tools (dependency-free) carries the capabilities emitter that
         # tests/test_capabilities_surface.py drift-gates — without it that gate
         # would skip, and a silently skipped gate is how the document rots.
-        run: pip install pytest pytest-django pytest-cov "stapel-tools>=0.22.0,<1"
+        #
+        # stapel-alerts for the same reason: tests/test_alert_path_real.py runs
+        # our provider alerts through the REAL alert store, and it importorskips
+        # when the store is absent. The defect it covers (an alert that reached
+        # the tracker zero times for two days) is invisible to a mocked capture,
+        # so this gate skipping is indistinguishable from the bug being back.
+        # The floor is the release where `stapel_alerts.capture` is the callable
+        # under every import order.
+        run: pip install pytest pytest-django pytest-cov "stapel-tools>=0.22.0,<1" "stapel-alerts>=0.2.4"
 
       - name: Tests with coverage
         run: |
@@ -109,7 +117,15 @@ jobs:
         # stapel-tools (dependency-free) carries the capabilities emitter that
         # tests/test_capabilities_surface.py drift-gates — without it that gate
         # would skip, and a silently skipped gate is how the document rots.
-        run: pip install pytest pytest-django pytest-cov "stapel-tools>=0.22.0,<1"
+        #
+        # stapel-alerts for the same reason: tests/test_alert_path_real.py runs
+        # our provider alerts through the REAL alert store, and it importorskips
+        # when the store is absent. The defect it covers (an alert that reached
+        # the tracker zero times for two days) is invisible to a mocked capture,
+        # so this gate skipping is indistinguishable from the bug being back.
+        # The floor is the release where `stapel_alerts.capture` is the callable
+        # under every import order.
+        run: pip install pytest pytest-django pytest-cov "stapel-tools>=0.22.0,<1" "stapel-alerts>=0.2.4"
 
       - name: Tests with coverage
         run: |
