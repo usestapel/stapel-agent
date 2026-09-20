@@ -30,6 +30,10 @@
       "type": "string",
       "description": "LLM provider name from STAPEL_AGENT['PROVIDERS']."
     },
+    "idempotency_key": {
+      "type": "string",
+      "description": "Identity of the CONTENT being summarized (a transcript hash, say). It checkpoints each part of the map-reduce, so a retried task resumes where the money stopped instead of re-buying every chunk. Without it every attempt pays in full."
+    },
     "user_id": {
       "type": "string",
       "description": "Who this call is for — recorded on the PromptLog row so per-user cost is answerable. Opaque to this package: any id shape the host uses. Optional; omitting it leaves the row unattributed, never rejected."

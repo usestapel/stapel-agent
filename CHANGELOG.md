@@ -3,6 +3,25 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.29.0] — 2026-09-20
+
+### Added — `llm.summarize` takes an `idempotency_key`, and a retry stops re-buying
+
+0.24.0 made a transcription a checkpoint. The summary beside it was not
+one: a long meeting is summarised map-reduce (N chunk completions plus a
+merge), the caller's task declares three attempts, and an attempt that
+died on the last part re-bought every part before it. Nothing in the
+package could prevent that, because nothing identified the call.
+
+`services.summarize(..., idempotency_key=...)` and the same field on the
+`llm.summarize` contract now checkpoint each PART under
+`<key>:part<N>` / `<key>:merge` — per part, because one key for all of
+them would serve chunk one's summary as chunk two's. Callers pass
+something that identifies the content (stapel-recordings passes the
+transcript's hash), so two attempts at one transcript are one purchase
+and an edited transcript is a real new summary. Callers that pass
+nothing are unchanged: no key, no checkpoint, exactly as before.
+
 ## [0.28.0] — 2026-09-20
 
 ### Fixed — an out-of-credits TEXT provider ended the customer's work

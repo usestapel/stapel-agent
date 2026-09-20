@@ -2085,6 +2085,7 @@ def summarize(
     user_id: str | None = None,
     workspace_id: str | None = None,
     chunk_tokens: int | None = None,
+    idempotency_key: str | None = None,
 ) -> dict:
     """Summarize plain text or a transcript through the LLM pipeline.
 
@@ -2092,6 +2093,15 @@ def summarize(
     form. Single-shot when the input fits one chunk; map-reduce (chunk
     summaries via ``complete()``, then a merge pass) otherwise. Rows land
     in the ledger as ``source=summarize`` (cache off by default).
+
+    *idempotency_key* makes a retry free. A long meeting is summarised
+    map-reduce — N chunk completions plus a merge — and without a key a
+    caller whose task failed on chunk seven re-buys chunks one to six on
+    the next attempt. With one, each part carries its own checkpoint
+    (``<key>:part<N>``, ``<key>:merge``), so an attempt resumes where the
+    money stopped. Callers should pass something that identifies the
+    CONTENT, such as the transcript's hash: two attempts at the same
+    transcript are one purchase, and an edited transcript is a new one.
 
     Returns ``{"status": "ok", "summary": str, "usage": {...}}`` or
     ``{"status": "failure", "reason": ...}``.
@@ -2126,7 +2136,7 @@ def summarize(
     suffix = prep.language_directive(language)
     usage = {"input_tokens": 0, "output_tokens": 0}
 
-    def _run(prompt: str, system_prompt: str) -> dict:
+    def _run(prompt: str, system_prompt: str, part: str = "") -> dict:
         result = complete(
             prompt,
             model_size,
@@ -2135,6 +2145,12 @@ def summarize(
             source=PromptSource.SUMMARIZE,
             user_id=user_id,
             workspace_id=workspace_id,
+            # Per PART, not per call: the parts of one map-reduce are
+            # different purchases, and one key for all of them would
+            # serve chunk one's summary as chunk two's.
+            idempotency_key=(
+                f"{idempotency_key}:{part or 'single'}" if idempotency_key else None
+            ),
         )
         for key in usage:
             usage[key] += (result.get("usage") or {}).get(key, 0)
@@ -2150,7 +2166,9 @@ def summarize(
     partials: list[str] = []
     for idx, chunk in enumerate(chunks):
         result = _run(
-            f"Part {idx + 1} of {len(chunks)}:\n\n{chunk}", prep.CHUNK_SYSTEM_PROMPT
+            f"Part {idx + 1} of {len(chunks)}:\n\n{chunk}",
+            prep.CHUNK_SYSTEM_PROMPT,
+            f"part{idx + 1}",
         )
         if result["status"] == "failure":
             return _failure(result)
@@ -2161,6 +2179,7 @@ def summarize(
             f"Part {idx + 1} summary:\n{part}" for idx, part in enumerate(partials)
         ),
         prep.MERGE_SYSTEM_PROMPT,
+        "merge",
     )
     if merged["status"] == "failure":
         return _failure(merged)

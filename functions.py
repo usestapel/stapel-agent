@@ -337,6 +337,14 @@ SUMMARIZE_SCHEMA = {
             "type": "string",
             "description": "LLM provider name from STAPEL_AGENT['PROVIDERS'].",
         },
+        "idempotency_key": {
+            "type": "string",
+            "description": "Identity of the CONTENT being summarized (a "
+            "transcript hash, say). It checkpoints each part of the "
+            "map-reduce, so a retried task resumes where the money "
+            "stopped instead of re-buying every chunk. Without it every "
+            "attempt pays in full.",
+        },
         **IDENTITY_PROPERTIES,
     },
     "oneOf": [{"required": ["text"]}, {"required": ["transcript"]}],
@@ -737,6 +745,7 @@ def llm_summarize(payload: dict) -> dict:
         language=payload.get("language"),
         model_size=payload.get("model") or "medium",
         provider=payload.get("provider"),
+        idempotency_key=payload.get("idempotency_key"),
         **_identity_kwargs(payload),
     )
 
