@@ -35,6 +35,17 @@ class TestBase:
 
         assert P().resolve_model("small", "some-model") == "some-model"
 
+    def test_default_base_url_is_empty(self):
+        """A fixed-endpoint backend (Anthropic SDK, the CLI provider) has no
+        configurable base URL — the default must say so, not guess."""
+
+        class P(LlmProvider):
+            def complete(self, *, prompt, model, system_prompt=None):
+                return ProviderResult(text="")
+
+        assert P().base_url() == ""
+        assert P.base_url() == ""
+
 
 class TestOpenAICompat:
     @pytest.fixture
@@ -110,6 +121,17 @@ class TestOpenAICompat:
         provider = OpenAICompatProvider()
         assert provider.resolve_model("small", "claude-haiku") == "gpt-4o-mini"
         assert provider.resolve_model("large", "claude-opus") == "claude-opus"
+
+    def test_base_url_reads_the_configured_endpoint(self, configured):
+        """Read by pricing.cost_fields (via services._usage) to tell an
+        aggregator endpoint from a direct one — trailing slash stripped the
+        same way ``complete()`` strips it before building the request URL."""
+        assert OpenAICompatProvider().base_url() == "https://api.example.test/v1"
+        assert OpenAICompatProvider.base_url() == "https://api.example.test/v1"
+
+    def test_base_url_is_empty_when_unconfigured(self, settings):
+        settings.STAPEL_AGENT = {"OPENAI_COMPAT_BASE_URL": ""}
+        assert OpenAICompatProvider().base_url() == ""
 
     def test_unconfigured_base_url(self, settings):
         settings.STAPEL_AGENT = {"OPENAI_COMPAT_BASE_URL": ""}

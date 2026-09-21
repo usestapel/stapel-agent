@@ -93,6 +93,10 @@ class OpenAICompatProvider(LlmProvider):
         models = type(self)._setting("models_setting") or {}
         return models.get(model_size) or default
 
+    @classmethod
+    def base_url(cls) -> str:
+        return (cls._setting("base_url_setting") or "").rstrip("/")
+
     def complete(
         self,
         *,

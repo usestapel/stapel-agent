@@ -146,6 +146,21 @@ class LlmProvider(ABC):
         """
         return default
 
+    @classmethod
+    def base_url(cls) -> str:
+        """The HTTP endpoint this backend resolves against, or "" for one
+        with none (the Anthropic SDK, the CLI provider — both address a
+        fixed vendor endpoint the settings namespace does not name).
+
+        Read lazily, like every other setting here — this is asked once per
+        call, from ``pricing.cost_fields``, to tell an aggregator endpoint
+        (OpenRouter) from a direct one: the two bill a vendor-prefixed model
+        id ("x-ai/grok-4.5") as different products. A provider whose
+        endpoint IS configurable (openai-compat and its subclasses) must
+        override this; the default is correct only for a fixed endpoint.
+        """
+        return ""
+
     @abstractmethod
     def complete(
         self,

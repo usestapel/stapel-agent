@@ -32,6 +32,7 @@ consuming project.
 | CLI_BINARY | env | Claude Code CLI binary (opt-in provider). | no | claude |
 | CLI_TIMEOUT | env | CLI provider timeout, seconds. | no | 120 |
 | MAX_TOKENS | env | max output tokens per completion. | no | 4096 |
+| COMPLETION_PRICES | settings | Host rate card for completion models, USD per MTok, `{"<model>": {"input": ..., "output": ...}}`, merged over `pricing.PRICES_USD_PER_MTOK` and winning over it — a negotiated rate, or a price for a model the shipped table does not carry yet (e.g. a new aggregator SKU). An unlisted model is reported by `stapel_agent.W018`. `no_env`: a rate card is a claim about money and belongs in settings.py where a reviewer sees it. | no | {} |
 
 ### Speech-to-text (source: env / vault for keys)
 

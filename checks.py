@@ -669,13 +669,27 @@ def check_configured_models_are_priced(app_configs, **kwargs):
             # check` down with it blocks the deploy it was added to inform.
             backend = None
         if backend is not None:
+            # Named once — the same backend answers resolve_model() for
+            # every rung, and repeating it per rung would say nothing new.
+            # Asked the same way cost_fields() asks it at call time, so this
+            # check goes green/red on the exact endpoint that will actually
+            # be billed (an aggregator id only strips its vendor prefix on
+            # its own endpoint — see pricing._normalize_model).
+            provider_label = getattr(agent_settings, "DEFAULT_PROVIDER", "") or "?"
+            base_url = backend.base_url()
+            where_suffix = (
+                f" (provider {provider_label!r}"
+                f"{f', base_url {base_url!r}' if base_url else ''})"
+            )
             for size, default in sorted(models.items()):
                 try:
                     model = backend.resolve_model(size, default)
                 except Exception:  # noqa: BLE001 — must not break `manage.py`
                     continue
-                if model and not is_priced(model):
-                    unpriced.setdefault(model, []).append(f"rung {size}")
+                if model and not is_priced(
+                    model, base_url=base_url, extra_prices=agent_settings.COMPLETION_PRICES
+                ):
+                    unpriced.setdefault(model, []).append(f"rung {size}{where_suffix}")
 
     # ── Embeddings ─────────────────────────────────────────────────────
     # A second billable surface, and the one a composer's vector matching
@@ -705,10 +719,13 @@ def check_configured_models_are_priced(app_configs, **kwargs):
             "reads as free rather than as unknown.",
             hint=(
                 "Completion models go in stapel_agent.pricing."
-                "PRICES_USD_PER_MTOK; the embedding model goes in "
-                "STAPEL_AGENT['EMBEDDING_PRICES'] (USD per MTok of input, "
-                "merged over pricing.EMBEDDING_PRICES_USD_PER_MTOK). Use the "
-                "provider's PUBLISHED price and put the source URL and fetch "
+                "PRICES_USD_PER_MTOK, or in STAPEL_AGENT['COMPLETION_PRICES'] "
+                "(same {\"input\", \"output\"} shape, merged over and winning "
+                "over the shipped table — a negotiated rate, or a price for a "
+                "model the shipped table does not carry yet); the embedding "
+                "model goes in STAPEL_AGENT['EMBEDDING_PRICES'] (USD per MTok "
+                "of input, merged over pricing.EMBEDDING_PRICES_USD_PER_MTOK). "
+                "Use the provider's PUBLISHED price and put the source URL and fetch "
                 "date beside it — a price without a provenance line is a "
                 "number someone remembered. A model you HOST yourself and "
                 "are not billed per query is 0.0, which is an answer and "

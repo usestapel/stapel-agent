@@ -340,6 +340,162 @@ class TestTheDeploymentsOwnModelsAreChecked:
 
         assert check_configured_models_are_priced in registry.registered_checks
 
+    def test_a_client_fleet_on_openrouter_with_known_skus_is_clean(self, settings):
+        """The exact live shape this closes: a host points OPENAI_COMPAT_
+        BASE_URL at OpenRouter and OPENAI_COMPAT_MODELS at the vendor-
+        prefixed ids — now priced verbatim, so W018 is silent."""
+        settings.STAPEL_AGENT = {
+            "DEFAULT_PROVIDER": "openai-compat",
+            "OPENAI_COMPAT_BASE_URL": "https://openrouter.ai/api/v1",
+            "OPENAI_COMPAT_MODELS": {
+                "small": "x-ai/grok-4.20",
+                "medium": "x-ai/grok-4.5",
+                "large": "x-ai/grok-4.6",
+            },
+        }
+        assert self._ids() == []
+
+    def test_an_unpriced_openrouter_sku_still_warns(self, settings):
+        settings.STAPEL_AGENT = {
+            "DEFAULT_PROVIDER": "openai-compat",
+            "OPENAI_COMPAT_BASE_URL": "https://openrouter.ai/api/v1",
+            "OPENAI_COMPAT_MODELS": {"small": "x-ai/grok-9000-nonexistent"},
+        }
+        assert self._ids() == ["stapel_agent.W018"]
+
+    def test_the_warning_names_the_provider_and_base_url(self, settings):
+        """A warning that only names the model sends the reader hunting for
+        which endpoint it was even calling."""
+        settings.STAPEL_AGENT = {
+            "DEFAULT_PROVIDER": "openai-compat",
+            "OPENAI_COMPAT_BASE_URL": "https://openrouter.ai/api/v1",
+            "OPENAI_COMPAT_MODELS": {"small": "x-ai/grok-9000-nonexistent"},
+        }
+        message = self._run()[0].msg
+        assert "openai-compat" in message
+        assert "https://openrouter.ai/api/v1" in message
+
+    def test_a_completion_prices_overlay_satisfies_it(self, settings):
+        """The host-declared rate card (COMPLETION_PRICES) is the intended
+        fix for a model nothing else prices — same shape as EMBEDDING_PRICES
+        satisfying its half of this check."""
+        settings.STAPEL_AGENT = {
+            "MODELS": {"small": "no-such-model-9"},
+            "COMPLETION_PRICES": {"no-such-model-9": {"input": 1.0, "output": 2.0}},
+        }
+        assert self._ids() == []
+
+
+class TestOpenRouterSKUs:
+    """OpenRouter-namespaced xAI rows — verified live 21 Sep 2026 against
+    https://openrouter.ai/api/v1/models (no key needed), converted from
+    USD-per-token to USD-per-MTok. Kept as separate entries from the bare
+    "grok-*" rows above (xAI's own direct-API prices) even where the number
+    happens to match: OpenRouter is a distinct billing product."""
+
+    @pytest.mark.parametrize(
+        "model,expected",
+        [
+            ("x-ai/grok-4.20", (1.25, 2.5)),
+            ("x-ai/grok-4.5", (2.0, 6.0)),
+            ("x-ai/grok-4.6", (2.0, 6.0)),
+            ("x-ai/grok-4.3", (1.25, 2.5)),
+        ],
+    )
+    def test_verified_against_the_openrouter_catalog(self, model, expected):
+        prices = PRICES_USD_PER_MTOK[model]
+        assert (prices["input"], prices["output"]) == expected
+
+    def test_verbatim_match_needs_no_aggregator_base_url(self):
+        """The full id IS the product on any endpoint that sends it
+        literally — no base_url required to find it."""
+        assert is_priced("x-ai/grok-4.20")
+        assert estimate_cost("x-ai/grok-4.20", 1_000_000, 1_000_000) == pytest.approx(3.75)
+
+
+class TestAggregatorNormalization:
+    """A vendor-prefixed model id only strips its prefix on a KNOWN
+    aggregator endpoint (OpenRouter) — the client-fleet fix this closes: a
+    host now routes text-LLM calls through OpenRouter with ids like
+    "x-ai/grok-4.20", and the same literal string on a direct endpoint must
+    NOT resolve to the same product.
+    """
+
+    OPENROUTER = "https://openrouter.ai/api/v1"
+    DIRECT = "https://api.example.test/v1"
+
+    def test_unmatched_aggregator_prefix_stays_unpriced(self):
+        """A future OpenRouter SKU this table has not been taught yet, and
+        whose bare form the table ALSO does not know, stays unpriced rather
+        than guessing — no different from an id this table never saw."""
+        assert is_priced("x-ai/grok-4.5-fast", base_url=self.OPENROUTER) is False
+        assert estimate_cost(
+            "x-ai/grok-4.5-fast", 1_000_000, 0, base_url=self.OPENROUTER
+        ) == 0.0
+
+    def test_prefixed_id_on_a_direct_endpoint_stays_verbatim(self):
+        """No aggregator base_url -> no prefix strip. A direct endpoint that
+        happens to use a slash-prefixed id is either priced verbatim
+        (if the exact string is a known SKU) or unpriced — never silently
+        reassigned to the bare vendor name's price."""
+        assert is_priced("openai/gpt-5.2", base_url=self.DIRECT) is False
+        assert estimate_cost("openai/gpt-5.2", 1_000_000, 0, base_url=self.DIRECT) == 0.0
+
+    def test_prefixed_id_on_a_direct_endpoint_with_no_base_url_also_stays_verbatim(self):
+        """The common case: base_url not passed at all (a fixed-endpoint
+        backend). Same guarantee as an explicit direct base_url."""
+        assert is_priced("openai/gpt-5.2") is False
+
+    def test_bare_openai_prefix_strips_only_on_openrouter(self):
+        """"openai/gpt-5.2" bare-strips to "gpt-5.2", which IS priced — but
+        only when the endpoint is the aggregator that namespaces it that
+        way."""
+        assert is_priced("openai/gpt-5.2", base_url=self.OPENROUTER) is True
+        assert estimate_cost(
+            "openai/gpt-5.2", 1_000_000, 0, base_url=self.OPENROUTER
+        ) == pytest.approx(1.75)
+
+    def test_date_suffix_still_strips_on_any_endpoint(self):
+        """The date-suffix strip predates the aggregator gate and must stay
+        unconditional — a provider's own dated snapshot is on any endpoint."""
+        assert is_priced("gpt-5.2-2025-12-11", base_url=self.DIRECT)
+        assert is_priced("gpt-5.2-2025-12-11")
+
+
+class TestCompletionPricesOverlay:
+    """STAPEL_AGENT['COMPLETION_PRICES'] — the host overlay, merged over and
+    winning over the shipped table (same semantics as EMBEDDING_PRICES)."""
+
+    def test_host_override_wins_over_the_shipped_table(self):
+        assert estimate_cost(
+            "claude-sonnet-5", 1_000_000, 0,
+            extra_prices={"claude-sonnet-5": {"input": 999.0, "output": 999.0}},
+        ) == pytest.approx(999.0)
+
+    def test_host_can_price_a_model_the_shipped_table_never_heard_of(self):
+        assert not is_priced("acme-mini")
+        assert is_priced(
+            "acme-mini", extra_prices={"acme-mini": {"input": 1.0, "output": 2.0}}
+        )
+
+    def test_the_overlay_participates_in_normalization_too(self):
+        """A host override for the bare alias still answers for that
+        model's dated snapshot / aggregator-prefixed id, the same way the
+        shipped table does."""
+        extra = {"acme-mini": {"input": 1.0, "output": 3.0}}
+        assert estimate_cost(
+            "acme-mini-2026-01-01", 1_000_000, 0, extra_prices=extra
+        ) == pytest.approx(1.0)
+
+    def test_cost_fields_threads_extra_prices_through(self):
+        fields = cost_fields(
+            model="acme-mini", provider="openai-compat",
+            input_tokens=1_000_000, output_tokens=0,
+            extra_prices={"acme-mini": {"input": 4.0, "output": 8.0}},
+        )
+        assert fields["cost_basis"] == "pricing_estimate"
+        assert fields["cost_usd"] == pytest.approx(4.0)
+
 
 class TestEmbeddingRateCards:
     """Embeddings bill input tokens only, and a self-hosted one may bill

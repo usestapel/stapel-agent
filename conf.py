@@ -73,6 +73,7 @@ NO_ENV = (
     # stated in settings.py where a reviewer sees it, never assembled from
     # an environment variable in a shared shell.
     "EMBEDDING_PRICES",
+    "COMPLETION_PRICES",
     "RERANK_PROVIDERS",
     "DEFAULT_RERANK_PROVIDER",
     "IMAGE_PROVIDERS",
@@ -177,6 +178,23 @@ agent_settings = AppSettings(
         "CLI_BINARY": "claude",
         "CLI_TIMEOUT": 120,
         "MAX_TOKENS": 4096,
+        # Host rate card for completion models, USD per MTok, merged OVER
+        # pricing.PRICES_USD_PER_MTOK and winning over it — same merge
+        # semantics as EMBEDDING_PRICES below, and the same shape as a row
+        # in that table: ``{"<model>": {"input": ..., "output": ...}}``.
+        # Two things only this can say:
+        #   * a NEGOTIATED rate the shipped table cannot know (it is a fact
+        #     about this deployment's invoice, and the published list price
+        #     is only the default);
+        #   * a price for a model the shipped table has never heard of, e.g.
+        #     a new aggregator SKU — see pricing._normalize_model for how a
+        #     vendor-prefixed id (``"x-ai/grok-4.20"``) resolves against
+        #     both this overlay and the shipped table.
+        # A model absent from both lands at cost_usd=0.0,
+        # cost_basis=unpriced, and stapel_agent.W018 names it at
+        # ``manage.py check`` time — the completion analogue of
+        # EMBEDDING_PRICES' own W018 coverage.
+        "COMPLETION_PRICES": {},
         # ── STT (speech-to-text) ────────────────────────────────
         # Overlay merged OVER stt.BUILTIN_STT_PROVIDERS (whisper-http /
         # elevenlabs / assemblyai) — same merge semantics as PROVIDERS.

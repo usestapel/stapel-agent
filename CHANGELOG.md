@@ -3,6 +3,54 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.31.1] — 2026-09-21
+
+Patch: a client host now routes text-LLM calls through OpenRouter with
+vendor-prefixed model ids (`x-ai/grok-4.20`, `x-ai/grok-4.5`, ...). The
+rate card had only the bare xAI names, and `_normalize_model` stripped a
+dated snapshot suffix but never a vendor prefix — so every one of those
+calls landed `cost_usd=0.0 cost_basis=unpriced`, with a `W018` warning
+read by nobody.
+
+### Added
+
+- `STAPEL_AGENT["COMPLETION_PRICES"]` — a host rate-card overlay for
+  completion models, merged over and winning over
+  `pricing.PRICES_USD_PER_MTOK`, same shape and same merge semantics as
+  `EMBEDDING_PRICES`. Declared in `conf.py`, `no_env` (a rate card is a
+  claim about money and belongs in settings.py, not a shared shell), and
+  documented in CONFIG.MD.
+- Four new `pricing.PRICES_USD_PER_MTOK` rows for OpenRouter's own
+  namespacing of xAI's Grok models — `x-ai/grok-4.20`, `x-ai/grok-4.5`,
+  `x-ai/grok-4.6`, `x-ai/grok-4.3` — verified live 21 Sep 2026 against the
+  unauthenticated `GET https://openrouter.ai/api/v1/models` catalog. These
+  are SEPARATE entries from the existing bare `grok-*` rows (xAI's own
+  direct-API prices): OpenRouter is a distinct billing product even where a
+  number happens to match.
+- `LlmProvider.base_url()` (default `""`, overridden by `OpenAICompatProvider`
+  and its subclasses to read their configured base URL) — lets
+  `pricing.cost_fields` tell an aggregator endpoint from a direct one.
+
+### Fixed — a vendor-prefixed model id only strips its prefix on a known aggregator
+
+`pricing._normalize_model` now takes the resolved `base_url` and strips a
+known vendor prefix (`x-ai/`, `openai/`, `anthropic/`, `deepinfra/`,
+`qwen/`, `google/`, `meta-llama/`, `mistralai/`, `cohere/`) ONLY when the
+endpoint is a known aggregator (OpenRouter) AND the stripped bare name is
+itself priced. On any other endpoint — including no `base_url` at all —
+the id stays verbatim: a prefixed id on a direct endpoint is not the same
+product as the aggregator's namespacing of it, and guessing otherwise is a
+fabricated cost with extra steps. `estimate_cost` / `is_priced` /
+`cost_fields` all gained optional `base_url` and `extra_prices` keyword
+arguments; `services._usage` now passes the resolved backend's
+`base_url()` and the deployment's `COMPLETION_PRICES` overlay through to
+`cost_fields`.
+
+`stapel_agent.checks.check_configured_models_are_priced` (`W018`) now
+resolves models against the same `base_url` + `COMPLETION_PRICES` the
+live call path uses, and its message names the provider and base URL a
+configured model rung is unpriced on.
+
 ## [0.31.0] — 2026-09-20
 
 Minor: the provider alert window holds per SERVICE instead of per worker,

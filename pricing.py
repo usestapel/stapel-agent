@@ -123,6 +123,21 @@ PRICES_USD_PER_MTOK: dict[str, dict[str, float]] = {
     "muse-spark-1.1": {"input": 1.25, "output": 4.25},
     # google/gemini-3.5-flash via OpenRouter (public /api/v1/models catalog)
     "or-gemini-3.5-flash": {"input": 1.5, "output": 9.0},
+    # --- OpenRouter-namespaced xAI SKUs (verified live 21 Sep 2026 via the
+    # --- unauthenticated GET https://openrouter.ai/api/v1/models catalog,
+    # --- `pricing.prompt` / `pricing.completion` USD-per-token * 1e6) -------
+    # These are SEPARATE entries from the bare "grok-*" rows above, which are
+    # xAI's own direct-API prices: OpenRouter is a distinct billing product
+    # (its own margin, its own outage/rate-limit surface) even where the
+    # number happens to land the same, and a client host now points
+    # OPENAI_COMPAT_BASE_URL at OpenRouter with exactly these prefixed ids.
+    # Not modelled: OpenRouter's >200K-prompt-token override (roughly 2x
+    # input, ~1.8-2x output on these rows) and the $0.005 web_search add-on —
+    # same reasoning as the module docstring's cache/batch/geo multipliers.
+    "x-ai/grok-4.20": {"input": 1.25, "output": 2.5},
+    "x-ai/grok-4.5": {"input": 2.0, "output": 6.0},
+    "x-ai/grok-4.6": {"input": 2.0, "output": 6.0},
+    "x-ai/grok-4.3": {"input": 1.25, "output": 2.5},
 }
 
 
@@ -166,36 +181,127 @@ _REASONING_EXCLUDED_FROM_COMPLETION = frozenset({"xai"})
 #: usage.cost_in_usd_ticks against the /v1/language-models rate card).
 USD_PER_TICK = 1e-10
 
+#: Substrings that identify an aggregator endpoint by its base URL. Only an
+#: AGGREGATOR namespaces its whole catalog under a vendor prefix
+#: ("x-ai/grok-4.5", "openai/gpt-5.2", ...) — a direct endpoint's model id is
+#: either bare or carries a prefix that is genuinely part of the product name.
+#: Membership here is a measured fact about the endpoint, never guessed from
+#: the model id alone.
+_AGGREGATOR_BASE_URL_MARKERS = ("openrouter.ai",)
 
-def _normalize_model(model: str) -> str:
-    """Strip a trailing dated snapshot suffix (either spelling) to match a base alias."""
-    return _DATE_SUFFIX.sub("", model or "")
+#: Vendor prefixes an aggregator's catalog namespaces models under. Stripping
+#: one on a NON-aggregator endpoint would silently price a different product
+#: — see ``_normalize_model``.
+_VENDOR_PREFIXES = (
+    "x-ai/",
+    "openai/",
+    "anthropic/",
+    "deepinfra/",
+    "qwen/",
+    "google/",
+    "meta-llama/",
+    "mistralai/",
+    "cohere/",
+)
 
 
-def estimate_cost(model: str, tokens_in: int, tokens_out: int) -> float:
+def _is_aggregator_base_url(base_url: str | None) -> bool:
+    """Whether *base_url* is a known model-aggregator endpoint (OpenRouter)."""
+    return any(marker in (base_url or "").lower() for marker in _AGGREGATOR_BASE_URL_MARKERS)
+
+
+def _normalize_model(model: str, base_url: str | None = None) -> str:
+    """Strip a trailing dated snapshot suffix, and — aggregator-only — a
+    vendor prefix, to match a base alias.
+
+    The date-suffix strip is unconditional: a provider dating its own
+    snapshot is the same product under a longer name, on any endpoint.
+
+    The vendor-prefix strip is NOT unconditional, and needs two guards:
+
+    1. *base_url* must resolve to a known AGGREGATOR (OpenRouter). A direct
+       endpoint's model id is not namespaced the same way — an id that
+       happens to start with "x-ai/" on a direct, non-aggregator endpoint is
+       a different product than xAI's own "grok-*", and pricing it as the
+       same one is a fabricated cost with extra steps (same failure the
+       date-suffix regex already guards against, one string away).
+    2. The STRIPPED name must already be priced. Otherwise a caller-supplied
+       id from an aggregator's ever-growing catalog would strip to a bare
+       name that happens to collide with something else in the table.
+
+    Callers should try the verbatim id first (PRICES_USD_PER_MTOK / the
+    embeddings table already carry OpenRouter-namespaced entries such as
+    "x-ai/grok-4.5" for the ids this package knows about) — this function is
+    the fallback for an aggregator id this table has not been taught yet but
+    whose bare vendor name it already prices.
+    """
+    stripped = _DATE_SUFFIX.sub("", model or "")
+    if not _is_aggregator_base_url(base_url):
+        return stripped
+    for prefix in _VENDOR_PREFIXES:
+        if stripped.startswith(prefix):
+            bare = stripped[len(prefix):]
+            if bare in PRICES_USD_PER_MTOK or bare in EMBEDDING_PRICES_USD_PER_MTOK:
+                return bare
+            break
+    return stripped
+
+
+def _completion_prices(
+    model: str, base_url: str | None, extra_prices: dict | None
+) -> dict | None:
+    """Look up *model*'s ``{"input", "output"}`` row.
+
+    ``extra_prices`` — the host's ``STAPEL_AGENT["COMPLETION_PRICES"]``
+    overlay — is checked FIRST and wins over the shipped table, exactly as
+    ``embedding_price``'s overlay does: a negotiated or host-declared rate is
+    a fact about this deployment's invoice, and the shipped table is only the
+    default. Each table is tried verbatim, then with the id normalized
+    (date-suffix always, vendor-prefix only on a known aggregator) — a host
+    override for "grok-4.20" must still answer for
+    "grok-4.20-0309-non-reasoning" the same way the shipped table does.
+    """
+    for table in (extra_prices or {}, PRICES_USD_PER_MTOK):
+        for key in (model or "", _normalize_model(model or "", base_url)):
+            if key and key in table:
+                return table[key]
+    return None
+
+
+def estimate_cost(
+    model: str,
+    tokens_in: int,
+    tokens_out: int,
+    *,
+    base_url: str | None = None,
+    extra_prices: dict | None = None,
+) -> float:
     """Estimate USD cost for a completion.
 
     Unknown model -> 0.0 + a warning. Never a fabricated number: a made-up
     price does not stay isolated, it gets summed into a total someone acts on.
+
+    *base_url* is the resolved endpoint the call actually went to — it lets
+    :func:`_normalize_model` strip a vendor prefix (e.g. "x-ai/grok-4.5")
+    only on a known aggregator. *extra_prices* is the host's
+    ``COMPLETION_PRICES`` overlay, checked first.
     """
-    prices = PRICES_USD_PER_MTOK.get(model) or PRICES_USD_PER_MTOK.get(
-        _normalize_model(model)
-    )
+    prices = _completion_prices(model, base_url, extra_prices)
     if not prices:
         logger.warning("pricing: unknown model %r -> cost_usd=0.0", model)
         return 0.0
     return (tokens_in * prices["input"] + tokens_out * prices["output"]) / 1_000_000
 
 
-def is_priced(model: str) -> bool:
+def is_priced(
+    model: str, *, base_url: str | None = None, extra_prices: dict | None = None
+) -> bool:
     """Whether a real price exists for ``model``.
 
     Exposed so a caller can tell "this call was free" from "we do not know what
     this call cost" — 0.0 means both, and only one of them is good news.
     """
-    return bool(
-        PRICES_USD_PER_MTOK.get(model) or PRICES_USD_PER_MTOK.get(_normalize_model(model))
-    )
+    return _completion_prices(model, base_url, extra_prices) is not None
 
 
 def billed_output_tokens(provider: str, output_tokens: int, thinking_tokens: int) -> int:
@@ -219,6 +325,8 @@ def cost_fields(
     output_tokens: int,
     thinking_tokens: int = 0,
     cost_in_usd_ticks: int | None = None,
+    base_url: str | None = None,
+    extra_prices: dict | None = None,
 ) -> dict:
     """The cost view of one completion.
 
@@ -226,6 +334,9 @@ def cost_fields(
     when the provider reported its own charge, ``pricing_estimate`` when this
     table was used, and ``unpriced`` when neither was available — that last one
     exists so an unknown model is visible as unknown instead of as free.
+
+    *base_url* and *extra_prices* pass straight through to
+    :func:`estimate_cost` / :func:`is_priced` — see those for what each does.
     """
     billed_out = billed_output_tokens(provider, output_tokens, thinking_tokens)
     actual = (
@@ -235,14 +346,15 @@ def cost_fields(
     )
     if actual is not None:
         basis = "provider_ticks"
-    elif is_priced(model):
+    elif is_priced(model, base_url=base_url, extra_prices=extra_prices):
         basis = "pricing_estimate"
     else:
         basis = "unpriced"
     return {
         "billed_output_tokens": billed_out,
         "cost_usd": actual if actual is not None else estimate_cost(
-            model, int(input_tokens or 0), billed_out
+            model, int(input_tokens or 0), billed_out,
+            base_url=base_url, extra_prices=extra_prices,
         ),
         "cost_basis": basis,
     }

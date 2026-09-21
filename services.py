@@ -318,7 +318,9 @@ def _cost_columns(cost: dict | None) -> dict:
     }
 
 
-def _usage(row_or_result, *, model: str = "", provider: str = "") -> dict:
+def _usage(
+    row_or_result, *, model: str = "", provider: str = "", base_url: str = ""
+) -> dict:
     """What the call consumed, and what it cost.
 
     Used to return input/output only, while the provider had already measured
@@ -327,7 +329,12 @@ def _usage(row_or_result, *, model: str = "", provider: str = "") -> dict:
     reasoning tokens are billed. The breakdown now travels, and so does
     ``cost_usd`` with the ``cost_basis`` that says whether it is the provider's
     own figure, our price table, or unknown.
+
+    *base_url* is the resolved endpoint the call actually went to — see
+    ``pricing._normalize_model`` for why it matters (a vendor-prefixed model
+    id only strips its prefix on a known aggregator).
     """
+    from .conf import agent_settings
     from .pricing import cost_fields
 
     tokens = {
@@ -347,6 +354,8 @@ def _usage(row_or_result, *, model: str = "", provider: str = "") -> dict:
             input_tokens=tokens["input_tokens"],
             output_tokens=tokens["output_tokens"],
             thinking_tokens=tokens["thinking_tokens"],
+            base_url=base_url,
+            extra_prices=agent_settings.COMPLETION_PRICES,
         ),
     }
 
@@ -874,7 +883,9 @@ def _complete_once(
     # Computed once and used twice: the caller's ``usage`` and the ledger
     # row carry the same number by construction, so a dashboard and an
     # invoice cannot disagree about one call.
-    usage = _usage(result, model=model, provider=provider_name)
+    usage = _usage(
+        result, model=model, provider=provider_name, base_url=backend.base_url()
+    )
     for column, value in _cost_columns(usage).items():
         setattr(log, column, value)
     if usage.get("cost_basis") == "unpriced":
