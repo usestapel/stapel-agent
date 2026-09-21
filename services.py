@@ -1504,6 +1504,7 @@ def transcribe(
         transcript_from_dict,
     )
     from .stt.languages import UnknownLanguageError, canonical_language
+    from .stt.qa import REASON_EMPTY, is_empty_for_audio
     from .stt.router import select_chain
 
     if not isinstance(audio, AudioRef):
@@ -1796,6 +1797,36 @@ def transcribe(
             failure_reason = f"STT provider '{name}' could not be loaded: {exc}"
             _attempt(name, error_kind="unloadable", reason="unavailable", error=exc)
             logger.warning("stapel-agent: %s", failure_reason)
+            continue
+
+        # ── Nothing came back ──────────────────────────────────────────
+        # No words and no utterances, for audio long enough that "nobody
+        # said anything" is not a credible answer (STT_QA
+        # ["EMPTY_TRANSCRIPT_MIN_MS"]), is this provider declining in
+        # disguise — and it used to be the most expensive kind of success.
+        # Measured on a client host (2026-09-21): a 10-minute meeting came
+        # back empty from the primary, was checkpointed as a SUCCESS, and
+        # every retry for the next week was served that nothing "at cost
+        # 0, no provider call"; the caller completed the recording with
+        # zero segments. So: metered (the provider charged for it), NOT
+        # checkpointed (a cached nothing is worth nothing), and the chain
+        # walks on — the next provider may well hear the meeting.
+        if is_empty_for_audio(transcript, submitted_ms):
+            failure_reason = (
+                f"STT provider '{name}' returned an empty transcript for "
+                f"{submitted_ms} ms of submitted audio"
+            )
+            _attempt(name, error_kind="retryable", reason=REASON_EMPTY, error=failure_reason)
+            _log(
+                PromptStatus.ERROR,
+                provider_used=name,
+                response=None,
+                error=failure_reason,
+                transcript=transcript,
+            )
+            logger.warning(
+                "stapel-agent: %s — not checkpointed, walking the chain", failure_reason
+            )
             continue
 
         # This provider just served a request, so whatever it refused an

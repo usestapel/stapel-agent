@@ -201,8 +201,14 @@ class TestSubmittedAudioIsWhatIsMetered:
             AUDIO, audio_content_hash=HASH, audio_duration_ms=SUBMITTED_MS
         )
 
-        assert result["status"] == "ok"
-        row = PromptLog.objects.get()
+        # 148 minutes with nothing in them is not an answer (0.32.0, see
+        # test_stt_empty_transcript.py); the METER is what this test is
+        # about, and the row is metered the same whether the empty answer
+        # was accepted or refused.
+        assert result["status"] == "failure"
+        # Two rows: the metered empty call, then the chain's summary line.
+        row = PromptLog.objects.order_by("pk").first()
+        assert row.model == "fake-stt"
         assert row.audio_duration_ms == SUBMITTED_MS
         assert row.metadata["audio_submitted_ms"] == SUBMITTED_MS
         assert row.metadata["audio_submitted_source"] == "caller"

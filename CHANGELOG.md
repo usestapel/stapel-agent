@@ -3,6 +3,45 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.32.0] — 2026-09-22
+
+Minor: an empty transcript over real audio is a provider that did not
+deliver, not an answer to checkpoint.
+
+### Fixed — a checkpointed nothing was served "at cost 0" for a week
+
+Measured on a client host (2026-09-21): a 10-minute meeting came back
+from ElevenLabs with zero words and zero utterances. The router answered
+`status: ok`, the QA verdict was `gap: SKIP: no segments, passed`, the
+nothing was written into the checkpoint as a success — and both
+reprocesses that followed were served from it: "transcribe served from the
+checkpoint written 749s ago — no provider call, no charge". The caller
+persisted zero segments and completed the recording. The provider had
+charged for the 10 minutes; the retry ladder could not reach it again for
+seven days.
+
+`services.transcribe` now treats a transcript with no words and no
+utterances, for SUBMITTED audio at least `STT_QA["EMPTY_TRANSCRIPT_MIN_MS"]`
+long (default 5000), as a retryable provider failure with reason `empty`:
+
+- metered in full on its own `PromptLog` row (the provider charged), with
+  the audio length the meter already used;
+- NOT checkpointed — a cached nothing is worth nothing, and the next
+  attempt must reach a provider;
+- the fallback chain walks on, as it does for quota and 5xx; an exhausted
+  chain reports `<provider> (empty): ...` like every other decline.
+
+The floor is judged against what was submitted (caller-stated or probed),
+never against the provider's own duration, which is the last word's end
+for several adapters and reads as zero for exactly this answer. A clip
+shorter than the floor, or audio nobody measured, may still be silent.
+`stt.qa.is_empty_for_audio` / `empty_transcript_min_ms` are public for
+host QA.
+
+Pair with stapel-recordings 0.32.0, which refuses an empty transcript at
+the stage as well (an older agent, or a stranded handoff, can still hand
+one over).
+
 ## [0.31.1] — 2026-09-21
 
 Patch: a client host now routes text-LLM calls through OpenRouter with

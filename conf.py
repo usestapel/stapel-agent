@@ -261,7 +261,11 @@ agent_settings = AppSettings(
         # magnitude above p99 of the measured word-gap distribution (1.58s,
         # see stt/segmentation.py) and above this package's own
         # utterance-cut threshold. 0 disables the check.
-        "STT_QA": {"MAX_GAP_SECONDS": 5.0},
+        # EMPTY_TRANSCRIPT_MIN_MS: submitted audio at least this long that
+        # comes back with no words and no utterances is a provider that
+        # did not deliver — metered, not checkpointed, and the fallback
+        # chain walks on. Below it, silence is an answer. 0 disables.
+        "STT_QA": {"MAX_GAP_SECONDS": 5.0, "EMPTY_TRANSCRIPT_MIN_MS": 5000},
         # What an EMPTY allowlist means. False (the default) = refuse the
         # download: an unconfigured deployment must not be one where any
         # caller-supplied host on the public internet is fetchable, and

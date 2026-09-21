@@ -44,7 +44,7 @@ consuming project.
 | STT_LANGUAGE_ROUTES | env | {iso-639-1: [provider names]} language routing matrix. | no | {} |
 | STT_LANGUAGE_ALIASES | settings | extra language codes this deployment's clients/providers use, mapped onto canonical ones ({"cmn": "zh"}); ISO 639-1 and its 639-2 aliases are built in, anything else is refused unless listed here. | no | {} |
 | STT_QUOTA_WATCHDOG | settings | {ENABLED, WARN_RATIO, CRITICAL_RATIO} — the scheduled provider-balance sweep and the alert raised on a live quota refusal. | no | {"ENABLED": True, "WARN_RATIO": 0.10, "CRITICAL_RATIO": 0.02} |
-| STT_QA | settings | {MAX_GAP_SECONDS} — silence between consecutive transcript segments that flags `qa.gap`; 0 disables the check. | no | {"MAX_GAP_SECONDS": 5.0} |
+| STT_QA | settings | {MAX_GAP_SECONDS, EMPTY_TRANSCRIPT_MIN_MS} — MAX_GAP_SECONDS: silence between consecutive transcript segments that flags `qa.gap`; 0 disables. EMPTY_TRANSCRIPT_MIN_MS: submitted audio at least this long that comes back with no words and no utterances is a provider failure (`reason: empty`) — metered, not checkpointed, fallback chain walked; 0 disables. | no | {"MAX_GAP_SECONDS": 5.0, "EMPTY_TRANSCRIPT_MIN_MS": 5000} |
 | STT_TIMEOUT | env | hard cap (seconds) on one provider's submit+poll cycle. | no | 1800 |
 | STT_DOWNLOAD_MAX_BYTES | env | byte cap on an audio-URL download; the transfer aborts mid-stream when crossed. | no | 134217728 |
 | STT_DOWNLOAD_TIMEOUT | env | per-socket connect/read timeout for one hop of that download. | no | 30.0 |

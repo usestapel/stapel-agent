@@ -132,6 +132,58 @@ def _number(seg, field: str) -> Optional[float]:
         return None
 
 
+#: Audio at least this long that comes back with no words and no utterances
+#: is not a transcript, it is a provider that did not deliver. Five seconds
+#: is the same order as MAX_GAP_SECONDS: below it, "nobody said anything"
+#: is a credible answer for a clip.
+EMPTY_TRANSCRIPT_MIN_MS = 5000
+
+#: The retryable reason the router records for it in the attempts ledger.
+REASON_EMPTY = "empty"
+
+
+def empty_transcript_min_ms() -> int:
+    """``STT_QA["EMPTY_TRANSCRIPT_MIN_MS"]``, or the shipped default. 0 disables."""
+    try:
+        from ..conf import agent_settings
+
+        configured = agent_settings.STT_QA or {}
+    except Exception:  # Django absent or settings not configured
+        return EMPTY_TRANSCRIPT_MIN_MS
+    if not isinstance(configured, dict):
+        return EMPTY_TRANSCRIPT_MIN_MS
+    try:
+        return int(configured.get("EMPTY_TRANSCRIPT_MIN_MS", EMPTY_TRANSCRIPT_MIN_MS))
+    except (TypeError, ValueError):
+        return EMPTY_TRANSCRIPT_MIN_MS
+
+
+def is_empty_for_audio(transcript, audio_ms: Optional[int]) -> bool:
+    """Is *transcript* empty for audio long enough that empty is a failure?
+
+    Empty means no utterances AND no words. *audio_ms* is what was
+    SUBMITTED (caller-stated or probed), never the provider's own duration
+    — that number is the last word's end for several adapters, and an
+    empty transcript would report itself as zero seconds of audio and pass.
+    Unmeasured audio (``None``) cannot be judged and is accepted.
+    """
+    if isinstance(transcript, dict):
+        utterances = transcript.get("utterances") or []
+        words = transcript.get("words") or []
+    else:
+        utterances = getattr(transcript, "utterances", None) or []
+        words = getattr(transcript, "words", None) or []
+    if utterances or words:
+        return False
+    floor = empty_transcript_min_ms()
+    if floor <= 0 or audio_ms is None:
+        return False
+    try:
+        return int(audio_ms) >= floor
+    except (TypeError, ValueError):
+        return False
+
+
 def transcript_qa(transcript, *, threshold: Optional[float] = None) -> dict:
     """The QA verdict for one transcript.
 
@@ -196,9 +248,13 @@ def _transcript_qa(transcript, *, threshold: Optional[float] = None) -> dict:
 
 __all__ = [
     "CHECK_GAP",
+    "EMPTY_TRANSCRIPT_MIN_MS",
     "MAX_GAP_SECONDS",
     "MAX_REPORTED_GAPS",
+    "REASON_EMPTY",
+    "empty_transcript_min_ms",
     "find_gaps",
+    "is_empty_for_audio",
     "max_gap_seconds",
     "transcript_qa",
 ]
