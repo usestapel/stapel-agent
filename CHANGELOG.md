@@ -3,6 +3,13 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.33.2] — 2026-10-01
+
+0.33.1 was tagged but never published: its release job installed a smaller
+test set than CI (no stapel-alerts), and the two new alert-grouping tests,
+green in CI, failed there. The publish workflow installs the same set now.
+Code is 0.33.1's.
+
 ## [0.33.1] — 2026-10-01
 
 ### Fixed — one outage is one alert-store issue
