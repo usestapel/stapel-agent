@@ -15,6 +15,13 @@ from django.utils.module_loading import import_string
 
 from .cache import CachePolicy
 from .conf import agent_settings
+from .failures import (
+    FAILURE_CLASS_CONFIG,
+    FAILURE_CLASS_INPUT,
+    FAILURE_CLASS_POLICY,
+    FAILURE_CLASS_PROVIDER,
+    REASON_UNSUPPORTED,
+)
 from .models import CostBasis, PromptLog, PromptSource, PromptStatus
 from .parsing import parse_json_response, parse_translation_response
 from .providers import registered_providers
@@ -466,7 +473,11 @@ def complete(
     """
     models = agent_settings.MODELS or {}
     if model_size not in models:
-        return {"status": "failure", "reason": f"Unknown model size '{model_size}'"}
+        return {
+            "status": "failure",
+            "reason": f"Unknown model size '{model_size}'",
+            "failure_class": FAILURE_CLASS_CONFIG,
+        }
 
     try:
         enforce_size_ceiling(model_size, user_id, workspace_id)
@@ -477,13 +488,18 @@ def complete(
             "reason": REASON_MODEL_SIZE_CEILING,
             "ceiling": exc.ceiling,
             "requested_size": exc.requested_size,
+            "failure_class": FAILURE_CLASS_POLICY,
         }
 
     schema, _model = _resolve_schema(schema)
 
     chain = provider_chain(provider)
     if not chain:
-        return {"status": "failure", "reason": "No LLM provider configured"}
+        return {
+            "status": "failure",
+            "reason": "No LLM provider configured",
+            "failure_class": FAILURE_CLASS_CONFIG,
+        }
 
     # The forensic record, one entry per provider tried — the same shape
     # the STT chain writes, for the same reason: when the whole chain
@@ -506,10 +522,27 @@ def complete(
         # what every caller of this function has always received. Several
         # are named together, because with a chain the last message alone
         # is the least informative one.
+        # Every provider declined for a reason of its own (credits, rate,
+        # outage, timeout) — the request was never judged, so a caller may
+        # try it again later. Only a chain in which NO provider can do this
+        # kind of call at all is the deployment's, not a passing state.
+        reasons = [a["reason"] or "unknown" for a in attempts]
+        failure_class = (
+            FAILURE_CLASS_CONFIG
+            if all(r == REASON_UNSUPPORTED for r in reasons)
+            else FAILURE_CLASS_PROVIDER
+        )
         if len(attempts) == 1:
-            return {"status": "failure", "reason": attempts[0]["error"] or ""}
+            return {
+                "status": "failure",
+                "reason": attempts[0]["error"] or "",
+                "failure_class": failure_class,
+                "provider_reasons": reasons,
+            }
         return {
             "status": "failure",
+            "failure_class": failure_class,
+            "provider_reasons": reasons,
             "reason": "all LLM providers failed: "
             + "; ".join(
                 f"{a['provider']} ({a['reason'] or 'unknown'}): "
@@ -825,7 +858,11 @@ def _complete_once(
         if disposition(reason) == TERMINAL_INPUT:
             # The request itself is what was refused; the next provider
             # would refuse it identically, so the chain ends here.
-            return {"status": "failure", "reason": str(exc)}
+            return {
+                "status": "failure",
+                "reason": str(exc),
+                "failure_class": FAILURE_CLASS_INPUT,
+            }
         return None
 
     # This provider just answered, so whatever it refused an hour ago it
@@ -2157,7 +2194,11 @@ def summarize(
         try:
             text_or_transcript = transcript_from_dict(text_or_transcript)
         except (TypeError, ValueError) as exc:
-            return {"status": "failure", "reason": f"Invalid transcript payload: {exc}"}
+            return {
+                "status": "failure",
+                "reason": f"Invalid transcript payload: {exc}",
+                "failure_class": FAILURE_CLASS_INPUT,
+            }
     if isinstance(text_or_transcript, NormalizedTranscript):
         chunks = [
             c["text"]
@@ -2167,12 +2208,17 @@ def summarize(
         ]
     elif isinstance(text_or_transcript, str):
         if not text_or_transcript.strip():
-            return {"status": "failure", "reason": "Nothing to summarize"}
+            return {
+                "status": "failure",
+                "reason": "Nothing to summarize",
+                "failure_class": FAILURE_CLASS_INPUT,
+            }
         chunks = prep.split_text_chunks(text_or_transcript, chunk_tokens=tokens)
     else:
         return {
             "status": "failure",
             "reason": "summarize() takes a str, NormalizedTranscript or transcript dict",
+            "failure_class": FAILURE_CLASS_INPUT,
         }
 
     suffix = prep.language_directive(language)
@@ -2786,13 +2832,17 @@ def _failure(result: dict) -> dict:
     """A ``complete()`` failure, re-shaped for a caller one level up.
 
     Carries ``ceiling``/``requested_size`` through when present (the
-    :data:`REASON_MODEL_SIZE_CEILING` refusal) — everything else about the
-    failure is ``reason`` alone, same as before this key existed.
+    :data:`REASON_MODEL_SIZE_CEILING` refusal) and ``failure_class`` /
+    ``provider_reasons`` — the part a caller decides "try again later" on.
+    Dropping the class here is what left llm.summarize's callers with a
+    free-text reason and no way to tell a 402 from a bad transcript.
     """
     return _drop_none(
         {
             "status": "failure",
             "reason": result.get("reason"),
+            "failure_class": result.get("failure_class"),
+            "provider_reasons": result.get("provider_reasons"),
             "ceiling": result.get("ceiling"),
             "requested_size": result.get("requested_size"),
         }

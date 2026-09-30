@@ -59,7 +59,12 @@ class TestPromptLog:
     def test_provider_error_row(self, fake_provider):
         fake_provider.error = ProviderError("kaput")
         result = services.complete("hello", "small", source=PromptSource.OTHER)
-        assert result == {"status": "failure", "reason": "kaput"}
+        assert result == {
+            "status": "failure",
+            "reason": "kaput",
+            "failure_class": "provider",
+            "provider_reasons": ["unknown"],
+        }
         log = PromptLog.objects.get()
         assert log.status == PromptStatus.ERROR
         assert log.error_message == "kaput"
@@ -68,7 +73,12 @@ class TestPromptLog:
     def test_timeout_maps_to_timeout_status(self, fake_provider):
         fake_provider.error = ProviderTimeout("Execution timed out")
         result = services.complete("hello", "small", source=PromptSource.OTHER)
-        assert result == {"status": "failure", "reason": "Execution timed out"}
+        assert result == {
+            "status": "failure",
+            "reason": "Execution timed out",
+            "failure_class": "provider",
+            "provider_reasons": ["timeout"],
+        }
         assert PromptLog.objects.get().status == PromptStatus.TIMEOUT
 
     def test_unknown_model_size(self, fake_provider):

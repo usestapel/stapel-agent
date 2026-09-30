@@ -277,7 +277,12 @@ class TestClaudeCodeCLI:
         result = services.complete(
             "hi", "small", provider="claude-code", source="other"
         )
-        assert result == {"status": "failure", "reason": "Execution timed out"}
+        assert result == {
+            "status": "failure",
+            "reason": "Execution timed out",
+            "failure_class": "provider",
+            "provider_reasons": ["timeout"],
+        }
         assert PromptLog.objects.get().status == PromptStatus.TIMEOUT
 
 

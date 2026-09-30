@@ -313,4 +313,9 @@ class TestLlmSummarize:
 
         fake_provider.error = ProviderError("llm down")
         result = call("llm.summarize", {"text": "t"})
-        assert result == {"status": "failure", "reason": "llm down"}
+        assert result == {
+            "status": "failure",
+            "reason": "llm down",
+            "failure_class": "provider",
+            "provider_reasons": ["unknown"],
+        }

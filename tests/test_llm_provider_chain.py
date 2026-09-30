@@ -286,3 +286,62 @@ class TestTheAlert:
             result = services.complete("x", "medium", source="summarize")
             assert result["status"] == "ok"
             assert result["provider_used"] == "secondary"
+
+
+@pytest.mark.django_db
+class TestTheCallerCanTellWhoFailed:
+    """A client fleet, 2026-09-29 00:34Z..09-30 04:59Z: the only text provider
+    answered 402 for 28 hours, no fallback was configured, and llm.summarize
+    handed recordings a free-text reason and nothing else. 23 recordings
+    completed without a summary and nothing ever asked again, because
+    nothing could tell "the provider is out of money" from "this transcript
+    cannot be summarised". The class is that distinction."""
+
+    def _no_chain(self, chain, primary):
+        chain.STAPEL_AGENT = {
+            **chain.STAPEL_AGENT,
+            "DEFAULT_PROVIDER": primary,
+            "PROVIDER_FALLBACK_CHAIN": [],
+        }
+
+    def test_an_out_of_credits_summary_is_the_providers_failure(self, chain):
+        self._no_chain(chain, "out-of-credits")
+
+        result = services.summarize("We agreed to ship on Friday.", model_size="medium")
+
+        assert result["status"] == "failure"
+        assert result["failure_class"] == "provider"
+        assert result["provider_reasons"] == ["quota"]
+
+    def test_a_whole_chain_declining_is_still_the_providers(self, chain):
+        chain.STAPEL_AGENT = {
+            **chain.STAPEL_AGENT,
+            "PROVIDER_FALLBACK_CHAIN": ["unreachable"],
+        }
+
+        result = services.summarize("We agreed to ship on Friday.", model_size="medium")
+
+        assert result["failure_class"] == "provider"
+        assert result["provider_reasons"] == ["quota", "server"]
+
+    def test_a_refused_request_is_the_inputs(self, chain):
+        self._no_chain(chain, "bad-request")
+
+        result = services.summarize("We agreed to ship on Friday.", model_size="medium")
+
+        assert result["status"] == "failure"
+        assert result["failure_class"] == "input"
+
+    def test_nothing_to_summarize_is_the_inputs(self, chain):
+        result = services.summarize("   ", model_size="medium")
+
+        assert result == {
+            "status": "failure",
+            "reason": "Nothing to summarize",
+            "failure_class": "input",
+        }
+
+    def test_no_provider_at_all_is_the_deployments(self, chain):
+        result = services.complete("x", "no-such-size", source="summarize")
+
+        assert result["failure_class"] == "config"

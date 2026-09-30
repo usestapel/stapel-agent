@@ -90,6 +90,17 @@ RETRYABLE_SAME_PROVIDER = "retryable_same_provider"
 FALLBACK_NEXT_PROVIDER = "fallback_next_provider"
 TERMINAL_INPUT = "terminal_input"
 
+#: ``failure_class`` on an LLM failure result — what the CALLER may do about
+#: it, which a free-text ``reason`` cannot say. ``provider``: every provider
+#: declined on its own account (credits, rate, outage, timeout) and the
+#: request was never judged, so the same request may succeed later.
+#: ``input``: the request itself was refused; repeating it is pointless.
+#: ``config`` / ``policy``: this deployment cannot or will not serve it.
+FAILURE_CLASS_PROVIDER = "provider"
+FAILURE_CLASS_INPUT = "input"
+FAILURE_CLASS_CONFIG = "config"
+FAILURE_CLASS_POLICY = "policy"
+
 #: The reasons that stop a fallback chain. Everything else walks it.
 FATAL_REASONS = frozenset({REASON_MEDIA, REASON_JOB, REASON_LANGUAGE})
 
@@ -224,6 +235,10 @@ def is_out_of_credits(reason: str | None) -> bool:
 
 __all__ = [
     "AUTH_MARKERS",
+    "FAILURE_CLASS_CONFIG",
+    "FAILURE_CLASS_INPUT",
+    "FAILURE_CLASS_POLICY",
+    "FAILURE_CLASS_PROVIDER",
     "FALLBACK_NEXT_PROVIDER",
     "FATAL_REASONS",
     "MEDIA_STATUSES",

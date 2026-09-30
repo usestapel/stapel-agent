@@ -3,6 +3,34 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.33.0] — 2026-10-01
+
+Minor: an LLM failure says whose failure it was.
+
+### Added — `failure_class` on every `complete()` / `summarize()` failure
+
+Measured on a client fleet (2026-09-29 00:34Z..09-30 04:59Z): the only text
+provider answered 402 (out of credits) for 28 hours, no fallback chain was
+configured, and `llm.summarize` answered each recording with a free-text
+`reason`. The caller could not tell "the provider cannot pay" from "this
+transcript cannot be summarised", so it did the safe thing for both — nothing
+— and 23 recordings kept no summary.
+
+Failure results now carry `failure_class`:
+
+- `provider` — every provider declined on its own account (quota, rate,
+  server, transport, timeout, auth); the request was never judged and the
+  same request may succeed later. `provider_reasons` lists each provider's
+  taxonomy reason (`unknown` when it gave none).
+- `input` — the request itself was refused (terminal-input disposition,
+  nothing to summarise, an unreadable transcript payload).
+- `config` — this deployment cannot serve it (unknown model size, no
+  provider configured, no provider supporting the call at all).
+- `policy` — the model-size ceiling.
+
+Additive: `status` and `reason` are unchanged, and a caller that compares a
+whole failure dict now sees the two extra keys.
+
 ## [0.32.0] — 2026-09-22
 
 Minor: an empty transcript over real audio is a provider that did not

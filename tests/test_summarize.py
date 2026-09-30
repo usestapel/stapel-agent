@@ -11,6 +11,15 @@ from stapel_agent.stt.base import (
     NormalizedWord,
 )
 
+#: A provider that raised with no taxonomy reason: the provider failed, the
+#: request was never judged, so the caller may ask again later.
+LLM_DOWN = {
+    "status": "failure",
+    "reason": "llm down",
+    "failure_class": "provider",
+    "provider_reasons": ["unknown"],
+}
+
 
 def transcript(n_utterances=3, text="Point number %d discussed at length."):
     return NormalizedTranscript(
@@ -175,7 +184,11 @@ class TestSummarizeService:
 
     def test_empty_text_is_failure(self, fake_provider):
         result = services.summarize("   \n ")
-        assert result == {"status": "failure", "reason": "Nothing to summarize"}
+        assert result == {
+            "status": "failure",
+            "reason": "Nothing to summarize",
+            "failure_class": "input",
+        }
         assert fake_provider.calls == []
 
     def test_wrong_type_is_failure(self, fake_provider):
@@ -186,12 +199,12 @@ class TestSummarizeService:
     def test_provider_failure_single_shot(self, fake_provider):
         fake_provider.error = ProviderError("llm down")
         result = services.summarize("text")
-        assert result == {"status": "failure", "reason": "llm down"}
+        assert result == LLM_DOWN
 
     def test_chunk_failure_aborts_map_reduce(self, fake_provider):
         fake_provider.error = ProviderError("llm down")
         result = services.summarize("a" * 100, chunk_tokens=10)
-        assert result == {"status": "failure", "reason": "llm down"}
+        assert result == LLM_DOWN
         assert len(fake_provider.calls) == 1  # stopped at the first chunk
 
     def test_merge_failure_is_reported(self, fake_provider, monkeypatch):
@@ -207,7 +220,7 @@ class TestSummarizeService:
 
         monkeypatch.setattr(fake_provider, "complete", flaky)
         result = services.summarize("a" * 100, chunk_tokens=10)
-        assert result == {"status": "failure", "reason": "merge down"}
+        assert result == {**LLM_DOWN, "reason": "merge down"}
 
     def test_model_size_and_provider_forwarded(self, fake_provider):
         services.summarize("text", model_size="large", provider="fake")
@@ -272,6 +285,6 @@ class TestSummaryStructuredOutputCanary:
         assert result["safety"]["structured_output_leak"] == ["CHAT_TEMPLATE_TOKEN"]
 
     def test_a_failed_summary_is_unchanged(self, fake_provider):
-        """The failure envelope has no summary to inspect and gains no key."""
+        """The failure envelope has no summary to inspect and gains no safety key."""
         fake_provider.error = ProviderError("llm down")
-        assert services.summarize("text") == {"status": "failure", "reason": "llm down"}
+        assert services.summarize("text") == LLM_DOWN
