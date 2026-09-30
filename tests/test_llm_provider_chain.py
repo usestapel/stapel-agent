@@ -345,3 +345,57 @@ class TestTheCallerCanTellWhoFailed:
         result = services.complete("x", "no-such-size", source="summarize")
 
         assert result["failure_class"] == "config"
+
+
+@pytest.mark.django_db
+class TestOneOutageIsOneIssue:
+    """A client fleet, 2026-09-29: one 28-hour 402 became five alert-store
+    issues, because the provider's body (which differs per request) was in
+    the ERROR line and the store groups by the line; transcript-QA warnings
+    carried their measurements and every upload became its own issue."""
+
+    BODIES = (
+        "HTTP 402: This request would exceed your available credits",
+        "HTTP 402: You requested up to 4096 tokens, but can only afford 2784",
+        "HTTP 402: Insufficient credits. Add more",
+    )
+
+    def _fingerprints(self, records):
+        from stapel_alerts.normalise import fingerprint
+
+        return {
+            fingerprint("", service="agent", exc_class="", message=r.getMessage())
+            for r in records
+        }
+
+    def test_three_different_402_bodies_are_one_fingerprint(self, chain, caplog):
+        chain.STAPEL_AGENT = {**chain.STAPEL_AGENT, "PROVIDER_ALERT_INTERVAL_SECONDS": 0}
+        with caplog.at_level(logging.INFO, logger="stapel_agent.provider_health"):
+            for body in self.BODIES:
+                provider_health.report_llm_out_of_credits("openai-compat", detail=body)
+
+        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert len(errors) == 3
+        assert len(self._fingerprints(errors)) == 1
+        # The body is not lost: it is one INFO line away.
+        infos = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+        assert any("can only afford 2784" in m for m in infos)
+
+    def test_two_failed_qa_verdicts_are_one_fingerprint(self, caplog, monkeypatch):
+        from stapel_agent.stt import qa as qa_module
+
+        verdicts = iter([
+            {"passed": False, "checks": {"gap": "FAIL: 2 gap(s) over 5.0s, 24.12s unaccounted for"}},
+            {"passed": False, "checks": {"gap": "FAIL: 73 gap(s) over 5.0s, 810.33s unaccounted for"}},
+        ])
+        monkeypatch.setattr(qa_module, "transcript_qa", lambda t: next(verdicts))
+        with caplog.at_level(logging.INFO, logger="stapel_agent.services"):
+            services._run_qa(None, provider="elevenlabs", cached=False)
+            services._run_qa(None, provider="elevenlabs", cached=False)
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 2
+        assert len(self._fingerprints(warnings)) == 1
+        assert "(gap)" in warnings[0].getMessage()
+        infos = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+        assert any("810.33s" in m for m in infos)

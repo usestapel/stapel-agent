@@ -3,6 +3,21 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.33.1] — 2026-10-01
+
+### Fixed — one outage is one alert-store issue
+
+A client fleet, 2026-09-29: one 28-hour 402 at the text provider became five
+alert-store issues, and transcript-QA warnings became one issue per upload.
+The store groups by the log line, and both lines carried text that differs
+per occurrence — the provider's reply body, the gap counts and seconds.
+
+- `llm_provider_out_of_credits:<provider>` ERROR names the class and the
+  provider only; the provider's reply goes to an INFO line and to the
+  capture's `detail` context.
+- The QA WARNING names the failed checks (`did not pass QA (gap)`); the
+  measurements follow at INFO.
+
 ## [0.33.0] — 2026-10-01
 
 Minor: an LLM failure says whose failure it was.

@@ -293,9 +293,15 @@ def report_llm_out_of_credits(provider: str, detail: str = "") -> bool:
     )
     if suppressed:
         message += f" [+{suppressed} further refusal(s) since the last alert]"
-    if detail:
-        message += f" — {detail[:300]}"
+    # The provider's own words stay OUT of the alert line. The store groups
+    # by the line, and a 402 body differs per request ("would exceed your
+    # available credits", "can only afford 2784", "Insufficient credits"):
+    # one 28-hour outage became five issues (a client fleet, 2026-09-29).
+    # The line names the class and the provider; the body goes to INFO and
+    # to the capture's context.
     logger.error(message)
+    if detail:
+        logger.info("stapel-agent: %s detail: %s", fingerprint, detail[:300])
     capture_alert(
         message,
         kind=ALERT_KIND,

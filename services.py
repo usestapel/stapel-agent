@@ -1404,16 +1404,26 @@ def _run_qa(transcript, *, provider: str, cached: bool) -> dict:
 
     qa = transcript_qa(transcript)
     if not qa.get("passed"):
+        failed = {
+            name: value
+            for name, value in (qa.get("checks") or {}).items()
+            if str(value).startswith("FAIL")
+        }
+        # The WARNING names which checks failed and nothing else: the alert
+        # store groups by the line, and the measurements (gap count, seconds,
+        # spans) made every recording its own issue — one per upload on a
+        # client fleet (2026-09-28..30). The numbers follow at INFO.
         logger.warning(
-            "stapel-agent: transcript from %r%s did not pass QA: %s — the "
+            "stapel-agent: transcript from %r%s did not pass QA (%s) — the "
             "transcript is returned anyway, labelled.",
             provider,
             " (checkpoint hit)" if cached else "",
-            "; ".join(
-                f"{name}: {value}"
-                for name, value in (qa.get("checks") or {}).items()
-                if str(value).startswith("FAIL")
-            ),
+            ", ".join(sorted(failed)) or "unnamed check",
+        )
+        logger.info(
+            "stapel-agent: QA detail for %r: %s",
+            provider,
+            "; ".join(f"{name}: {value}" for name, value in failed.items()),
         )
     return qa
 
