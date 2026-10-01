@@ -3,6 +3,12 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.34.1] — 2026-10-01
+
+0.34.0 was tagged but never published: the contract artifacts
+(docs/capabilities.json, README, llms.txt) still said 0.33.2. Code is
+0.34.0's.
+
 ## [0.34.0] — 2026-10-01
 
 Minor: a summary says who wrote it, and a refusal says who refused.
