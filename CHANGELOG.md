@@ -3,6 +3,18 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.34.0] — 2026-10-01
+
+Minor: a summary says who wrote it, and a refusal says who refused.
+
+- `summarize()` / `llm.summarize` success envelopes carry `provider_used`
+  and `fallback_used` (true when any part of a map-reduce was answered by a
+  provider further down `PROVIDER_FALLBACK_CHAIN`).
+- Every chain failure from `complete()` (and so from `summarize()`) carries
+  `provider_attempts: [{provider, reason}]` beside `provider_reasons` —
+  names and reasons only, never the provider's reply, so a caller can put
+  it in an alert line.
+
 ## [0.33.2] — 2026-10-01
 
 0.33.1 was tagged but never published: its release job installed a smaller

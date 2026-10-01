@@ -282,6 +282,7 @@ class TestClaudeCodeCLI:
             "reason": "Execution timed out",
             "failure_class": "provider",
             "provider_reasons": ["timeout"],
+            "provider_attempts": [{"provider": "claude-code", "reason": "timeout"}],
         }
         assert PromptLog.objects.get().status == PromptStatus.TIMEOUT
 

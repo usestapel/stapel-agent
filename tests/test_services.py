@@ -64,6 +64,7 @@ class TestPromptLog:
             "reason": "kaput",
             "failure_class": "provider",
             "provider_reasons": ["unknown"],
+            "provider_attempts": [{"provider": "fake", "reason": "unknown"}],
         }
         log = PromptLog.objects.get()
         assert log.status == PromptStatus.ERROR
@@ -78,6 +79,7 @@ class TestPromptLog:
             "reason": "Execution timed out",
             "failure_class": "provider",
             "provider_reasons": ["timeout"],
+            "provider_attempts": [{"provider": "fake", "reason": "timeout"}],
         }
         assert PromptLog.objects.get().status == PromptStatus.TIMEOUT
 

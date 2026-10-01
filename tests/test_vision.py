@@ -169,6 +169,7 @@ class TestVisionService:
             "reason": "Provider 'claude-code' does not support image input",
             "failure_class": "config",
             "provider_reasons": ["unsupported"],
+            "provider_attempts": [{"provider": "claude-code", "reason": "unsupported"}],
         }
         assert PromptLog.objects.count() == 0  # never reached the backend
 

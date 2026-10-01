@@ -266,6 +266,8 @@ class TestLlmSummarize:
             "status": "ok",
             "summary": "## Summary",
             "usage": {"input_tokens": 8, "output_tokens": 2},
+            "provider_used": "fake",
+            "fallback_used": False,
         }
 
     def test_happy_path_transcript(self, fake_provider):
@@ -318,4 +320,5 @@ class TestLlmSummarize:
             "reason": "llm down",
             "failure_class": "provider",
             "provider_reasons": ["unknown"],
+            "provider_attempts": [{"provider": "fake", "reason": "unknown"}],
         }

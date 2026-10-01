@@ -323,6 +323,27 @@ class TestTheCallerCanTellWhoFailed:
 
         assert result["failure_class"] == "provider"
         assert result["provider_reasons"] == ["quota", "server"]
+        # Who declined, in order, without the providers' own words — the
+        # part an alert line can carry.
+        assert result["provider_attempts"] == [
+            {"provider": "out-of-credits", "reason": "quota"},
+            {"provider": "unreachable", "reason": "server"},
+        ]
+
+    def test_a_summary_the_fallback_wrote_says_so(self, chain):
+        result = services.summarize("We agreed to ship on Friday.", model_size="medium")
+
+        assert result["status"] == "ok"
+        assert result["provider_used"] == "secondary"
+        assert result["fallback_used"] is True
+        assert OutOfCreditsProvider.calls and SecondaryProvider.calls
+
+    def test_a_map_reduce_that_fell_back_on_any_part_says_so(self, chain):
+        result = services.summarize("a" * 100, model_size="medium", chunk_tokens=10)
+
+        assert result["status"] == "ok"
+        assert result["provider_used"] == "secondary"
+        assert result["fallback_used"] is True
 
     def test_a_refused_request_is_the_inputs(self, chain):
         self._no_chain(chain, "bad-request")

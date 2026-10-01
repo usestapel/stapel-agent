@@ -527,6 +527,12 @@ def complete(
         # try it again later. Only a chain in which NO provider can do this
         # kind of call at all is the deployment's, not a passing state.
         reasons = [a["reason"] or "unknown" for a in attempts]
+        # WHO declined, beside why — names and reasons only, never the
+        # provider's own words, so a caller can put it in an alert line.
+        provider_attempts = [
+            {"provider": a["provider"], "reason": a["reason"] or "unknown"}
+            for a in attempts
+        ]
         failure_class = (
             FAILURE_CLASS_CONFIG
             if all(r == REASON_UNSUPPORTED for r in reasons)
@@ -538,11 +544,13 @@ def complete(
                 "reason": attempts[0]["error"] or "",
                 "failure_class": failure_class,
                 "provider_reasons": reasons,
+                "provider_attempts": provider_attempts,
             }
         return {
             "status": "failure",
             "failure_class": failure_class,
             "provider_reasons": reasons,
+            "provider_attempts": provider_attempts,
             "reason": "all LLM providers failed: "
             + "; ".join(
                 f"{a['provider']} ({a['reason'] or 'unknown'}): "
@@ -2142,7 +2150,7 @@ def diarize(
 # ─── Summarization ────────────────────────────────────────────────────
 
 
-def _summary_result(summary: str, usage: dict) -> dict:
+def _summary_result(summary: str, usage: dict, served: dict | None = None) -> dict:
     """Envelope a plain summary, flagging structured-output leakage.
 
     AI-01: a schema-constrained answer parses by construction, a prose one
@@ -2155,6 +2163,10 @@ def _summary_result(summary: str, usage: dict) -> dict:
 
     leaked = detect_structured_output_leak(summary)
     envelope = {"status": "ok", "summary": summary, "usage": usage}
+    if served:
+        # Which provider wrote the text the caller stores, and whether the
+        # chain had to walk to get it.
+        envelope.update(_drop_none(served))
     if leaked:
         logger.warning(
             "stapel-agent: summary carries structured-output scaffolding %s "
@@ -2233,6 +2245,7 @@ def summarize(
 
     suffix = prep.language_directive(language)
     usage = {"input_tokens": 0, "output_tokens": 0}
+    served: dict = {}
 
     def _run(prompt: str, system_prompt: str, part: str = "") -> dict:
         result = complete(
@@ -2252,13 +2265,18 @@ def summarize(
         )
         for key in usage:
             usage[key] += (result.get("usage") or {}).get(key, 0)
+        if result.get("status") == "ok":
+            served["provider_used"] = result.get("provider_used")
+            served["fallback_used"] = bool(
+                served.get("fallback_used") or result.get("fallback_used")
+            )
         return result
 
     if len(chunks) == 1:
         result = _run(chunks[0], prep.SUMMARY_SYSTEM_PROMPT)
         if result["status"] == "failure":
             return _failure(result)
-        return _summary_result(result.get("result") or "", usage)
+        return _summary_result(result.get("result") or "", usage, served)
 
     # Map-reduce: summarize each chunk, then merge the partials.
     partials: list[str] = []
@@ -2281,7 +2299,7 @@ def summarize(
     )
     if merged["status"] == "failure":
         return _failure(merged)
-    return _summary_result(merged.get("result") or "", usage)
+    return _summary_result(merged.get("result") or "", usage, served)
 
 
 # ─── Embeddings ───────────────────────────────────────────────────────
@@ -2853,6 +2871,7 @@ def _failure(result: dict) -> dict:
             "reason": result.get("reason"),
             "failure_class": result.get("failure_class"),
             "provider_reasons": result.get("provider_reasons"),
+            "provider_attempts": result.get("provider_attempts"),
             "ceiling": result.get("ceiling"),
             "requested_size": result.get("requested_size"),
         }

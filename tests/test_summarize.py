@@ -18,6 +18,7 @@ LLM_DOWN = {
     "reason": "llm down",
     "failure_class": "provider",
     "provider_reasons": ["unknown"],
+    "provider_attempts": [{"provider": "fake", "reason": "unknown"}],
 }
 
 
@@ -136,6 +137,8 @@ class TestSummarizeService:
             "status": "ok",
             "summary": "## Summary",
             "usage": {"input_tokens": 10, "output_tokens": 5},
+            "provider_used": "fake",
+            "fallback_used": False,
         }
         assert len(fake_provider.calls) == 1
         call = fake_provider.calls[0]
