@@ -669,6 +669,7 @@ class TestLlmDiarizeFunction:
             "llm.diarize",
             {"audio_url": "https://x/a.mp3", "provider": "fatal-diar"},
         )
+        assert result.pop("metering")["calls"] == 1  # the ledger row, summed
         assert result == {"status": "failure", "reason": "audio is not decodable"}
 
     def test_schema_rejects_missing_audio_url(self, fake_diarization):

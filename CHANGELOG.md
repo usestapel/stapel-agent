@@ -3,6 +3,23 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.36.0] — 2026-10-14
+
+- Every metered `llm.*` Function reply (`complete`, `translate`,
+  `transcribe`, `diarize`, `embed`, `rerank`, `summarize`,
+  `generate_image`; the task path too) carries `metering: {provider, model,
+  cost_usd, cost_basis, priced_by, input_tokens, output_tokens,
+  thinking_tokens, cache_read_tokens, cache_write_tokens, audio_duration_ms,
+  duration_ms, fallback_used, calls}` — the sum over every PromptLog row the
+  call wrote (fallback chain, map-reduce, empty-transcript walk), with
+  provider/model of the row that produced the result. A checkpoint or
+  prompt-cache hit reports `cost_usd: 0, cost_basis: "cached"`. Absent when
+  the call wrote no row.
+- Every one of those requests accepts an optional, closed `context:
+  {recording_id, stage, run_id, attempt}`, stored on each PromptLog row the
+  call writes as `metadata.context`. Deploy this before a caller sends it:
+  the schemas keep `additionalProperties: false`.
+
 ## [0.35.0] — 2026-10-14
 
 - `llm.summarize` / `services.summarize()` take an optional recording type:

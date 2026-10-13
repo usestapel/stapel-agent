@@ -10,10 +10,12 @@ in-process without HTTP:
 
     call("llm.translate", {"from_lang": "auto", "to": "de", "entries": {...}})
 """
+import functools
 import logging
 
 from stapel_core.comm import function
 
+from . import metering
 from .summary import PURPOSE_GUIDANCE_MAX_CHARS, PURPOSE_LABEL_MAX_CHARS
 
 logger = logging.getLogger(__name__)
@@ -48,6 +50,39 @@ IDENTITY_PROPERTIES = {
         "summing over its members. Optional, opaque, recorded only.",
     },
 }
+
+
+#: ``context`` rides beside the identity pair on every metered ``llm.*``
+#: request: stored on each PromptLog row as ``metadata.context``.
+ATTRIBUTION_PROPERTIES = {
+    **IDENTITY_PROPERTIES,
+    "context": metering.CONTEXT_SCHEMA,
+}
+
+
+def _metered(handler):
+    """Run *handler* inside a metering scope; the reply gains ``metering``.
+
+    ``metering`` sums every ledger row the call wrote (a fallback chain, a
+    map-reduce, a retry): ``{provider, model, cost_usd, cost_basis,
+    priced_by, input_tokens, output_tokens, thinking_tokens,
+    cache_read_tokens, cache_write_tokens, audio_duration_ms, duration_ms,
+    fallback_used, calls}``. Absent when the call wrote no row (refused
+    before any provider was asked). The task path reuses these handlers,
+    so task results carry it too.
+    """
+
+    @functools.wraps(handler)
+    def wrapper(payload: dict) -> dict:
+        with metering.scope(payload.get("context")) as meter:
+            reply = handler(payload)
+        if isinstance(reply, dict):
+            summary = meter.summary(fallback_used=bool(reply.get("fallback_used")))
+            if summary is not None:
+                reply = {**reply, "metering": summary}
+        return reply
+
+    return wrapper
 
 
 def _identity_kwargs(payload: dict) -> dict:
@@ -142,7 +177,7 @@ COMPLETE_SCHEMA = {
             "the provider: a completion is sampled, and two deliberate "
             "asks must be allowed to differ.",
         },
-        **IDENTITY_PROPERTIES,
+        **ATTRIBUTION_PROPERTIES,
     },
     "required": ["prompt", "model"],
     "additionalProperties": False,
@@ -161,7 +196,7 @@ TRANSLATE_SCHEMA = {
             "additionalProperties": {"type": "string"},
             "description": "Mapping of keys to source-language strings.",
         },
-        **IDENTITY_PROPERTIES,
+        **ATTRIBUTION_PROPERTIES,
     },
     "required": ["from_lang", "to", "entries"],
     "additionalProperties": False,
@@ -169,6 +204,7 @@ TRANSLATE_SCHEMA = {
 
 
 @function("llm.complete", schema=COMPLETE_SCHEMA)
+@_metered
 def llm_complete(payload: dict) -> dict:
     """JSON LLM completion — same result dict as ``POST api/v1/llm/complete``.
 
@@ -206,6 +242,7 @@ def llm_complete(payload: dict) -> dict:
 
 
 @function("llm.translate", schema=TRANSLATE_SCHEMA)
+@_metered
 def llm_translate(payload: dict) -> dict:
     """Key-value translation — same result dict as ``POST api/v1/llm/translate``.
 
@@ -312,7 +349,7 @@ TRANSCRIBE_SCHEMA = {
             "back as transcript_ref.key. Echoed, never parsed out of the "
             "presigned URL — the key layout is the caller's business.",
         },
-        **IDENTITY_PROPERTIES,
+        **ATTRIBUTION_PROPERTIES,
     },
     "required": ["audio_url"],
     "additionalProperties": False,
@@ -364,7 +401,7 @@ SUMMARIZE_SCHEMA = {
             "purpose_guidance: alone it changes nothing. Added to every "
             "system prompt (the chunk prompts get only this line).",
         },
-        **IDENTITY_PROPERTIES,
+        **ATTRIBUTION_PROPERTIES,
     },
     "oneOf": [{"required": ["text"]}, {"required": ["transcript"]}],
     "additionalProperties": False,
@@ -393,6 +430,7 @@ def transcript_summary(transcript: dict) -> dict:
 
 
 @function("llm.transcribe", schema=TRANSCRIBE_SCHEMA)
+@_metered
 def llm_transcribe(payload: dict) -> dict:
     """Speech-to-text. Returns the transcript, or a reference to it.
 
@@ -535,7 +573,7 @@ DIARIZE_SCHEMA = {
             "specifics without a core release. Unknown keys go to the "
             "provider as-is.",
         },
-        **IDENTITY_PROPERTIES,
+        **ATTRIBUTION_PROPERTIES,
     },
     "required": ["audio_url"],
     "additionalProperties": False,
@@ -543,6 +581,7 @@ DIARIZE_SCHEMA = {
 
 
 @function("llm.diarize", schema=DIARIZE_SCHEMA)
+@_metered
 def llm_diarize(payload: dict) -> dict:
     """Speaker diarization — same result dict as ``POST api/v1/llm/diarize``.
 
@@ -611,7 +650,7 @@ EMBED_SCHEMA = {
             "specifics without a core release. Unknown keys go to the "
             "provider as-is.",
         },
-        **IDENTITY_PROPERTIES,
+        **ATTRIBUTION_PROPERTIES,
     },
     "required": ["texts"],
     "additionalProperties": False,
@@ -619,6 +658,7 @@ EMBED_SCHEMA = {
 
 
 @function("llm.embed", schema=EMBED_SCHEMA)
+@_metered
 def llm_embed(payload: dict) -> dict:
     """Text embeddings — same result dict as ``POST api/v1/llm/embed``.
 
@@ -687,7 +727,7 @@ RERANK_SCHEMA = {
             "specifics without a core release. Unknown keys go to the "
             "provider as-is.",
         },
-        **IDENTITY_PROPERTIES,
+        **ATTRIBUTION_PROPERTIES,
     },
     "required": ["query", "documents"],
     "additionalProperties": False,
@@ -695,6 +735,7 @@ RERANK_SCHEMA = {
 
 
 @function("llm.rerank", schema=RERANK_SCHEMA)
+@_metered
 def llm_rerank(payload: dict) -> dict:
     """Rerank — same result dict as ``POST api/v1/llm/rerank``.
 
@@ -749,6 +790,7 @@ def llm_stt_catalog(payload: dict) -> dict:
 
 
 @function("llm.summarize", schema=SUMMARIZE_SCHEMA)
+@_metered
 def llm_summarize(payload: dict) -> dict:
     """Summarization — same result dict as ``POST api/v1/llm/summarize``.
 
@@ -807,7 +849,7 @@ GENERATE_IMAGE_SCHEMA = {
             "cost 0. Omitted, every call generates: two deliberate asks "
             "for the same prompt must be allowed to differ.",
         },
-        **IDENTITY_PROPERTIES,
+        **ATTRIBUTION_PROPERTIES,
     },
     "required": ["prompt"],
     "additionalProperties": False,
@@ -815,6 +857,7 @@ GENERATE_IMAGE_SCHEMA = {
 
 
 @function("llm.generate_image", schema=GENERATE_IMAGE_SCHEMA)
+@_metered
 def llm_generate_image(payload: dict) -> dict:
     """Image generation — same result dict as
     ``POST api/v1/llm/generate-image``.

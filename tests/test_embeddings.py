@@ -660,6 +660,7 @@ class TestLlmEmbedFunction:
 
     def test_provider_pin_forwarded(self, fake_embeddings):
         result = call("llm.embed", {"texts": ["x"], "provider": "fatal-embed"})
+        assert result.pop("metering")["calls"] == 1  # the ledger row, summed
         assert result == {"status": "failure", "reason": "auth rejected"}
 
     def test_schema_rejects_missing_texts(self, fake_embeddings):

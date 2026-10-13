@@ -746,6 +746,7 @@ class TestLlmRerankFunction:
             "llm.rerank",
             {"query": "q", "documents": ["x"], "provider": "fatal-rerank"},
         )
+        assert result.pop("metering")["calls"] == 1  # the ledger row, summed
         assert result == {"status": "failure", "reason": "auth rejected"}
 
     def test_schema_rejects_missing_query(self, fake_rerank):

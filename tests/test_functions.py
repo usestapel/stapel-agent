@@ -165,6 +165,7 @@ class TestLlmTranslate:
             "llm.translate",
             {"from_lang": "auto", "to": "de", "entries": {"k": "Hello"}},
         )
+        assert result.pop("metering")["calls"] == 1  # the ledger row, summed
         assert result == {"status": "ok", "result": {"k": "Hallo"}}
 
     def test_empty_entries_short_circuits(self, fake_provider):
@@ -224,6 +225,7 @@ class TestLlmTranscribe:
             "llm.transcribe",
             {"audio_url": "https://x/a.mp3", "provider": "fatal-stt"},
         )
+        assert result.pop("metering")["calls"] == 1  # the ledger row, summed
         assert result == {"status": "failure", "reason": "audio is not decodable"}
 
     def test_schema_rejects_missing_audio_url(self, fake_stt):
@@ -262,6 +264,7 @@ class TestLlmSummarize:
             text="## Summary", input_tokens=8, output_tokens=2
         )
         result = call("llm.summarize", {"text": "long meeting notes"})
+        assert result.pop("metering")["calls"] == 1  # the ledger row, summed
         assert result == {
             "status": "ok",
             "summary": "## Summary",
@@ -346,6 +349,7 @@ class TestLlmSummarize:
 
         fake_provider.error = ProviderError("llm down")
         result = call("llm.summarize", {"text": "t"})
+        assert result.pop("metering")["calls"] == 1  # the ledger row, summed
         assert result == {
             "status": "failure",
             "reason": "llm down",

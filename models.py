@@ -151,6 +151,18 @@ class PromptLog(models.Model):
     def __str__(self):
         return f"{self.source}/{self.model_size} [{self.status}] {self.model}"
 
+    def save(self, *args, **kwargs):
+        # The one choke point every ledger write passes: an insert inside a
+        # metering scope carries the caller's context and is counted.
+        from . import metering
+
+        adding = self._state.adding
+        if adding:
+            metering.stamp(self)
+        super().save(*args, **kwargs)
+        if adding:
+            metering.record(self)
+
 
 @access.ops
 class AnalysisJob(models.Model):

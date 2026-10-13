@@ -13,6 +13,7 @@ import time
 
 from django.utils.module_loading import import_string
 
+from . import metering
 from .cache import CachePolicy
 from .conf import agent_settings
 from .failures import (
@@ -705,6 +706,7 @@ def _complete_once(
         )
         if cached is not None:
             logger.info("stapel-agent: cache hit for %s prompt", source)
+            metering.record_cached(provider=provider_name, model=model)
             return {
                 "status": "ok",
                 "result": cached,
@@ -1193,10 +1195,12 @@ def translate(
         )
         if cached:
             try:
-                return {
+                result = {
                     "status": "ok",
                     "result": parse_translation_response(cached),
                 }
+                metering.record_cached(provider=provider_name, model=model)
+                return result
             except ValueError:
                 logger.warning(
                     "stapel-agent: cached translation response invalid, fetching new"

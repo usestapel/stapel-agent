@@ -22,6 +22,7 @@ registries). Everything below is verifiable against the code in this repo.
 |---|---|
 | Models (`models.py`) | `PromptLog` (immutable per-call ledger: `source` llm_facade/translate/transcribe/summarize/generate_image/other, `model`, `model_size`, `prompt`, `system_prompt`, `response`, `status` success/failure/timeout/error, `error_message`, `input_tokens`/`output_tokens`/`thinking_tokens`/`cache_read_tokens`/`cache_write_tokens`, `duration_ms`, `audio_duration_ms` (billable audio length, distinct from wall clock), `cost_usd`/`cost_basis` (as computed at call time, never recomputed), `user_id`, `workspace_id`, JSON `metadata`, `created_at`; doubles as the cache-by-prompt store) |
 | Services (`services.py`) | `complete()` (cache lookup → optional size-ceiling gate → provider → PromptLog row → `{status, result, usage}`; optional `images` for vision), `complete_json()` (JSON-API system prompt + JSON extraction — the `llm.complete` surface), `translate()`, `transcribe()` (STT router walk — see "STT providers"), `summarize()` (single-shot / map-reduce over `complete()`), `generate_image()` (see "Image generation"), `get_provider()` / `get_stt_provider()` / `get_image_provider()` (lazy resolution against the merged registries), `resolve_size_ceiling()` / `enforce_size_ceiling()` / `ModelSizeCeilingExceeded` (see "Model-size ceiling"), `JSON_API_SYSTEM_PROMPT` |
+| Metering (`metering.py`) | `scope(context)` / `Meter.summary()` — sums the PromptLog rows one comm Function call wrote into the reply's `metering`, and stamps the request's `context` on each row (`metadata.context`); see "Per-call metering and caller context" below. Django-free |
 | Parsing (`parsing.py`) | `parse_json_response()` (direct JSON → fenced block → object anywhere → array anywhere; surrounding prose becomes `comment`), `parse_translation_response()`, Django-free |
 | STT seam (`stt/`) | `SttProvider` ABC (incl. the `keyterms`/`provider_options` biasing seam), `AudioRef` (exactly one of url/path/data), `NormalizedTranscript` (incl. the counts-only `biasing` block)/`NormalizedUtterance`/`NormalizedWord` + `transcript_from_dict()`/`utterances_from_words()`, `TranscriptionError` (fatal: the media) / `RetryableTranscriptionError` (this provider cannot serve this request — incl. quota/auth) taxonomy (`stt/base.py`, Django-free) with the shared per-response classifier + `reason` vocabulary (`stt/failures.py`); open registry (`stt/__init__.py`); language router (`stt/router.py`); adapters `whisper-http` / `elevenlabs` / `assemblyai` / `deepgram` / `gladia` / `soniox` / `speechmatics` / `xai-stt` (`stt/providers/`) |
 | Summarization prep (`summary.py`) | `render_markdown()` (timestamped `[MM:SS] speaker: text` lines), `build_summary_input()` (token-budget chunking with `seg_NNNN` → start-ms anchors), `split_text_chunks()`, the three system prompts (single-shot / chunk / merge) — Django-free |
@@ -661,6 +662,28 @@ because these schemas are `additionalProperties: false` and product traffic
 arrives over comm, so before 0.12.0 every row written by a real pipeline
 stage had `user_id = NULL` and the token ledger had no subject to attribute
 to. `llm.stt_catalog` writes no row and therefore has nobody to attribute.
+
+**Per-call metering and caller context** (`metering.py`). The same eight
+functions (and their task registrations, which reuse the handlers) run inside
+a metering scope:
+
+- The request may carry `context: {recording_id?, stage?, run_id?, attempt?}`
+  (strings; `attempt` an integer ≥ 0; closed object). Every PromptLog row the
+  call inserts gets it as `metadata.context` — stamped in `PromptLog.save()`,
+  the one choke point every ledger write passes. Recorded only.
+- The reply carries `metering: {provider, model, cost_usd, cost_basis,
+  priced_by, input_tokens, output_tokens, thinking_tokens, cache_read_tokens,
+  cache_write_tokens, audio_duration_ms, duration_ms, fallback_used, calls}` —
+  the SUM over every row the call wrote (an STT or LLM fallback chain, a
+  map-reduce summary, an empty-transcript retry), `calls` the number of rows,
+  and `provider` / `model` / `priced_by` those of the row that produced the
+  result. `cost_basis` of a sum: all-cached → `cached`; any `unpriced` part →
+  `unpriced` (the sum is a lower bound); otherwise the parts' basis. A
+  checkpoint hit and a prompt-cache hit (which writes no row) report
+  `cost_usd: 0, cost_basis: "cached"`. Counters nobody reported are `null`.
+  A call refused before any provider was asked carries no `metering` key.
+  For transcribe / diarize / rerank / generate_image rows `model` is the
+  provider name (that is what the row's `model` column holds).
 
 ### Erasure
 
