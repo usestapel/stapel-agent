@@ -34,6 +34,16 @@
       "type": "string",
       "description": "Identity of the CONTENT being summarized (a transcript hash, say). It checkpoints each part of the map-reduce, so a retried task resumes where the money stopped instead of re-buying every chunk. Without it every attempt pays in full."
     },
+    "purpose_guidance": {
+      "type": "string",
+      "maxLength": 2000,
+      "description": "What this recording type needs from the summary, from the host's own texts. Sent only together with purpose_label: alone it changes nothing. Added to the single-shot and merge system prompts, never to the chunk prompts. Put a digest of it in idempotency_key."
+    },
+    "purpose_label": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "The recording type the uploader chose, as the model should read it. Sent only together with purpose_guidance: alone it changes nothing. Added to every system prompt (the chunk prompts get only this line)."
+    },
     "user_id": {
       "type": "string",
       "description": "Who this call is for — recorded on the PromptLog row so per-user cost is answerable. Opaque to this package: any id shape the host uses. Optional; omitting it leaves the row unattributed, never rejected."

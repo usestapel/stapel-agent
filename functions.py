@@ -14,6 +14,8 @@ import logging
 
 from stapel_core.comm import function
 
+from .summary import PURPOSE_GUIDANCE_MAX_CHARS, PURPOSE_LABEL_MAX_CHARS
+
 logger = logging.getLogger(__name__)
 
 # ─── Identity, and why every schema below carries it ──────────────────
@@ -344,6 +346,23 @@ SUMMARIZE_SCHEMA = {
             "map-reduce, so a retried task resumes where the money "
             "stopped instead of re-buying every chunk. Without it every "
             "attempt pays in full.",
+        },
+        "purpose_guidance": {
+            "type": "string",
+            "maxLength": PURPOSE_GUIDANCE_MAX_CHARS,
+            "description": "What this recording type needs from the summary, "
+            "from the host's own texts. Sent only together with "
+            "purpose_label: alone it changes nothing. Added to the "
+            "single-shot and merge system prompts, never to the chunk "
+            "prompts. Put a digest of it in idempotency_key.",
+        },
+        "purpose_label": {
+            "type": "string",
+            "maxLength": PURPOSE_LABEL_MAX_CHARS,
+            "description": "The recording type the uploader chose, as the "
+            "model should read it. Sent only together with "
+            "purpose_guidance: alone it changes nothing. Added to every "
+            "system prompt (the chunk prompts get only this line).",
         },
         **IDENTITY_PROPERTIES,
     },
@@ -746,6 +765,8 @@ def llm_summarize(payload: dict) -> dict:
         model_size=payload.get("model") or "medium",
         provider=payload.get("provider"),
         idempotency_key=payload.get("idempotency_key"),
+        purpose_guidance=payload.get("purpose_guidance"),
+        purpose_label=payload.get("purpose_label"),
         **_identity_kwargs(payload),
     )
 

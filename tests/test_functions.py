@@ -310,6 +310,37 @@ class TestLlmSummarize:
         with pytest.raises(SchemaValidationError):
             call("llm.summarize", {"text": "t", "beep": 1})
 
+    def test_purpose_inputs_accepted_and_threaded(self, fake_provider):
+        result = call(
+            "llm.summarize",
+            {
+                "text": "t",
+                "purpose_guidance": "g" * 2000,
+                "purpose_label": "l" * 64,
+            },
+        )
+        assert result["status"] == "ok"
+        assert fake_provider.calls[0]["system_prompt"].endswith(
+            "Recording type (uploader's choice): " + "l" * 64 + "\n" + "g" * 2000 + "\n"
+        )
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            {"purpose_guidance": "g" * 2001, "purpose_label": "l"},
+            {"purpose_guidance": "g", "purpose_label": "l" * 65},
+            {"purpose_guidance": 1, "purpose_label": "l"},
+        ],
+    )
+    def test_schema_rejects_bad_purpose_inputs(self, fake_provider, extra):
+        # The valid pair passes first, so the rejection is the cap's, not
+        # additionalProperties'.
+        ok = {"purpose_guidance": "g", "purpose_label": "l"}
+        assert call("llm.summarize", {"text": "t", **ok})["status"] == "ok"
+        with pytest.raises(SchemaValidationError):
+            call("llm.summarize", {"text": "t", **extra})
+        assert len(fake_provider.calls) == 1
+
     def test_failure_is_a_status_dict(self, fake_provider):
         from stapel_agent.providers.base import ProviderError
 

@@ -291,3 +291,93 @@ class TestSummaryStructuredOutputCanary:
         """The failure envelope has no summary to inspect and gains no safety key."""
         fake_provider.error = ProviderError("llm down")
         assert services.summarize("text") == LLM_DOWN
+
+
+#: The prompts before the purpose inputs existed, pinned byte for byte: no
+#: purpose (or half of one) must leave every system prompt exactly as it was.
+_BASE_SINGLE = (
+    "You are an expert meeting and document summarizer. Produce a concise, "
+    "well-structured Markdown summary of the given content: start with a "
+    "short overview paragraph, then key points as bullets, then decisions "
+    "and action items (with owners when identifiable). Preserve [MM:SS] "
+    "timestamps when they are present in the input. Do not invent facts."
+)
+_BASE_CHUNK = (
+    "You are an expert summarizer. The input is one PART of a longer "
+    "recording or document. Summarize THIS PART only: key points, "
+    "decisions and action items, preserving [MM:SS] timestamps when "
+    "present. Be concise — this partial summary will be merged with "
+    "others later. Do not invent facts."
+)
+_BASE_MERGE = (
+    "You are an expert summarizer. The input is a sequence of partial "
+    "summaries of consecutive parts of one recording or document. Merge "
+    "them into a single coherent Markdown summary: a short overview "
+    "paragraph, key points, decisions and action items. Deduplicate "
+    "overlapping points and keep [MM:SS] timestamps. Do not invent facts."
+)
+
+GUIDANCE = "Lead with the customer's objections and the agreed next step."
+LABEL = "sales call"
+BLOCK = (
+    "\n\n## Recording type\n"
+    f"Recording type (uploader's choice): {LABEL}\n{GUIDANCE}\n"
+)
+LABEL_LINE = f"\n\nRecording type (uploader's choice): {LABEL}\n"
+LONG_TEXT = "\n\n".join(("Paragraph %d. " % i) + "z" * 50 for i in range(3))
+
+
+@pytest.mark.django_db
+class TestPurposePrompts:
+    def test_single_shot_gets_the_block_before_the_language(self, fake_provider):
+        services.summarize(
+            "short text",
+            language="de",
+            purpose_guidance=GUIDANCE,
+            purpose_label=LABEL,
+        )
+        (call,) = fake_provider.calls
+        assert call["system_prompt"] == _BASE_SINGLE + BLOCK + " Respond in de."
+
+    def test_chunks_get_the_label_line_and_merge_the_block(self, fake_provider):
+        services.summarize(
+            LONG_TEXT,
+            chunk_tokens=20,
+            language="fr",
+            purpose_guidance=GUIDANCE,
+            purpose_label=LABEL,
+        )
+        *chunk_calls, merge_call = fake_provider.calls
+        assert len(chunk_calls) == 3
+        for call in chunk_calls:
+            assert call["system_prompt"] == (
+                _BASE_CHUNK + LABEL_LINE + " Respond in fr."
+            )
+            assert GUIDANCE not in call["system_prompt"]
+        assert merge_call["system_prompt"] == _BASE_MERGE + BLOCK + " Respond in fr."
+
+    @pytest.mark.parametrize(
+        "guidance,label",
+        [(None, None), ("", ""), (None, LABEL), (GUIDANCE, None), ("  ", LABEL)],
+    )
+    def test_without_both_inputs_prompts_are_byte_identical(
+        self, fake_provider, guidance, label
+    ):
+        services.summarize(
+            "short text", language="de", purpose_guidance=guidance, purpose_label=label
+        )
+        services.summarize(
+            LONG_TEXT, chunk_tokens=20, purpose_guidance=guidance, purpose_label=label
+        )
+        single, *chunks, merge = fake_provider.calls
+        assert single["system_prompt"] == _BASE_SINGLE + " Respond in de."
+        assert [c["system_prompt"] for c in chunks] == [_BASE_CHUNK] * 3
+        assert merge["system_prompt"] == _BASE_MERGE
+
+    def test_over_length_is_an_input_failure(self, fake_provider):
+        result = services.summarize(
+            "text", purpose_guidance="g" * 2001, purpose_label=LABEL
+        )
+        assert result["status"] == "failure"
+        assert result["failure_class"] == "input"
+        assert fake_provider.calls == []

@@ -45,6 +45,46 @@ MERGE_SYSTEM_PROMPT = (
 )
 
 
+#: Length caps of the optional purpose inputs (``llm.summarize`` schema).
+PURPOSE_GUIDANCE_MAX_CHARS = 2000
+PURPOSE_LABEL_MAX_CHARS = 64
+
+
+def _purpose_pair(label: str | None, guidance: str | None) -> tuple[str, str] | None:
+    """Both inputs as given, or None: a label without guidance (or the
+    reverse, or a blank one) sends nothing."""
+    if not (label or "").strip() or not (guidance or "").strip():
+        return None
+    return label, guidance
+
+
+def purpose_block(label: str | None, guidance: str | None) -> str:
+    """The recording-type block for the single-shot and merge system prompts.
+
+    Goes after the base prompt and before ``language_directive``; it ends with
+    a newline so the language line stays last. Empty unless both are present.
+    """
+    pair = _purpose_pair(label, guidance)
+    if pair is None:
+        return ""
+    return (
+        "\n\n## Recording type\n"
+        f"Recording type (uploader's choice): {pair[0]}\n{pair[1]}\n"
+    )
+
+
+def purpose_label_line(label: str | None, guidance: str | None) -> str:
+    """The label line alone, for the chunk system prompt.
+
+    Guidance asks for an overview and lists, which would collide with
+    "Summarize THIS PART only". Empty unless both inputs are present.
+    """
+    pair = _purpose_pair(label, guidance)
+    if pair is None:
+        return ""
+    return f"\n\nRecording type (uploader's choice): {pair[0]}\n"
+
+
 def language_directive(language: str | None) -> str:
     """Suffix appended to the summary prompts when a target language is set."""
     return f" Respond in {language}." if language else ""
@@ -176,9 +216,13 @@ __all__ = [
     "CHUNK_SYSTEM_PROMPT",
     "DEFAULT_CHUNK_TOKENS",
     "MERGE_SYSTEM_PROMPT",
+    "PURPOSE_GUIDANCE_MAX_CHARS",
+    "PURPOSE_LABEL_MAX_CHARS",
     "SUMMARY_SYSTEM_PROMPT",
     "build_summary_input",
     "language_directive",
+    "purpose_block",
+    "purpose_label_line",
     "render_markdown",
     "split_text_chunks",
 ]

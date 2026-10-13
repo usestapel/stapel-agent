@@ -480,7 +480,8 @@ token columns NULL.
 ### Summarization contract
 
 `services.summarize(text_or_transcript, *, language=None, model_size="medium",
-provider=None, user_id=None, workspace_id=None, chunk_tokens=None)` accepts a `str`, a
+provider=None, user_id=None, workspace_id=None, chunk_tokens=None,
+idempotency_key=None, purpose_guidance=None, purpose_label=None)` accepts a `str`, a
 `NormalizedTranscript`, or its `to_dict()` form (the shape `llm.transcribe`
 returns) — exactly one input, enforced at every surface. Transcripts are
 rendered to timestamped `[MM:SS] speaker: text` Markdown; `summary.py` chunks
@@ -491,6 +492,25 @@ through `services.complete()` — so every pass lands in the ledger as
 `source=summarize` with full token accounting, and `usage` in the response is
 the aggregate across all passes. Cache-by-prompt is off for `summarize` by
 default (`CACHE_LOOKUP`).
+
+**Recording type (purpose).** The optional pair `purpose_label` (≤64 chars,
+`summary.PURPOSE_LABEL_MAX_CHARS`) and `purpose_guidance` (≤2000,
+`PURPOSE_GUIDANCE_MAX_CHARS`) adds the uploader's recording type to the system
+prompts. Both or nothing: a label without guidance (or the reverse, or a blank
+one) changes nothing, and the prompts stay byte-identical. With both:
+
+- single shot and merge: base + `"\n\n## Recording type\nRecording type
+  (uploader's choice): <label>\n<guidance>\n"` + language suffix
+  (`summary.purpose_block`);
+- each chunk: base + `"\n\nRecording type (uploader's choice): <label>\n"`
+  + language suffix (`summary.purpose_label_line`) — guidance asks for an
+  overview and lists, which collide with "THIS PART only".
+
+The block ends with a newline, so `" Respond in <language>."` stays the last
+line. Over-length values are schema errors on `llm.summarize` and an `input`
+failure from `services.summarize`. The idempotency key is the caller's: put a
+digest of the purpose texts in it, so a part checkpointed under one purpose is
+never served under another.
 
 ### Cache policy (dotted-path swap)
 
@@ -628,7 +648,7 @@ the whole app (`gdpr.W012`):
 | `llm.complete` | `{prompt, model: "small"\|"medium"\|"large"\|"xlarge", system_prompt?, provider?, images?: [{url} \| {data_b64, mime?}]}` — image entries are url or base64 only (schema-enforced oneOf; a raw `data` key is rejected) | Same dict as the HTTP response: `{status, result?, comment?, reason?, usage?}` |
 | `llm.translate` | `{from_lang, to, entries: {key: text}}` (comm uses `from_lang`, not the HTTP wire key `from`) | `{status, result?: {key: translated}, reason?}` |
 | `llm.transcribe` | `{audio_url, language?, diarization?, provider?, timeout_seconds? (>= 1)}` — **URLs only, never raw audio bytes** (`additionalProperties: false` rejects `data`/`path` keys); byte/path refs exist only for in-process `services.transcribe(AudioRef(...))` callers | `{status, transcript?: NormalizedTranscript, provider_used?, fallback_used?, reason?}` |
-| `llm.summarize` | `{text \| transcript: NormalizedTranscript-dict (exactly one, schema-enforced oneOf), language?, model?, provider?}` | `{status, summary?, usage?, reason?}` |
+| `llm.summarize` | `{text \| transcript: NormalizedTranscript-dict (exactly one, schema-enforced oneOf), language?, model?, provider?, idempotency_key?, purpose_guidance? (≤2000), purpose_label? (≤64)}` | `{status, summary?, usage?, reason?}` |
 | `llm.generate_image` | `{prompt, size?, n? (1-10), provider?, timeout_seconds? (>= 1)}` | `{status, images?: [{url? \| data_b64?, mime}], provider_used?, reason?}` — raw results; storage is the caller's job |
 | `llm.stt_catalog` | `{}` (no arguments) | `{status, providers: [{name, available, model, pinned_model, supports_diarization, supported_languages, cost_per_hour}], default_provider, fallback_chain, language_routes}` — the addressable STT surface; each `model` is the registration's effective model (the `speech_model` pin, else the configured default). Read-only, writes no PromptLog row |
 

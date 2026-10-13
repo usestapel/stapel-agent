@@ -3,6 +3,16 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.35.0] — 2026-10-14
+
+- `llm.summarize` / `services.summarize()` take an optional recording type:
+  `purpose_label` (≤64 chars) and `purpose_guidance` (≤2000). With both, the
+  single-shot and merge system prompts get a `## Recording type` block (label
+  line + guidance) and each chunk prompt gets only the label line, all before
+  the language suffix. With one or none, every prompt is byte-identical to
+  before. Deploy this before a caller sends the fields: the schema keeps
+  `additionalProperties: false`.
+
 ## [0.34.1] — 2026-10-01
 
 0.34.0 was tagged but never published: the contract artifacts
@@ -1110,7 +1120,7 @@ normalize; nothing else does, so `gpt-5.2-turbo` still cannot borrow
   an exact string is easier to read, impossible to get wrong, and right
   wherever it is enough. An undeclared field rejects nothing.
 
-## [Unreleased]
+## [0.35.0] — 2026-10-14
 
 ## [0.17.0] — 2026-09-03
 

@@ -2187,6 +2187,8 @@ def summarize(
     workspace_id: str | None = None,
     chunk_tokens: int | None = None,
     idempotency_key: str | None = None,
+    purpose_guidance: str | None = None,
+    purpose_label: str | None = None,
 ) -> dict:
     """Summarize plain text or a transcript through the LLM pipeline.
 
@@ -2204,6 +2206,13 @@ def summarize(
     CONTENT, such as the transcript's hash: two attempts at the same
     transcript are one purchase, and an edited transcript is a new one.
 
+    *purpose_label* / *purpose_guidance* describe the recording type the
+    uploader chose. Both or nothing: with both, the single-shot and merge
+    system prompts get ``prep.purpose_block`` and each chunk prompt gets only
+    ``prep.purpose_label_line``; with one or none the prompts are unchanged.
+    The key is the caller's: it should carry a digest of the purpose texts,
+    so a part cached under one purpose is never served under another.
+
     Returns ``{"status": "ok", "summary": str, "usage": {...}}`` or
     ``{"status": "failure", "reason": ...}``.
     """
@@ -2211,6 +2220,17 @@ def summarize(
     from .stt.base import NormalizedTranscript, transcript_from_dict
 
     tokens = chunk_tokens or prep.DEFAULT_CHUNK_TOKENS
+
+    if len(purpose_guidance or "") > prep.PURPOSE_GUIDANCE_MAX_CHARS or len(
+        purpose_label or ""
+    ) > prep.PURPOSE_LABEL_MAX_CHARS:
+        return {
+            "status": "failure",
+            "reason": "purpose_guidance/purpose_label over the length cap",
+            "failure_class": FAILURE_CLASS_INPUT,
+        }
+    full_block = prep.purpose_block(purpose_label, purpose_guidance)
+    label_line = prep.purpose_label_line(purpose_label, purpose_guidance)
 
     if isinstance(text_or_transcript, dict):
         try:
@@ -2273,7 +2293,7 @@ def summarize(
         return result
 
     if len(chunks) == 1:
-        result = _run(chunks[0], prep.SUMMARY_SYSTEM_PROMPT)
+        result = _run(chunks[0], prep.SUMMARY_SYSTEM_PROMPT + full_block)
         if result["status"] == "failure":
             return _failure(result)
         return _summary_result(result.get("result") or "", usage, served)
@@ -2283,7 +2303,7 @@ def summarize(
     for idx, chunk in enumerate(chunks):
         result = _run(
             f"Part {idx + 1} of {len(chunks)}:\n\n{chunk}",
-            prep.CHUNK_SYSTEM_PROMPT,
+            prep.CHUNK_SYSTEM_PROMPT + label_line,
             f"part{idx + 1}",
         )
         if result["status"] == "failure":
@@ -2294,7 +2314,7 @@ def summarize(
         "\n\n---\n\n".join(
             f"Part {idx + 1} summary:\n{part}" for idx, part in enumerate(partials)
         ),
-        prep.MERGE_SYSTEM_PROMPT,
+        prep.MERGE_SYSTEM_PROMPT + full_block,
         "merge",
     )
     if merged["status"] == "failure":

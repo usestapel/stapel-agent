@@ -35,7 +35,7 @@ Two surfaces, same contracts:
 | Complete | `POST /agent/api/llm/complete` | `llm.complete` | JSON completion: `{"prompt", "model": "small\|medium\|large\|xlarge", "system_prompt"?, "provider"?, "images"?}` → parsed JSON in `result`, prose in `comment`. `images` (vision) entries are `{url}` or `{data_b64, mime?}` — OCR, screenshots, photo moderation |
 | Translate | `POST /agent/api/llm/translate` | `llm.translate` | `{"from"/"from_lang", "to", "entries": {key: text}}` → `{key: translated}` (cached by prompt) |
 | Transcribe | `POST /agent/api/llm/transcribe` | `llm.transcribe` | `{"audio_url", "language"?, "diarization"?, "provider"?, "timeout_seconds"?}` → a normalized transcript (words, utterances, speakers, timings) via the STT router |
-| Summarize | `POST /agent/api/llm/summarize` | `llm.summarize` | exactly one of `text` / `transcript` (+ `language`?, `model`?, `provider`?) → Markdown `summary` + aggregated `usage`; long inputs are map-reduced |
+| Summarize | `POST /agent/api/llm/summarize` | `llm.summarize` | exactly one of `text` / `transcript` (+ `language`?, `model`?, `provider`?, `purpose_label`? + `purpose_guidance`?) → Markdown `summary` + aggregated `usage`; long inputs are map-reduced |
 | Generate image | `POST /agent/api/llm/generate-image` | `llm.generate_image` | `{"prompt", "size"?, "n"? (1-10), "provider"?}` → raw provider results `[{url? \| data_b64?, mime}]` — storing them in a CDN/asset library is the caller's job |
 
 ```bash
