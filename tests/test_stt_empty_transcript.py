@@ -131,3 +131,43 @@ class TestAnEmptyTranscriptIsAProviderFailure:
 
         assert result["status"] == "ok"
         assert result["provider_used"] == "fake-stt"
+
+
+@pytest.mark.django_db
+class TestEveryProviderEmptyIsAnInputFailure:
+    """A client host, 2026-10-13: a ten-minute file of loud non-speech came
+    back empty from both providers, the reply said only ``status: failure``,
+    and the caller re-drove it four times — each pass paid both providers
+    again for the same empty answer."""
+
+    def test_all_empty_is_classified_as_input(self, chain):
+        FakeSttProvider.result = _empty("fake-stt")
+        SecondSttProvider.result = _empty("fake-stt-2")
+
+        result = services.transcribe(
+            AUDIO, audio_content_hash=HASH, audio_duration_ms=TEN_MINUTES_MS
+        )
+
+        assert result["status"] == "failure"
+        assert result["failure_class"] == "input"
+        assert result["reason_code"] == "empty"
+        assert result["provider_attempts"] == [
+            {"provider": "fake-stt", "reason": "empty"},
+            {"provider": "fake-stt-2", "reason": "empty"},
+        ]
+
+    def test_one_empty_and_one_transient_is_not_input(self, chain):
+        from stapel_agent.stt.base import RetryableTranscriptionError
+
+        FakeSttProvider.result = _empty("fake-stt")
+        SecondSttProvider.error = RetryableTranscriptionError("timeout")
+
+        result = services.transcribe(
+            AUDIO, audio_content_hash=HASH, audio_duration_ms=TEN_MINUTES_MS
+        )
+
+        assert result["status"] == "failure"
+        assert "failure_class" not in result
+        assert [a["provider"] for a in result["provider_attempts"]] == [
+            "fake-stt", "fake-stt-2",
+        ]

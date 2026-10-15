@@ -42,6 +42,10 @@ def probes(settings):
     }
     for cls in (QuotaProbeSttProvider, SilentQuotaSttProvider, QuotaSttProvider):
         cls.reset()
+    from django.core.cache import cache
+
+    for name in ("quota-probe-stt", "silent-quota-stt", "quota-stt"):
+        cache.delete(quota._incident_key(name))  # the sweep's open incidents
     yield QuotaProbeSttProvider
     for cls in (QuotaProbeSttProvider, SilentQuotaSttProvider, QuotaSttProvider):
         cls.reset()
@@ -187,6 +191,57 @@ class TestSweep:
         }
         assert quota.check_provider_quotas() == []
         assert QuotaProbeSttProvider.probes == []
+
+
+class TestOnePagePerIncident:
+    """A client host: an account below the threshold paged on every hourly
+    sweep — one fact, a page an hour, until somebody muted the channel."""
+
+    def _at(self, used):
+        QuotaProbeSttProvider.quota = ProviderQuota(
+            provider="quota-probe-stt", used=used, limit=1000.0,
+            unit="characters",
+        )
+
+    def test_a_low_balance_pages_once_not_every_sweep(self, probes, gauges, alerts):
+        self._at(950.0)
+        for _ in range(3):
+            quota.check_provider_quotas()
+
+        assert [a["severity"] for a in alerts] == ["warning"]
+
+    def test_a_worse_balance_pages_again(self, probes, gauges, alerts):
+        self._at(950.0)
+        quota.check_provider_quotas()
+        self._at(990.0)
+        quota.check_provider_quotas()
+        quota.check_provider_quotas()
+
+        assert [a["severity"] for a in alerts] == ["warning", "critical"]
+
+    def test_recovery_closes_the_incident_and_the_next_drop_pages(
+        self, probes, gauges, alerts
+    ):
+        self._at(950.0)
+        quota.check_provider_quotas()
+        self._at(100.0)
+        quota.check_provider_quotas()
+        self._at(950.0)
+        quota.check_provider_quotas()
+
+        assert [a["severity"] for a in alerts] == ["warning", "warning"]
+
+    def test_a_partial_top_up_does_not_page_but_a_relapse_does(
+        self, probes, gauges, alerts
+    ):
+        self._at(990.0)
+        quota.check_provider_quotas()  # critical
+        self._at(950.0)
+        quota.check_provider_quotas()  # better, still warning: quiet
+        self._at(990.0)
+        quota.check_provider_quotas()  # worse again: page
+
+        assert [a["severity"] for a in alerts] == ["critical", "critical"]
 
 
 @pytest.mark.django_db

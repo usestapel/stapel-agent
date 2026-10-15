@@ -45,10 +45,12 @@ TWO THRESHOLDS, EACH FIRING ONCE PER CROSSING
     ``WARN_RATIO`` (10%) and ``CRITICAL_RATIO`` (2%). Both are alerted, and
     they are separate severities rather than one repeated line, because
     they ask for different things: at 10% someone should plan a top-up, at
-    2% someone should do it now. The scheduled poll is its own
-    deduplication — once an hour per provider — so the sweep keeps no
-    suppression state; a watchdog that remembers what it already said is a
-    watchdog that goes quiet after a restart at exactly the wrong moment.
+    2% someone should do it now. The sweep pages once per incident: when a
+    provider first drops below a threshold and again only if it gets worse;
+    a healthy reading closes the incident. The open severity lives in the
+    shared Django cache (not in process memory), so a worker restart does
+    not reopen it, and a cache that cannot be read pages rather than
+    staying quiet.
 
 THE REFUSAL PATH IS RATE-LIMITED, AND ONLY IT
     The sweep runs hourly; refusals run at the rate customers upload. A
@@ -425,6 +427,49 @@ def provider_quota(name: str, *, timeout_seconds: int | None = None):
         return None
 
 
+#: Severity order: a page is sent when an incident opens or gets worse.
+_SEVERITY_RANK = {None: 0, SEVERITY_WARNING: 1, SEVERITY_CRITICAL: 2}
+
+#: How long an open incident is remembered without a sweep refreshing it.
+#: Longer than any sweep interval worth the name; every sweep rewrites it.
+INCIDENT_TTL_SECONDS = 7 * 24 * 3600
+
+
+def _incident_key(provider: str) -> str:
+    return f"stapel_agent:stt_quota_incident:{provider}"
+
+
+def _incident_should_page(provider: str, severity: str | None) -> bool:
+    """One page per low-allowance incident, and one more if it gets worse.
+
+    The hourly sweep used to page on every run while an account sat below
+    the threshold — a provider at 5% for a week was 168 identical alerts
+    about one fact. The open incident's severity is kept in the shared
+    cache: a sweep pages when the incident opens (healthy -> warning) or
+    escalates (warning -> critical); a healthy reading closes it, so the
+    next drop pages again. A cache that cannot be read pages — losing the
+    dedupe is noise, losing the page is blindness.
+    """
+    try:
+        from django.core.cache import cache
+
+        key = _incident_key(provider)
+        open_severity = cache.get(key)
+        if severity is None:
+            if open_severity is not None:
+                cache.delete(key)
+                logger.info(
+                    "stapel-agent: STT provider %r is above the quota threshold "
+                    "again — incident (%s) closed", provider, open_severity,
+                )
+            return False
+        cache.set(key, severity, INCIDENT_TTL_SECONDS)
+        return _SEVERITY_RANK.get(severity, 0) > _SEVERITY_RANK.get(open_severity, 0)
+    except Exception:  # noqa: BLE001 — a broken cache must not silence the page
+        logger.debug("stapel-agent: quota incident state unavailable", exc_info=True)
+        return severity is not None
+
+
 def check_provider_quotas(*, timeout_seconds: int | None = None) -> list[dict]:
     """Poll every configured STT provider. Returns one row per answer.
 
@@ -458,9 +503,15 @@ def check_provider_quotas(*, timeout_seconds: int | None = None) -> list[dict]:
         if ratio > 0.0:
             reset_refusal_throttle(name)
         severity = severity_for(ratio, conf)
-        if severity:
+        if _incident_should_page(name, severity):
             notify_quota_low(
                 name, ratio, severity=severity, quota=quota, source="watchdog"
+            )
+        elif severity:
+            logger.info(
+                "stapel-agent: STT provider %r still at %.1f%% of its allowance "
+                "(%s) — already alerted for this incident",
+                name, ratio * 100, severity,
             )
         rows.append({**quota.to_dict(), "severity": severity})
 

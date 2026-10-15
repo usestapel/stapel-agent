@@ -1944,7 +1944,21 @@ def transcribe(
             for a in attempts
         )
     _log(PromptStatus.ERROR, provider_used=chain[-1], response=None, error=failure_reason)
-    return {"status": "failure", "reason": failure_reason}
+    reply = {"status": "failure", "reason": failure_reason}
+    if attempts:
+        reply["provider_attempts"] = [
+            {"provider": a["provider"], "reason": a["reason"] or a["error_kind"]}
+            for a in attempts
+        ]
+    if attempts and all(a["reason"] == REASON_EMPTY for a in attempts):
+        # Every provider heard the audio and found nothing in it. That is an
+        # answer about the INPUT: the same request gets the same empty answer
+        # from every provider again, so a caller must not re-drive it.
+        from .failures import FAILURE_CLASS_INPUT
+
+        reply["failure_class"] = FAILURE_CLASS_INPUT
+        reply["reason_code"] = REASON_EMPTY
+    return reply
 
 
 # ─── Diarization ──────────────────────────────────────────────────────

@@ -3,6 +3,23 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.37.0] — 2026-10-15
+
+- `llm.transcribe` / `services.transcribe()`: when the fallback chain is
+  exhausted, the failure reply carries `provider_attempts: [{provider,
+  reason}]`, and when EVERY provider returned an empty transcript for audio
+  past the floor it also carries `failure_class: "input"` and
+  `reason_code: "empty"`. The same request gets the same empty answer again,
+  so a caller can stop re-driving a recording that has no speech instead of
+  paying every provider once per retry. A chain that mixes an empty answer
+  with a transient refusal stays unclassified (retryable).
+- STT quota watchdog: the hourly sweep pages once per low-allowance
+  incident — when a provider first drops below `WARN_RATIO` /
+  `CRITICAL_RATIO` and again only if it gets worse. A healthy reading closes
+  the incident, so the next drop pages again. The open severity is kept in
+  the Django cache (7-day TTL refreshed by each sweep); an unreadable cache
+  pages. Previously every sweep paged while the account stayed low.
+
 ## [0.36.0] — 2026-10-14
 
 - Every metered `llm.*` Function reply (`complete`, `translate`,
