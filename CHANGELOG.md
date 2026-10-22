@@ -3,6 +3,13 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.38.1] — 2026-10-22
+
+- **Floor `stapel-core>=0.92.1`.** This package's CONFIG.MD has `settings`
+  rows, which core's manifest reader accepts only from 0.92.1; below it
+  `manage.py check` raised `ConfigManifestError` in every project installing
+  this package. `stapel-sibling-lint` SIB007 now refuses the combination.
+
 ## [0.38.0] — 2026-10-22
 
 - **The transcript `gap` check is a WARN.** `stt.qa.transcript_qa` reports
