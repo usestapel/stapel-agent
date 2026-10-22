@@ -20,7 +20,7 @@ with exactly the observed shape, and it is closed by ``audio_offset_ms``.
 check that ran — monotonicity, max-end-in-bounds, segments-present —
 passes on a transcript that covers one minute of a ninety-minute meeting.
 ``stt/qa.py`` adds the check that does not: a gap between consecutive
-segments longer than the threshold flags ``qa.gap`` instead of passing.
+segments longer than the threshold is reported under ``qa.gap``.
 """
 import pytest
 
@@ -154,8 +154,9 @@ class TestIdenticalChunks:
                 {"text": "tail", "start": 594.48, "end": 600.0}
             ]
         })
-        assert verdict["passed"] is False
-        assert verdict["checks"]["gap"].startswith("FAIL")
+        # Timing alone is a labelled WARN, never a failure (see stt/qa.py).
+        assert verdict["passed"] is True
+        assert verdict["checks"]["gap"].startswith("WARN")
 
     def test_two_different_offsets_are_two_checkpoint_rows(self, looped):
         from stapel_agent.models import ProviderCheckpoint
@@ -208,7 +209,8 @@ class TestGapDetection:
         assert gap == {"start": 24.88, "end": 99.32, "seconds": 74.44}
 
         verdict = transcript_qa({"utterances": segments})
-        assert verdict["passed"] is False
+        assert verdict["passed"] is True
+        assert verdict["checks"]["gap"].startswith("WARN")
         assert "74.44s" in verdict["checks"]["gap"]
         assert verdict["gaps"] == [gap]
 
@@ -249,7 +251,7 @@ class TestGapDetection:
             type("W", (), {"start": 0.0, "end": 1.0})(),
             type("W", (), {"start": 80.0, "end": 81.0})(),
         ]
-        assert transcript_qa(transcript)["passed"] is False
+        assert transcript_qa(transcript)["checks"]["gap"].startswith("WARN")
 
     @pytest.mark.parametrize(
         "segments", [[], [{"start": 0.0, "end": 1.0}]]
@@ -270,13 +272,13 @@ class TestGapDetection:
 
     def test_a_host_can_widen_or_disable_the_threshold(self, settings):
         segments = [{"start": 0.0, "end": 3.0}, {"start": 20.0, "end": 23.0}]
-        assert transcript_qa({"utterances": segments})["passed"] is False
+        assert transcript_qa({"utterances": segments})["checks"]["gap"].startswith("WARN")
 
         settings.STAPEL_AGENT = {
             **getattr(settings, "STAPEL_AGENT", {}),
             "STT_QA": {"MAX_GAP_SECONDS": 30.0},
         }
-        assert transcript_qa({"utterances": segments})["passed"] is True
+        assert transcript_qa({"utterances": segments})["checks"]["gap"].startswith("PASS")
 
         settings.STAPEL_AGENT = {
             **settings.STAPEL_AGENT, "STT_QA": {"MAX_GAP_SECONDS": 0},
@@ -290,7 +292,7 @@ class TestGapDetection:
         # damage is a report that cannot be logged.
         segments = [{"start": i * 100.0, "end": i * 100.0 + 1.0} for i in range(40)]
         verdict = transcript_qa({"utterances": segments})
-        assert verdict["passed"] is False
+        assert verdict["checks"]["gap"].startswith("WARN")
         assert len(verdict["gaps"]) == 39
         assert "+34 more" in verdict["checks"]["gap"]
 
@@ -327,7 +329,7 @@ class TestVerdictTravels:
         assert second["cached"] is True
         # The same answer must carry the same label. A verdict that only
         # exists on the uncached path is one an operator sees once.
-        assert first["qa"]["passed"] is False
-        assert second["qa"]["passed"] is False
+        assert first["qa"]["checks"]["gap"].startswith("WARN")
+        assert second["qa"]["checks"]["gap"] == first["qa"]["checks"]["gap"]
         rows = list(PromptLog.objects.order_by("created_at"))
-        assert [r.metadata["qa"]["passed"] for r in rows] == [False, False]
+        assert [r.metadata["qa"]["checks"]["gap"][:4] for r in rows] == ["WARN", "WARN"]

@@ -29,19 +29,21 @@ THE CHECK
     boundary — long enough that no ordinary pause reaches it, short
     enough that a lost chunk cannot hide under it.
 
-    A gap past that threshold flags ``qa.gap`` and the verdict is NOT
-    passed. It is a flag, never an exception: the transcript is already
-    paid for and a partial transcript is worth more than none. What
-    changes is that it arrives LABELLED.
+    A gap past that threshold is reported under ``qa.gap`` as a WARN
+    with where and how long, and the verdict stays passed: timing alone
+    cannot tell a pause from lost audio. Measured on a client fleet, a
+    5-s rule fired on half of all recordings and on 94% of those over an
+    hour, and the flagged gaps examined held silence; a flag on most long
+    meetings is one nobody reads. Whether a gap holds untranscribed speech
+    is decided against the audio, not here.
 
 WHAT IT IS NOT
     Not a silence detector. Long true silences exist — a break in a
-    meeting, a recording left running — and this check will flag them.
-    That is the trade taken deliberately: a false flag costs someone a
-    look at a waveform, and a missed hole costs a customer the middle of
-    their meeting. The check reports WHERE (start, end, seconds) so the
-    look is cheap, and ``STAPEL_AGENT["STT_QA"]["MAX_GAP_SECONDS"] = 0``
-    turns it off for a host whose audio is genuinely gappy.
+    meeting, a recording left running — and this check reports them too.
+    It says WHERE (start, end, seconds) so a look is cheap, and
+    ``STAPEL_AGENT["STT_QA"]["MAX_GAP_SECONDS"] = 0`` turns it off.
+    stapel-recordings reads the same setting for its stored-transcript
+    QA, so the threshold has one source.
 """
 from __future__ import annotations
 
@@ -191,8 +193,9 @@ def transcript_qa(transcript, *, threshold: Optional[float] = None) -> dict:
     Returns ``{"passed": bool, "checks": {...}}`` — the same two-key shape
     ``stapel_recordings.transcript_schema.run_qa`` already produces, so a
     host merges the two reports rather than choosing between them. Each
-    check's value is a string starting ``PASS`` / ``FAIL`` / ``SKIP``, and
-    only ``FAIL`` clears ``passed``.
+    check's value is a string starting ``PASS`` / ``WARN`` / ``FAIL`` /
+    ``SKIP``, and only ``FAIL`` clears ``passed``. The gap check never
+    fails (module docstring).
 
     Never raises. A QA routine that can throw turns a transcript that was
     merely suspect into a transcription that was lost.
@@ -240,10 +243,10 @@ def _transcript_qa(transcript, *, threshold: Optional[float] = None) -> dict:
     more = "" if len(gaps) == len(named) else f", +{len(gaps) - len(named)} more"
     total = round(sum(g["seconds"] for g in gaps), 3)
     checks[CHECK_GAP] = (
-        f"FAIL: {len(gaps)} gap(s) over {limit}s, {total}s unaccounted "
-        f"for — {rendered}{more}"
+        f"WARN: {len(gaps)} gap(s) over {limit}s, {total}s with no "
+        f"transcript (timing only) — {rendered}{more}"
     )
-    return {"passed": False, "checks": checks, "gaps": gaps}
+    return {"passed": True, "checks": checks, "gaps": gaps}
 
 
 __all__ = [

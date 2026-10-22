@@ -3,6 +3,17 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.38.0] — 2026-10-22
+
+- **The transcript `gap` check is a WARN.** `stt.qa.transcript_qa` reports
+  gaps over `STT_QA["MAX_GAP_SECONDS"]` as `WARN: … (timing only)` with the
+  same spans in `gaps`, and `passed` stays true: timing alone cannot tell a
+  pause from lost audio (a 5-s rule fired on half of a client fleet's
+  recordings, the flagged gaps examined were silence). The "did not pass
+  QA" warning no longer fires for pauses. Breaking for a reader that took
+  `qa.passed is False` to mean a hole. stapel-recordings 0.42 reads the same
+  threshold setting.
+
 ## [0.37.1] — 2026-10-22
 
 - Rate cards for the 5.x Claude generation: `claude-haiku-5-5` ($0.10/$0.50
