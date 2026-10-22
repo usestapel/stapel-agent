@@ -3,6 +3,17 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.37.1] — 2026-10-22
+
+- Rate cards for the 5.x Claude generation: `claude-haiku-5-5` ($0.10/$0.50
+  per MTok), `claude-sonnet-5-5` ($2/$10), `claude-opus-5-5` ($4/$20),
+  `claude-fable-5-1` and `claude-mythos-5-1` ($10/$50). Haiku 5.5 calls were
+  stored `cost_basis=unpriced` with no estimate.
+- A price row may carry `long_context: {above, input, output}`: a call whose
+  input exceeds `above` tokens is billed entirely at that rate. Haiku 5.5
+  uses it ($0.50/$2.50 beyond 100K input tokens), so a long agent round is
+  not under-counted 5x.
+
 ## [0.37.0] — 2026-10-15
 
 - `llm.transcribe` / `services.transcribe()`: when the fallback chain is

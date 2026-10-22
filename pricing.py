@@ -64,6 +64,19 @@ PRICES_USD_PER_MTOK: dict[str, dict[str, float]] = {
     "claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
     "claude-sonnet-4-5": {"input": 3.0, "output": 15.0},
     "claude-haiku-4-5": {"input": 1.0, "output": 5.0},
+    # --- The 5.x generation (Anthropic pricing table as of 6 Oct 2026) -----
+    # Claude Haiku 5.5 bills by prompt size: $0.10/$0.50 up to 100K input
+    # tokens, $0.50/$2.50 for the WHOLE request beyond. ``long_context`` is
+    # applied per call by ``estimate_cost``; without it every long agent
+    # round would be under-counted 5x.
+    "claude-haiku-5-5": {
+        "input": 0.1, "output": 0.5,
+        "long_context": {"above": 100_000, "input": 0.5, "output": 2.5},
+    },
+    "claude-sonnet-5-5": {"input": 2.0, "output": 10.0},
+    "claude-opus-5-5": {"input": 4.0, "output": 20.0},
+    "claude-fable-5-1": {"input": 10.0, "output": 50.0},
+    "claude-mythos-5-1": {"input": 10.0, "output": 50.0},
     # Fable/Mythos 5 — the top tier, and the reason an unpriced row is worth
     # shouting about: at 5x Opus, one silently-zero month is real money.
     "claude-fable-5": {"input": 10.0, "output": 50.0},
@@ -290,6 +303,9 @@ def estimate_cost(
     if not prices:
         logger.warning("pricing: unknown model %r -> cost_usd=0.0", model)
         return 0.0
+    long_context = prices.get("long_context")
+    if long_context and tokens_in > long_context["above"]:
+        prices = long_context
     return (tokens_in * prices["input"] + tokens_out * prices["output"]) / 1_000_000
 
 

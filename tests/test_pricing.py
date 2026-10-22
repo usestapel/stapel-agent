@@ -20,8 +20,13 @@ from stapel_agent.pricing import (
 class TestTable:
     def test_every_price_has_both_directions(self):
         for model, prices in PRICES_USD_PER_MTOK.items():
-            assert set(prices) == {"input", "output"}, model
+            assert set(prices) - {"long_context"} == {"input", "output"}, model
             assert prices["input"] > 0 and prices["output"] > 0, model
+            tier = prices.get("long_context")
+            if tier is not None:
+                assert set(tier) == {"above", "input", "output"}, model
+                assert tier["input"] >= prices["input"], model
+                assert tier["output"] >= prices["output"], model
 
     def test_output_is_never_cheaper_than_input(self):
         """Not a law of nature, but true of every rate card seen so far.
@@ -53,6 +58,12 @@ class TestTheCardsThatWereMissing:
             ("claude-mythos-5", (10.0, 50.0)),
             ("claude-sonnet-5", (2.0, 10.0)),
             ("claude-haiku-4-5", (1.0, 5.0)),
+            # Studio's ladder rungs: haiku 5.5 metered as unpriced (no card).
+            ("claude-haiku-5-5", (0.1, 0.5)),
+            ("claude-sonnet-5-5", (2.0, 10.0)),
+            ("claude-opus-5-5", (4.0, 20.0)),
+            ("claude-fable-5-1", (10.0, 50.0)),
+            ("claude-mythos-5-1", (10.0, 50.0)),
             # The models a live client fleet was actually calling while the
             # table had never heard of them: all three ladder rungs pointed
             # at gpt-5.2 through the openai-compat provider, so
@@ -655,3 +666,21 @@ class TestW018SeesTheEmbeddingSurfaceToo:
             },
         }
         assert self._ids() == []
+
+
+class TestHaiku55LongContextTier:
+    """Haiku 5.5 bills the whole request at $0.50/$2.50 once the prompt
+    exceeds 100K input tokens; a flat $0.10/$0.50 would under-count 5x."""
+
+    def test_short_prompt_bills_the_base_rate(self):
+        assert estimate_cost("claude-haiku-5-5", 100_000, 10_000) == pytest.approx(0.015)
+
+    def test_long_prompt_bills_the_whole_request_at_the_long_rate(self):
+        assert estimate_cost("claude-haiku-5-5", 100_001, 10_000) == pytest.approx(
+            (100_001 * 0.5 + 10_000 * 2.5) / 1_000_000)
+
+    def test_cost_fields_price_haiku_55(self):
+        out = cost_fields(model="claude-haiku-5-5", provider="anthropic",
+                          input_tokens=1_000, output_tokens=1_000)
+        assert out["cost_basis"] == "pricing_estimate"
+        assert out["cost_usd"] == pytest.approx(0.0006)
