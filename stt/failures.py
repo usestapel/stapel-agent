@@ -52,6 +52,10 @@ reason           fatal?     means
 ``media``        **yes**    the audio or its reference is the problem
 ``job``          **yes**    the provider ran the job and it failed on the audio
 ``language``     **yes**    the language code itself is unresolvable (0.25.0)
+``empty``        no         the provider heard no speech (an empty transcript,
+                            or a job error that says so); the chain walks on,
+                            and when EVERY provider says it the reply is
+                            ``failure_class: input`` (0.38.2)
 ===============  =========  ===================================================
 """
 from __future__ import annotations
@@ -78,6 +82,14 @@ from ..failures import (  # noqa: F401  (re-exported: this module is the STT spe
 )
 from ..failures import PHRASES as _PHRASES  # noqa: F401  (kept: tests read it)
 from .base import RetryableTranscriptionError, TranscriptionError
+from .qa import REASON_EMPTY
+
+#: Job-error texts that mean "there is no speech in this audio". A provider
+#: that says so has given the same answer as an empty transcript, and is
+#: classified the same way (``empty``) rather than as a failed job: a failed
+#: job reads as "try again later", and a caller that re-drives a silent file
+#: pays for the same answer again. Matched case-insensitively.
+NO_SPEECH_MARKERS = ("no spoken audio",)
 
 
 def status_error(
@@ -179,6 +191,26 @@ def job_failed(message: str, *, provider: str) -> TranscriptionError:
     return TranscriptionError(message, provider=provider, reason=REASON_JOB)
 
 
+def no_speech(message: str, *, provider: str) -> RetryableTranscriptionError:
+    """The provider found no speech: the answer an empty transcript gives.
+
+    Retryable for the CHAIN (another provider may hear what this one did
+    not) and recorded as ``empty``, so a chain in which every provider says
+    it ends as ``failure_class: input`` — the same request gets the same
+    answer again, and the caller must not re-drive it.
+    """
+    return RetryableTranscriptionError(message, provider=provider, reason=REASON_EMPTY)
+
+
+def job_error(message: str, *, provider: str) -> TranscriptionError:
+    """A job the provider ran and reported as failed: :func:`no_speech` when
+    its text says the audio holds no speech, else :func:`job_failed`."""
+    lowered = (message or "").lower()
+    if any(marker in lowered for marker in NO_SPEECH_MARKERS):
+        return no_speech(message, provider=provider)
+    return job_failed(message, provider=provider)
+
+
 def bad_media(
     message: str, *, provider: str, status_code: Optional[int] = None
 ) -> TranscriptionError:
@@ -192,6 +224,7 @@ __all__ = [
     "AUTH_MARKERS",
     "FATAL_REASONS",
     "MEDIA_STATUSES",
+    "NO_SPEECH_MARKERS",
     "QUOTA_MARKERS",
     "REASON_AUTH",
     "REASON_JOB",
@@ -206,8 +239,10 @@ __all__ = [
     "REASON_UNSUPPORTED",
     "bad_media",
     "classify_status",
+    "job_error",
     "job_failed",
     "missing_credentials",
+    "no_speech",
     "raise_for_status",
     "status_error",
     "timed_out",

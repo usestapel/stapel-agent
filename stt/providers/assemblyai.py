@@ -295,7 +295,7 @@ class AssemblyAIProvider(SttProvider):
             if status == "completed":
                 return payload
             if status == "error":
-                raise failures.job_failed(
+                raise failures.job_error(
                     f"AssemblyAI job error: {payload.get('error') or 'unknown'}",
                     provider=self.name,
                 )

@@ -613,6 +613,21 @@ class TestAssemblyAI:
             )
         assert not isinstance(e.value, RetryableTranscriptionError)
 
+    def test_poll_job_error_about_no_speech_is_an_empty_answer(self, configured, monkeypatch):
+        """AssemblyAI's own words for a silent file (a client host, 2026-10-22):
+        a job error, but the answer an empty transcript gives. Read as a failed
+        job it stopped the chain and the caller re-drove the file later."""
+        message = (
+            "language_detection cannot be performed on files with no spoken audio."
+        )
+        with pytest.raises(RetryableTranscriptionError, match="no spoken audio") as e:
+            self._run(
+                monkeypatch,
+                submit=[FakeResponse({"id": "tr_1"})],
+                polls=[FakeResponse({"status": "error", "error": message})],
+            )
+        assert e.value.reason == "empty"
+
     def test_poll_deadline_is_retryable(self, configured, monkeypatch):
         # Fake clock: every look at time.monotonic() jumps 100s forward, so
         # a 60s budget is over before the first poll GET goes out.

@@ -233,7 +233,7 @@ class SonioxProvider(SttProvider):
             if status == "completed":
                 return payload
             if status in ("error", "failed"):
-                raise failures.job_failed(
+                raise failures.job_error(
                     "Soniox job failed: "
                     f"{payload.get('error_message') or payload.get('error_type') or 'unknown'}",
                     provider=self.name,

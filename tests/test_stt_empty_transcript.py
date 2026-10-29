@@ -156,6 +156,48 @@ class TestEveryProviderEmptyIsAnInputFailure:
             {"provider": "fake-stt-2", "reason": "empty"},
         ]
 
+    def test_empty_then_a_no_speech_job_error_is_input(self, chain):
+        """The 2026-10-22 shape: the primary answers empty, the fallback runs
+        the job and reports "no spoken audio". Both said the same thing about
+        the audio, so the reply is an input failure the caller must not re-drive
+        — before, the job error stopped the chain unclassified and the caller
+        parked the recording for a paid retry."""
+        from stapel_agent.stt import failures
+
+        FakeSttProvider.result = _empty("fake-stt")
+        SecondSttProvider.error = failures.job_error(
+            "AssemblyAI job error: language_detection cannot be performed on "
+            "files with no spoken audio.",
+            provider="fake-stt-2",
+        )
+
+        result = services.transcribe(
+            AUDIO, audio_content_hash=HASH, audio_duration_ms=35_006
+        )
+
+        assert result["status"] == "failure"
+        assert result["failure_class"] == "input"
+        assert result["reason_code"] == "empty"
+        assert result["provider_attempts"] == [
+            {"provider": "fake-stt", "reason": "empty"},
+            {"provider": "fake-stt-2", "reason": "empty"},
+        ]
+
+    def test_any_other_job_error_still_stops_the_chain(self, chain):
+        from stapel_agent.stt import failures
+
+        FakeSttProvider.error = failures.job_error(
+            "AssemblyAI job error: Transcoding failed", provider="fake-stt"
+        )
+
+        result = services.transcribe(
+            AUDIO, audio_content_hash=HASH, audio_duration_ms=TEN_MINUTES_MS
+        )
+
+        assert result["status"] == "failure"
+        assert "failure_class" not in result
+        assert len(SecondSttProvider.calls) == 0
+
     def test_one_empty_and_one_transient_is_not_input(self, chain):
         from stapel_agent.stt.base import RetryableTranscriptionError
 

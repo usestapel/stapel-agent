@@ -234,7 +234,7 @@ class SpeechmaticsProvider(SttProvider):
                     )
                     or "no error detail"
                 )
-                raise failures.job_failed(
+                raise failures.job_error(
                     f"Speechmatics job ended as {status!r}: {detail}",
                     provider=self.name,
                 )

@@ -3,6 +3,20 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.38.2] — 2026-10-29
+
+- **A provider that says "no spoken audio" gave an empty answer, not a failed
+  job.** AssemblyAI reports a silent file as a job error
+  ("language_detection cannot be performed on files with no spoken audio").
+  It was classified `job` — fatal for the chain and unclassified for the
+  caller — so a chain whose primary had already answered empty ended with a
+  failure the caller re-drove later, paying both providers again for the
+  same silence. `stt.failures.job_error()` (used by every polling adapter)
+  now returns `no_speech()` — retryable for the chain, reason `empty` — when
+  the job's text matches `NO_SPEECH_MARKERS`, so an all-empty chain answers
+  `failure_class: input`, `reason_code: empty` as it already did for empty
+  transcripts. Other job errors are unchanged.
+
 ## [0.38.1] — 2026-10-22
 
 - **Floor `stapel-core>=0.92.1`.** This package's CONFIG.MD has `settings`

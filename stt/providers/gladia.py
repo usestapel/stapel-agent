@@ -244,7 +244,7 @@ class GladiaProvider(SttProvider):
             if status == "done":
                 return payload
             if status == "error":
-                raise failures.job_failed(
+                raise failures.job_error(
                     f"Gladia job error: {payload.get('error_code') or 'unknown'}",
                     provider=self.name,
                 )
