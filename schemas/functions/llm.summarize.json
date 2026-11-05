@@ -44,6 +44,10 @@
       "maxLength": 64,
       "description": "The recording type the uploader chose, as the model should read it. Sent only together with purpose_guidance: alone it changes nothing. Added to every system prompt (the chunk prompts get only this line)."
     },
+    "speaker_names": {
+      "type": "boolean",
+      "description": "Also return the names the transcript states for its speaker labels (speaker_name_guesses: speaker, suggested_name, evidence_text, confidence), from the same call. Model output: check the label and the quote before showing it. Off by default; off, the prompts are unchanged."
+    },
     "user_id": {
       "type": "string",
       "description": "Who this call is for — recorded on the PromptLog row so per-user cost is answerable. Opaque to this package: any id shape the host uses. Optional; omitting it leaves the row unattributed, never rejected."

@@ -1546,12 +1546,21 @@ def transcribe(
     auto-detect is how a Russian meeting comes back in English.
 
     Returns ``{"status": "ok", "transcript": {...}, "provider_used": str,
-    "fallback_used": bool, "cached": bool, "qa": {"passed", "checks"}}``
+    "model": str | None, "diar_model": None, "fallback_used": bool,
+    "cached": bool, "qa": {"passed", "checks"}}``
     or ``{"status": "failure", "reason": ...}``. The ``qa`` block is the
     transcript's own verdict (:mod:`stapel_agent.stt.qa`) — today one
     check, for holes in the timeline — and it is a LABEL, never a refusal:
     a partial transcript is worth more than none, as long as it arrives
     labelled.
+
+    ``provider_used`` is the registration name; ``model`` is the wire model
+    the provider was asked for (``effective_model()``), stored with the
+    checkpoint so a hit names the model that produced it, and null for a
+    checkpoint written before models were recorded. ``diar_model`` is null:
+    the STT model diarized the transcript itself. The ledger row keeps the
+    registration name in ``PromptLog.model`` and the wire model in
+    ``metadata["model"]``.
     """
     from . import checkpoint
     from .stt.base import (
@@ -1630,6 +1639,7 @@ def transcribe(
         transcript=None,
         cached: bool = False,
         qa: dict | None = None,
+        model: str | None = None,
     ):
         # THE BILLABLE QUANTITY IS WHAT WE SUBMITTED. The provider's own
         # number is kept beside it (``audio_reported_ms``) because the two
@@ -1709,6 +1719,9 @@ def transcribe(
                 # what an operator queries a week later.
                 **({"qa": qa} if qa else {}),
                 **({"cached": True} if cached else {}),
+                # The wire model, beside the registration name in
+                # PromptLog.model (the meter reads metadata["model"] first).
+                **({"model": model} if model else {}),
                 # Which card produced cost_usd — a config id, a provider
                 # name, or absent when nothing priced it. Without this the
                 # number is unfalsifiable a quarter later.
@@ -1799,11 +1812,16 @@ def transcribe(
                     transcript=transcript,
                     cached=True,
                     qa=qa,
+                    model=transcript.model,
                 )
                 return {
                     "status": "ok",
                     "transcript": hit.value,
                     "provider_used": name,
+                    # What the checkpoint recorded, never today's setting:
+                    # the setting may have moved since the call was paid.
+                    "model": transcript.model,
+                    "diar_model": None,
                     "fallback_used": fallback_used,
                     "cached": True,
                     "qa": qa,
@@ -1901,6 +1919,11 @@ def transcribe(
                 exc_info=True,
             )
 
+        if not transcript.model:
+            import dataclasses
+
+            transcript = dataclasses.replace(transcript, model=_wire_model(backend))
+
         # ── The checkpoint, write side ─────────────────────────────────
         # FIRST, before the ledger row, before the return, before the
         # caller's handoff: from here on every failure is free to retry.
@@ -1924,11 +1947,14 @@ def transcribe(
             error=None,
             transcript=transcript,
             qa=qa,
+            model=transcript.model,
         )
         return {
             "status": "ok",
             "transcript": payload,
             "provider_used": name,
+            "model": transcript.model,
+            "diar_model": None,
             "fallback_used": fallback_used,
             "cached": False,
             "qa": qa,
@@ -2195,6 +2221,16 @@ def _summary_result(summary: str, usage: dict, served: dict | None = None) -> di
     return envelope
 
 
+def _wire_model(backend) -> str | None:
+    """The model id *backend* sends to its provider, or None."""
+    try:
+        model = backend.effective_model()
+    except Exception:  # pragma: no cover - a settings-free fake
+        return None
+    model = str(model).strip() if model else ""
+    return model or None
+
+
 def summarize(
     text_or_transcript,
     *,
@@ -2207,6 +2243,7 @@ def summarize(
     idempotency_key: str | None = None,
     purpose_guidance: str | None = None,
     purpose_label: str | None = None,
+    speaker_names: bool = False,
 ) -> dict:
     """Summarize plain text or a transcript through the LLM pipeline.
 
@@ -2230,6 +2267,17 @@ def summarize(
     ``prep.purpose_label_line``; with one or none the prompts are unchanged.
     The key is the caller's: it should carry a digest of the purpose texts,
     so a part cached under one purpose is never served under another.
+
+    *speaker_names* asks, in the same call, for the names the transcript
+    states for its speaker labels: the single-shot and chunk system prompts
+    get ``prep.SPEAKER_NAMES_RULE`` (the merge pass sees no transcript), the
+    block is cut off every answer before it is used, and the reply carries
+    ``speaker_name_guesses`` (``[{speaker, suggested_name, evidence_text,
+    confidence}]``, model output — the caller checks labels and quotes) and
+    ``speaker_names = {"parts", "parsed", "dropped"}`` (how many answers
+    carried a parsable block, and invalid entries dropped). The part keys
+    get a ``:names1`` suffix, so a part cached without the rule is never
+    served for it. Off, prompts, keys and reply are unchanged.
 
     Returns ``{"status": "ok", "summary": str, "usage": {...}}`` or
     ``{"status": "failure", "reason": ...}``.
@@ -2284,6 +2332,29 @@ def summarize(
     suffix = prep.language_directive(language)
     usage = {"input_tokens": 0, "output_tokens": 0}
     served: dict = {}
+    names_rule = prep.speaker_names_rule(speaker_names)
+    if speaker_names and idempotency_key:
+        idempotency_key = f"{idempotency_key}:names1"
+    guesses: list[dict] = []
+    names_meta = {"parts": 0, "parsed": 0, "dropped": 0}
+
+    def _names(text: str) -> str:
+        """Cut the name block off one answer; keep its guesses."""
+        if not speaker_names:
+            return text
+        names_meta["parts"] += 1
+        text, parsed, dropped = prep.split_speaker_names(text)
+        if parsed is not None:
+            names_meta["parsed"] += 1
+            guesses.extend(parsed)
+        names_meta["dropped"] += dropped
+        return text
+
+    def _with_names(envelope: dict) -> dict:
+        if speaker_names and envelope.get("status") == "ok":
+            envelope["speaker_name_guesses"] = guesses
+            envelope["speaker_names"] = dict(names_meta)
+        return envelope
 
     def _run(prompt: str, system_prompt: str, part: str = "") -> dict:
         result = complete(
@@ -2311,22 +2382,24 @@ def summarize(
         return result
 
     if len(chunks) == 1:
-        result = _run(chunks[0], prep.SUMMARY_SYSTEM_PROMPT + full_block)
+        result = _run(chunks[0], prep.SUMMARY_SYSTEM_PROMPT + full_block + names_rule)
         if result["status"] == "failure":
             return _failure(result)
-        return _summary_result(result.get("result") or "", usage, served)
+        return _with_names(
+            _summary_result(_names(result.get("result") or ""), usage, served)
+        )
 
     # Map-reduce: summarize each chunk, then merge the partials.
     partials: list[str] = []
     for idx, chunk in enumerate(chunks):
         result = _run(
             f"Part {idx + 1} of {len(chunks)}:\n\n{chunk}",
-            prep.CHUNK_SYSTEM_PROMPT + label_line,
+            prep.CHUNK_SYSTEM_PROMPT + label_line + names_rule,
             f"part{idx + 1}",
         )
         if result["status"] == "failure":
             return _failure(result)
-        partials.append(result.get("result") or "")
+        partials.append(_names(result.get("result") or ""))
 
     merged = _run(
         "\n\n---\n\n".join(
@@ -2337,7 +2410,7 @@ def summarize(
     )
     if merged["status"] == "failure":
         return _failure(merged)
-    return _summary_result(merged.get("result") or "", usage, served)
+    return _with_names(_summary_result(merged.get("result") or "", usage, served))
 
 
 # ─── Embeddings ───────────────────────────────────────────────────────

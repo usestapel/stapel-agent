@@ -401,6 +401,14 @@ SUMMARIZE_SCHEMA = {
             "purpose_guidance: alone it changes nothing. Added to every "
             "system prompt (the chunk prompts get only this line).",
         },
+        "speaker_names": {
+            "type": "boolean",
+            "description": "Also return the names the transcript states for "
+            "its speaker labels (speaker_name_guesses: speaker, "
+            "suggested_name, evidence_text, confidence), from the same call. "
+            "Model output: check the label and the quote before showing it. "
+            "Off by default; off, the prompts are unchanged.",
+        },
         **ATTRIBUTION_PROPERTIES,
     },
     "oneOf": [{"required": ["text"]}, {"required": ["transcript"]}],
@@ -449,7 +457,7 @@ def llm_transcribe(payload: dict) -> dict:
     * ``transcript_put_url`` given — the transcript is written there and
       the reply is ``{"status": "ok", "transcript_ref": {"key", "bytes",
       "sha256", "content_type"}, "transcript_meta": {...counts...},
-      "provider_used", "fallback_used"}``. Bounded whatever the meeting's
+      "provider_used", "model", "diar_model", "fallback_used"}``. Bounded whatever the meeting's
       length. This is the shape a broker-backed deployment must use: a
       2h28m transcript is 8.6 MB and NATS refuses to carry it.
     * omitted — ``{"status": "ok", "transcript": {...}, "provider_used",
@@ -511,6 +519,8 @@ def llm_transcribe(payload: dict) -> dict:
         "transcript_ref": ref,
         "transcript_meta": transcript_summary(transcript),
         "provider_used": result.get("provider_used"),
+        "model": result.get("model"),
+        "diar_model": result.get("diar_model"),
         "fallback_used": bool(result.get("fallback_used")),
         # Bounded by construction (a verdict and a handful of check
         # strings), so it rides the reference reply too — a caller that
@@ -809,6 +819,7 @@ def llm_summarize(payload: dict) -> dict:
         idempotency_key=payload.get("idempotency_key"),
         purpose_guidance=payload.get("purpose_guidance"),
         purpose_label=payload.get("purpose_label"),
+        speaker_names=bool(payload.get("speaker_names", False)),
         **_identity_kwargs(payload),
     )
 

@@ -104,6 +104,10 @@ class NormalizedTranscript:
             when the provider doesn't ship it).
         speakers_detected: Distinct speaker labels seen in ``words``.
         raw: Untouched provider response for debugging / re-parsing.
+        model: The wire model id the provider was asked for (``scribe_v2``),
+            filled by ``services.transcribe`` from the adapter's
+            ``effective_model()`` when the adapter does not set it. None
+            when unknown (a checkpoint written before models were recorded).
         biasing: Vocabulary-biasing application metadata — ``{"applied":
             bool, "terms_sent": int, "terms_truncated": int}`` when the
             caller requested ``keyterms``, else None. COUNTS ONLY, never
@@ -120,6 +124,7 @@ class NormalizedTranscript:
     speakers_detected: list[str] = field(default_factory=list)
     raw: dict = field(default_factory=dict)
     biasing: Optional[dict] = None
+    model: Optional[str] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -144,6 +149,7 @@ def transcript_from_dict(data: dict) -> NormalizedTranscript:
         speakers_detected=list(data.get("speakers_detected") or []),
         raw=data.get("raw") or {},
         biasing=data.get("biasing"),
+        model=data.get("model") or None,
     )
 
 

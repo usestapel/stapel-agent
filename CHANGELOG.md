@@ -3,6 +3,32 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.39.0] — 2026-11-05
+
+- **The transcribe reply names the wire model.** `services.transcribe` /
+  `llm.transcribe` (both reply shapes) carry `model` — the model id the
+  provider was asked for (`effective_model()`, e.g. `scribe_v2`) — and
+  `diar_model` (null: the STT model diarized itself). `provider_used` stays
+  the registration name. `NormalizedTranscript` gains `model`, stored with
+  the checkpoint, so a checkpoint hit names the model that was paid for and
+  a checkpoint written before this release answers `model: null`, never
+  today's setting. The ledger row keeps the registration name in
+  `PromptLog.model` and puts the wire model in `metadata["model"]`, so the
+  reply's `metering.model` is the wire model and `metering.provider` the
+  registration name.
+- **`speaker_names` on `summarize` / `llm.summarize`.** Asks, in the same
+  call, for the names the transcript states for its speaker labels: the
+  single-shot and chunk system prompts get `summary.SPEAKER_NAMES_RULE`
+  (the merge pass sees no transcript and is not asked); the model appends a
+  JSON block after `SPEAKER_NAMES_MARKER`, which is cut off every answer
+  before it is used or merged and validated entry by entry
+  (`summary.SpeakerNameGuess`, pydantic; invalid entries are dropped and
+  counted). The reply gains `speaker_name_guesses` (`[{speaker,
+  suggested_name, evidence_text, confidence}]`, untrusted — check the label
+  and the quote) and `speaker_names = {parts, parsed, dropped}`. Part
+  checkpoint keys get a `:names1` suffix. Off (the default) prompts, keys
+  and replies are unchanged.
+
 ## [0.38.2] — 2026-10-29
 
 - **A provider that says "no spoken audio" gave an empty answer, not a failed

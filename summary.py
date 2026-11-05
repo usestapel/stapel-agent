@@ -45,6 +45,111 @@ MERGE_SYSTEM_PROMPT = (
 )
 
 
+#: Separates the Markdown summary from the speaker-name block the model
+#: appends when ``speaker_names`` is asked for. Never shown to a reader:
+#: :func:`split_speaker_names` cuts the block off before the text is returned.
+SPEAKER_NAMES_MARKER = "<<<SPEAKER_NAMES>>>"
+
+#: Appended to the single-shot and chunk system prompts (the merge pass sees
+#: partial summaries, not the transcript, so it is never asked).
+SPEAKER_NAMES_RULE = (
+    "\n\nSpeaker names: after the summary, on a new line, write "
+    f"{SPEAKER_NAMES_MARKER} followed by a JSON array, and nothing after it. "
+    "For each speaker label shown in the transcript (the text before the "
+    "colon on a line) whose own name the transcript states - the speaker "
+    "introduces themselves, is addressed by name, or signs off - add one "
+    'object: {"speaker": the label exactly as shown, "suggested_name": the '
+    'name as said, "evidence_text": a verbatim quote of at most 25 words '
+    "from one transcript line that states the name, in the original "
+    'language, "confidence": "high" for a self-introduction or sign-off, '
+    '"medium" for a consistent form of address by another speaker, "low" '
+    "for a single ambiguous mention}. At most one object per label. Never "
+    "invent a name; when no name is stated for a speaker, leave that speaker "
+    "out. When no names are stated, write []."
+)
+
+#: Length caps applied to each parsed guess (untrusted model output).
+SPEAKER_GUESS_LIMITS = {"speaker": 64, "suggested_name": 80, "evidence_text": 400}
+SPEAKER_GUESS_CONFIDENCE = ("high", "medium", "low")
+
+
+def speaker_names_rule(enabled: bool) -> str:
+    """The speaker-name rule, or "" — with it off the prompts are unchanged."""
+    return SPEAKER_NAMES_RULE if enabled else ""
+
+
+def split_speaker_names(text: str) -> tuple[str, list[dict] | None, int]:
+    """``(summary, guesses, dropped)`` out of a reply asked for speaker names.
+
+    The block after the LAST :data:`SPEAKER_NAMES_MARKER` is parsed as a JSON
+    array (a code fence around it is tolerated) and each entry is validated
+    as :class:`SpeakerNameGuess`; entries that do not validate are dropped
+    and counted. ``guesses`` is None when the reply carries no parsable
+    block (the marker is missing or the JSON is broken) — a reason, not an
+    empty answer. The summary text never keeps the block.
+    """
+    import json
+
+    from pydantic import ValidationError
+
+    text = text or ""
+    head, sep, tail = text.rpartition(SPEAKER_NAMES_MARKER)
+    if not sep:
+        return text, None, 0
+    summary = head.rstrip()
+    body = tail.strip()
+    if body.startswith("```"):
+        body = body.strip("`").strip()
+        if body.lower().startswith("json"):
+            body = body[4:].strip()
+    try:
+        items = json.loads(body) if body else []
+    except ValueError:
+        return summary, None, 0
+    if not isinstance(items, list):
+        return summary, None, 0
+    guesses: list[dict] = []
+    dropped = 0
+    for item in items:
+        try:
+            guesses.append(SpeakerNameGuess.model_validate(item).model_dump())
+        except ValidationError:
+            dropped += 1
+    return summary, guesses, dropped
+
+
+def _speaker_guess_model():
+    from typing import Literal
+
+    from pydantic import BaseModel, ConfigDict, field_validator
+
+    limits = SPEAKER_GUESS_LIMITS
+
+    class SpeakerNameGuess(BaseModel):
+        """One name the transcript states for a speaker label (model output,
+        untrusted: the caller still checks the label and the quote)."""
+
+        model_config = ConfigDict(extra="ignore")
+
+        speaker: str
+        suggested_name: str
+        evidence_text: str
+        confidence: Literal["high", "medium", "low"]
+
+        @field_validator("speaker", "suggested_name", "evidence_text")
+        @classmethod
+        def _bounded(cls, value: str, info):
+            value = value.strip()
+            if not value or len(value) > limits[info.field_name]:
+                raise ValueError(f"{info.field_name} empty or over its cap")
+            return value
+
+    return SpeakerNameGuess
+
+
+SpeakerNameGuess = _speaker_guess_model()
+
+
 #: Length caps of the optional purpose inputs (``llm.summarize`` schema).
 PURPOSE_GUIDANCE_MAX_CHARS = 2000
 PURPOSE_LABEL_MAX_CHARS = 64
@@ -219,7 +324,12 @@ __all__ = [
     "PURPOSE_GUIDANCE_MAX_CHARS",
     "PURPOSE_LABEL_MAX_CHARS",
     "SUMMARY_SYSTEM_PROMPT",
+    "SPEAKER_NAMES_MARKER",
+    "SPEAKER_NAMES_RULE",
+    "SpeakerNameGuess",
     "build_summary_input",
+    "speaker_names_rule",
+    "split_speaker_names",
     "language_directive",
     "purpose_block",
     "purpose_label_line",
