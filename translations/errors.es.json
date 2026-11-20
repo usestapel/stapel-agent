@@ -1,0 +1,12 @@
+{
+  "error.400.empty_documents": "documents debe ser una lista no vacía de cadenas no vacías",
+  "error.400.empty_query": "query debe ser una cadena no vacía",
+  "error.400.empty_texts": "texts debe ser una lista no vacía de cadenas no vacías",
+  "error.400.invalid_image": "Cada imagen necesita exactamente uno de: url, data_b64 (base64 válido)",
+  "error.400.invalid_image_count": "n debe estar entre 1 y 10",
+  "error.400.invalid_model_size": "El modelo debe ser uno de: small, medium, large, xlarge",
+  "error.400.invalid_num_speakers": "num_speakers debe ser un entero positivo (>= 1)",
+  "error.400.invalid_timeout": "timeout_seconds debe ser un entero positivo (>= 1)",
+  "error.400.invalid_top_n": "top_n debe ser un entero positivo (>= 1)",
+  "error.400.summarize_input": "Indica exactamente uno de: text, transcript"
+}

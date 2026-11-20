@@ -1,0 +1,12 @@
+{
+  "error.400.empty_documents": "documents должен быть непустым списком непустых строк",
+  "error.400.empty_query": "query должен быть непустой строкой",
+  "error.400.empty_texts": "texts должен быть непустым списком непустых строк",
+  "error.400.invalid_image": "Для каждого изображения нужно ровно одно из полей: url, data_b64 (корректный base64)",
+  "error.400.invalid_image_count": "n должно быть от 1 до 10",
+  "error.400.invalid_model_size": "Модель должна быть одной из: small, medium, large, xlarge",
+  "error.400.invalid_num_speakers": "num_speakers должно быть положительным целым числом (>= 1)",
+  "error.400.invalid_timeout": "timeout_seconds должно быть положительным целым числом (>= 1)",
+  "error.400.invalid_top_n": "top_n должно быть положительным целым числом (>= 1)",
+  "error.400.summarize_input": "Укажите ровно одно из полей: text, transcript"
+}

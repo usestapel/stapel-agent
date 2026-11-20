@@ -1,0 +1,42 @@
+{
+  "error.400.empty_documents": {
+    "hash": "fbecf23281dab358",
+    "text": "documents debe ser una lista no vacía de cadenas no vacías"
+  },
+  "error.400.empty_query": {
+    "hash": "07eb8975d555a340",
+    "text": "query debe ser una cadena no vacía"
+  },
+  "error.400.empty_texts": {
+    "hash": "5f087cbf387114b7",
+    "text": "texts debe ser una lista no vacía de cadenas no vacías"
+  },
+  "error.400.invalid_image": {
+    "hash": "497e1f5d29ab9fdb",
+    "text": "Cada imagen necesita exactamente uno de: url, data_b64 (base64 válido)"
+  },
+  "error.400.invalid_image_count": {
+    "hash": "d1fc826c0fac0b50",
+    "text": "n debe estar entre 1 y 10"
+  },
+  "error.400.invalid_model_size": {
+    "hash": "06cd91838726062e",
+    "text": "El modelo debe ser uno de: small, medium, large, xlarge"
+  },
+  "error.400.invalid_num_speakers": {
+    "hash": "7fb8367dba19aad7",
+    "text": "num_speakers debe ser un entero positivo (>= 1)"
+  },
+  "error.400.invalid_timeout": {
+    "hash": "8763c408899162a8",
+    "text": "timeout_seconds debe ser un entero positivo (>= 1)"
+  },
+  "error.400.invalid_top_n": {
+    "hash": "218df4170572a9c8",
+    "text": "top_n debe ser un entero positivo (>= 1)"
+  },
+  "error.400.summarize_input": {
+    "hash": "d35a322108aaea92",
+    "text": "Indica exactamente uno de: text, transcript"
+  }
+}

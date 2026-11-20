@@ -1,0 +1,86 @@
+{
+  "errors.es": {
+    "error.400.empty_documents": {
+      "hash": "fbecf23281dab358",
+      "origin": "llm"
+    },
+    "error.400.empty_query": {
+      "hash": "07eb8975d555a340",
+      "origin": "llm"
+    },
+    "error.400.empty_texts": {
+      "hash": "5f087cbf387114b7",
+      "origin": "llm"
+    },
+    "error.400.invalid_image": {
+      "hash": "497e1f5d29ab9fdb",
+      "origin": "llm"
+    },
+    "error.400.invalid_image_count": {
+      "hash": "d1fc826c0fac0b50",
+      "origin": "llm"
+    },
+    "error.400.invalid_model_size": {
+      "hash": "06cd91838726062e",
+      "origin": "llm"
+    },
+    "error.400.invalid_num_speakers": {
+      "hash": "7fb8367dba19aad7",
+      "origin": "llm"
+    },
+    "error.400.invalid_timeout": {
+      "hash": "8763c408899162a8",
+      "origin": "llm"
+    },
+    "error.400.invalid_top_n": {
+      "hash": "218df4170572a9c8",
+      "origin": "llm"
+    },
+    "error.400.summarize_input": {
+      "hash": "d35a322108aaea92",
+      "origin": "llm"
+    }
+  },
+  "errors.ru": {
+    "error.400.empty_documents": {
+      "hash": "fbecf23281dab358",
+      "origin": "llm"
+    },
+    "error.400.empty_query": {
+      "hash": "07eb8975d555a340",
+      "origin": "llm"
+    },
+    "error.400.empty_texts": {
+      "hash": "5f087cbf387114b7",
+      "origin": "llm"
+    },
+    "error.400.invalid_image": {
+      "hash": "497e1f5d29ab9fdb",
+      "origin": "llm"
+    },
+    "error.400.invalid_image_count": {
+      "hash": "d1fc826c0fac0b50",
+      "origin": "llm"
+    },
+    "error.400.invalid_model_size": {
+      "hash": "06cd91838726062e",
+      "origin": "llm"
+    },
+    "error.400.invalid_num_speakers": {
+      "hash": "7fb8367dba19aad7",
+      "origin": "llm"
+    },
+    "error.400.invalid_timeout": {
+      "hash": "8763c408899162a8",
+      "origin": "llm"
+    },
+    "error.400.invalid_top_n": {
+      "hash": "218df4170572a9c8",
+      "origin": "llm"
+    },
+    "error.400.summarize_input": {
+      "hash": "d35a322108aaea92",
+      "origin": "llm"
+    }
+  }
+}
