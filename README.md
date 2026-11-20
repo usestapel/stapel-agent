@@ -24,17 +24,18 @@ pip install stapel-agent
 
 | Fact | Value |
 |---|---|
-| Version | `0.39.0` |
+| Version | `0.40.0` |
 | Python | `>=3.11` (3.11, 3.12, 3.13, 3.14) |
-| HTTP operations | 5 |
+| HTTP operations | 8 |
 | Config axes | 4 |
 | Usage surface | 5 |
 | Extension points | 4 |
+| Error codes | 53 |
 | Fleet dependencies | [`stapel-core`](https://github.com/usestapel/stapel-core) |
 
 ## Documentation
 
-[capabilities.json](https://github.com/usestapel/stapel-agent/blob/main/docs/capabilities.json) · [llms.txt (for agents)](https://github.com/usestapel/stapel-agent/blob/main/docs/llms.txt)
+[OpenAPI](https://github.com/usestapel/stapel-agent/blob/main/docs/schema.json) · [capabilities.json](https://github.com/usestapel/stapel-agent/blob/main/docs/capabilities.json) · [llms.txt (for agents)](https://github.com/usestapel/stapel-agent/blob/main/docs/llms.txt)
 
 ## What this is
 

@@ -3,6 +3,24 @@
 All notable changes to stapel-agent are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.40.0] — 2026-11-20
+
+- **HTTP contract triad on contract profile 2.** `_codegen.py` emits
+  `docs/schema.json` (profile 1), `docs/schema.v2.json` (profile 2: bearer
+  scheme, the `error.400.*` refusals bound to each `llm/*` operation),
+  `docs/flows.json` and `docs/errors.json` from a single-module
+  `{agent + core}` instance at the canonical `/agent/` mount; they ship in
+  the wheel. `make contract-check` re-emits them and fails on drift
+  (`_codegen --check`); CI runs it on 3.12. `error-keys/` stays out of the
+  OpenAPI document (core's `ErrorKeysView` excludes itself).
+- `TranslateResponse` / `SummarizeResponse` carry examples;
+  `tests/test_contract_profile2.py` validates every example and the bindings,
+  `tests/test_contract_wire.py` performs every `llm/*` operation against the
+  fake providers and validates the answered body (success, and the HTTP-200
+  failure body of the two typed responses) against the declared one.
+- Floor `stapel-core>=0.99.3`. The test settings live in
+  `_codegen_settings.py`, shared by the suite and the emitter.
+
 ## [0.39.0] — 2026-11-05
 
 - **The transcribe reply names the wire model.** `services.transcribe` /

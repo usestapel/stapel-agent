@@ -48,7 +48,11 @@ jobs:
         # so this gate skipping is indistinguishable from the bug being back.
         # The floor is the release where `stapel_alerts.capture` is the callable
         # under every import order.
-        run: pip install pytest pytest-django pytest-cov "stapel-tools>=0.22.0,<1" "stapel-alerts>=0.2.4"
+        run: pip install pytest pytest-django pytest-cov "stapel-tools>=0.84.0,<1" "stapel-alerts>=0.2.4"
+
+      - name: Contract drift (make contract-check, emitted on 3.12)
+        if: matrix.python-version == '3.12'
+        run: make contract-check PYTHON=python
 
       - name: Tests with coverage
         run: |
@@ -125,7 +129,7 @@ jobs:
         # so this gate skipping is indistinguishable from the bug being back.
         # The floor is the release where `stapel_alerts.capture` is the callable
         # under every import order.
-        run: pip install pytest pytest-django pytest-cov "stapel-tools>=0.22.0,<1" "stapel-alerts>=0.2.4"
+        run: pip install pytest pytest-django pytest-cov "stapel-tools>=0.84.0,<1" "stapel-alerts>=0.2.4"
 
       - name: Tests with coverage
         run: |

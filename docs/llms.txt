@@ -1,8 +1,8 @@
-# stapel-agent 0.39.0
+# stapel-agent 0.40.0
 
 LLM facade: JSON completion, translation, transcription and summarization in front of swappable model / speech-to-text / image-generation providers (Anthropic, OpenAI-compatible, Claude Code CLI, whisper-http, ElevenLabs, AssemblyAI, openai-images), with a prompt cache and a per-call token ledger. Python port of a prior NestJS service — same HTTP paths/contracts, plus an in-process comm surface for monolith deployments.
 
-Contract: axes 4 · surface 5 · extension points 4.
+Contract: axes 4 · surface 5 · extension points 4 · operations 8 · error codes 53.
 Generated from docs/capabilities.json by `stapel-llms-txt` — do not edit; drift-gated by `make contract-check`.
 
 ## Configuration axes — what a product switches on
@@ -42,3 +42,71 @@ This is the answer to "does Stapel already have something for X?". `instead of` 
 
 ## Fits with — fleet dependencies
 - stapel-core (required) — the only stapel-* dependency: AppSettings, comm bus for in-process calls (pyproject.toml dependency)
+
+## HTTP operations (8) — call by operationId, never by a typed path
+Paths are relative to `/agent/api/v1/llm/`.
+### LLM
+- POST /complete — agent_api_v1_llm_complete_create
+- POST /diarize — agent_api_v1_llm_diarize_create
+- POST /embed — agent_api_v1_llm_embed_create
+- POST /generate-image — agent_api_v1_llm_generate_image_create
+- POST /rerank — agent_api_v1_llm_rerank_create
+- POST /summarize — agent_api_v1_llm_summarize_create
+- POST /transcribe — agent_api_v1_llm_transcribe_create
+- POST /translate — agent_api_v1_llm_translate_create
+
+## Error codes (53) — the StapelError envelope
+Render `t(code, params)`; branch UX on the remediation. Localized text lives in docs/errors.<lang>.md, not here.
+- error.400.bad_request [400] fix_input
+- error.400.captcha_invalid [400] retry
+- error.400.captcha_required [400] retry
+- error.400.empty_documents [400] fix_input
+- error.400.empty_query [400] fix_input
+- error.400.empty_texts [400] fix_input
+- error.400.expected_list [400] fix_input
+- error.400.field.blank [400] fix_input {field}
+- error.400.field.does_not_exist [400] fix_input {field}
+- error.400.field.invalid [400] fix_input {field}
+- error.400.field.invalid_choice [400] fix_input {field}
+- error.400.field.max_length [400] fix_input {field,max_length}
+- error.400.field.max_value [400] fix_input {field,max_value}
+- error.400.field.min_length [400] fix_input {field,min_length}
+- error.400.field.min_value [400] fix_input {field,min_value}
+- error.400.field.null [400] fix_input {field}
+- error.400.field.required [400] fix_input {field}
+- error.400.field.unique [400] fix_input {field}
+- error.400.invalid_ad_id [400] fix_input
+- error.400.invalid_image [400] fix_input
+- error.400.invalid_image_count [400] fix_input
+- error.400.invalid_model_size [400] fix_input
+- error.400.invalid_num_speakers [400] fix_input
+- error.400.invalid_timeout [400] fix_input
+- error.400.invalid_top_n [400] fix_input
+- error.400.summarize_input [400] fix_input
+- error.400.too_many_ids [400] fix_input {requested,limit}
+- error.400.validation_error [400] fix_input
+- error.400.verification_failed [400] verify
+- error.400.verification_invalid_factor [400] verify
+- error.401.unauthorized [401] reauthenticate
+- error.402.payment_required [402] retry
+- error.403.forbidden [403] retry
+- error.403.network_blocked [403] contact_support
+- error.403.verification_enrollment_required [403] verify
+- error.403.verification_required [403] verify
+- error.404.ad_not_found [404] retry
+- error.404.not_found [404] retry
+- error.404.verification_challenge_not_found [404] verify
+- error.405.method_not_allowed [405] retry
+- error.406.not_acceptable [406] retry
+- error.408.request_timeout [408] retry
+- error.409.conflict [409] fix_input
+- error.410.gone [410] retry
+- error.413.payload_too_large [413] retry
+- error.415.unsupported_media_type [415] retry
+- error.422.unprocessable_entity [422] wait_and_retry
+- error.423.locked [423] wait_and_retry
+- error.423.verification_locked [423] wait_and_retry
+- error.429.rate_limit [429] wait_and_retry {retry_after_display,retry_after,retry_after_minutes}
+- error.429.too_many_requests [429] wait_and_retry
+- error.500.internal [500] contact_support
+- error.503.mandate_unavailable [503] retry

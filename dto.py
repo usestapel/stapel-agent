@@ -49,8 +49,8 @@ class TranslateResponse:
     """Key-value translation response.
 
     Attributes:
-        status: "ok" or "failure".
-        result: Mapping of keys to translated strings (on success).
+        status: "ok" or "failure". Example: ok
+        result: Mapping of keys to translated strings (on success). Example: {"greeting": "Hallo"}
         reason: Failure reason (on failure).
     """
 
@@ -206,9 +206,9 @@ class SummarizeResponse:
     """Summarization response.
 
     Attributes:
-        status: "ok" or "failure".
-        summary: Markdown summary (on success).
-        usage: Aggregated token usage across all LLM calls.
+        status: "ok" or "failure". Example: ok
+        summary: Markdown summary (on success). Example: ## Summary
+        usage: Aggregated token usage across all LLM calls. Example: {"input_tokens": 7, "output_tokens": 3}
         reason: Failure reason (on failure).
     """
 

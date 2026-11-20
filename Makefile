@@ -24,8 +24,15 @@ migration-lint:
 # fails this target naming the symbol.
 #
 # NOTE the rest of docs/capabilities.json is still hand-written (this module
-# has no gate registry and no docs/schema.json) — `--patch` refreshes only the
-# derivable parts: module/version and `surface`.
+# has no gate registry) — `--patch` refreshes only the derivable parts:
+# module/version and `surface`.
+#
+# Before both: the HTTP contract triad (_codegen.py) — docs/schema.json
+# (profile 1), docs/schema.v2.json (contract profile 2, what a native client
+# generator reads), docs/flows.json and docs/errors.json, from a single-module
+# {agent + core} instance at the canonical /agent/ mount. `--check` re-emits
+# into a temp dir and fails on drift.
+#
 # Third: docs/llms.txt, the fifth contract artifact (stapel_tools.llms_txt) —
 # rendered straight from the docs/capabilities.json the two steps above produce.
 #
@@ -36,12 +43,14 @@ migration-lint:
 # footer — is generated from pyproject.toml plus the artifacts above. Edit
 # docs/readme.md; never README.md.
 contract:
+	$(PYTHON) -m stapel_agent._codegen --out docs
 	$(PYTHON) -m stapel_agent._contracts
 	$(PYTHON) -m stapel_tools.surface . --patch
 	$(PYTHON) -m stapel_tools.llms_txt .
 	$(PYTHON) -m stapel_tools.readme .
 
 contract-check:
+	$(PYTHON) -m stapel_agent._codegen --out docs --check
 	$(PYTHON) -m stapel_agent._contracts --check
 	$(PYTHON) -m stapel_tools.surface . --patch --check
 	$(PYTHON) -m stapel_tools.llms_txt . --check

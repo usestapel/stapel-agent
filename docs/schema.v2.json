@@ -1,0 +1,931 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "",
+    "version": "0.0.0",
+    "x-stapel-contract": 2
+  },
+  "paths": {
+    "/agent/api/v1/llm/complete": {
+      "post": {
+        "operationId": "agent_api_v1_llm_complete_create",
+        "description": "JSON LLM completion — ``POST api/llm/complete``.\n\nPrepends the JSON-API system prompt (unless the request brings its\nown), calls the configured provider and parses JSON out of the raw\nLLM text; prose around the JSON is returned as ``comment``.\n\n**Permissions:** `OperandHolder`",
+        "tags": [
+          "LLM"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteRequest"
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteRequest"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "security": [
+          {
+            "JWTCookieAuth": []
+          },
+          {
+            "JWTBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {}
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StapelError"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "x-stapel-errors": [
+              "error.400.invalid_image",
+              "error.400.invalid_model_size"
+            ]
+          }
+        }
+      }
+    },
+    "/agent/api/v1/llm/diarize": {
+      "post": {
+        "operationId": "agent_api_v1_llm_diarize_create",
+        "description": "Speaker diarization — ``POST api/llm/diarize``.\n\nSingle-provider surface (explicit provider or\n``DEFAULT_DIARIZATION_PROVIDER``; no fallback chain). Diarization\nfailures are HTTP 200 with ``status: \"failure\"`` — the house\ncontract.\n\n**Permissions:** `OperandHolder`",
+        "tags": [
+          "LLM"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiarizeRequest"
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/DiarizeRequest"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/DiarizeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "security": [
+          {
+            "JWTCookieAuth": []
+          },
+          {
+            "JWTBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {}
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StapelError"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "x-stapel-errors": [
+              "error.400.invalid_num_speakers",
+              "error.400.invalid_timeout"
+            ]
+          }
+        }
+      }
+    },
+    "/agent/api/v1/llm/embed": {
+      "post": {
+        "operationId": "agent_api_v1_llm_embed_create",
+        "description": "Text embeddings — ``POST api/llm/embed``.\n\nVectors preserve input order; the ledger records counts/usage only —\nnever the texts. Embedding failures are HTTP 200 with\n``status: \"failure\"``.\n\n**Permissions:** `OperandHolder`",
+        "tags": [
+          "LLM"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmbedRequest"
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/EmbedRequest"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/EmbedRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "security": [
+          {
+            "JWTCookieAuth": []
+          },
+          {
+            "JWTBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {}
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StapelError"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "x-stapel-errors": [
+              "error.400.empty_texts",
+              "error.400.invalid_timeout"
+            ]
+          }
+        }
+      }
+    },
+    "/agent/api/v1/llm/generate-image": {
+      "post": {
+        "operationId": "agent_api_v1_llm_generate_image_create",
+        "description": "Image generation — ``POST api/llm/generate-image``.\n\nReturns the provider's raw results (``url`` and/or ``data_b64`` per\nimage) — storage into CDN/asset libraries is the caller's job.\nGeneration failures are HTTP 200 with ``status: \"failure\"``.\n\n**Permissions:** `OperandHolder`",
+        "tags": [
+          "LLM"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateImageRequest"
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateImageRequest"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateImageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "security": [
+          {
+            "JWTCookieAuth": []
+          },
+          {
+            "JWTBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {}
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StapelError"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "x-stapel-errors": [
+              "error.400.invalid_image_count",
+              "error.400.invalid_timeout"
+            ]
+          }
+        }
+      }
+    },
+    "/agent/api/v1/llm/rerank": {
+      "post": {
+        "operationId": "agent_api_v1_llm_rerank_create",
+        "description": "Rerank — ``POST api/llm/rerank``.\n\nResults are ``(index, score)`` pairs sorted by score descending;\n``index`` points into the request's documents list — the caller\njoins back positionally, the documents never round-trip. The ledger\nrecords counts/usage only — never the query, never the documents.\nRerank failures are HTTP 200 with ``status: \"failure\"``.\n\n**Permissions:** `OperandHolder`",
+        "tags": [
+          "LLM"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RerankRequest"
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/RerankRequest"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/RerankRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "security": [
+          {
+            "JWTCookieAuth": []
+          },
+          {
+            "JWTBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {}
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StapelError"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "x-stapel-errors": [
+              "error.400.empty_documents",
+              "error.400.empty_query",
+              "error.400.invalid_timeout",
+              "error.400.invalid_top_n"
+            ]
+          }
+        }
+      }
+    },
+    "/agent/api/v1/llm/summarize": {
+      "post": {
+        "operationId": "agent_api_v1_llm_summarize_create",
+        "description": "Summarization — ``POST api/llm/summarize``.\n\nExactly one of ``text`` / ``transcript`` (a NormalizedTranscript\ndict). Single-shot when the input fits one chunk, map-reduce\notherwise. LLM failures are HTTP 200 with ``status: \"failure\"``.\n\n**Permissions:** `OperandHolder`",
+        "tags": [
+          "LLM"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SummarizeRequest"
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/SummarizeRequest"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/SummarizeRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "JWTCookieAuth": []
+          },
+          {
+            "JWTBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SummarizeResponse"
+                },
+                "examples": {
+                  "SummarizeResponse": {
+                    "value": {
+                      "status": "ok",
+                      "summary": "## Summary",
+                      "usage": {
+                        "input_tokens": 7,
+                        "output_tokens": 3
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StapelError"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "x-stapel-errors": [
+              "error.400.invalid_model_size",
+              "error.400.summarize_input"
+            ]
+          }
+        }
+      }
+    },
+    "/agent/api/v1/llm/transcribe": {
+      "post": {
+        "operationId": "agent_api_v1_llm_transcribe_create",
+        "description": "Speech-to-text — ``POST api/llm/transcribe``.\n\nRoutes through the STT chain (explicit provider > language route >\ndefault + fallback). STT failures are HTTP 200 with\n``status: \"failure\"`` — the house contract.\n\n**Permissions:** `OperandHolder`",
+        "tags": [
+          "LLM"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TranscribeRequest"
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/TranscribeRequest"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/TranscribeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "security": [
+          {
+            "JWTCookieAuth": []
+          },
+          {
+            "JWTBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {}
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StapelError"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "x-stapel-errors": [
+              "error.400.invalid_timeout"
+            ]
+          }
+        }
+      }
+    },
+    "/agent/api/v1/llm/translate": {
+      "post": {
+        "operationId": "agent_api_v1_llm_translate_create",
+        "description": "Key-value translation — ``POST api/llm/translate``.\n\nWire request: ``{\"from\": str (\"auto\" allowed), \"to\": str,\n\"entries\": {key: text}}``. Empty entries short-circuit to\n``{\"status\": \"ok\", \"result\": {}}`` without calling the provider.\n\n**Permissions:** `OperandHolder`",
+        "tags": [
+          "LLM"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TranslateRequest"
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/TranslateRequest"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/TranslateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "security": [
+          {
+            "JWTCookieAuth": []
+          },
+          {
+            "JWTBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TranslateResponse"
+                },
+                "examples": {
+                  "TranslateResponse": {
+                    "value": {
+                      "status": "ok",
+                      "result": {
+                        "greeting": "Hallo"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "description": ""
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CompleteRequest": {
+        "type": "object",
+        "description": "JSON LLM completion request.",
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "The user prompt sent to the model"
+          },
+          "model": {
+            "type": "string",
+            "description": "Model size — small, medium, large or xlarge",
+            "example": "small"
+          },
+          "provider": {
+            "type": "string",
+            "nullable": true,
+            "description": "Provider name from STAPEL_AGENT[\"PROVIDERS\"]; defaults"
+          },
+          "system_prompt": {
+            "type": "string",
+            "nullable": true,
+            "description": "Replaces the built-in JSON-API system prompt"
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {}
+            },
+            "nullable": true,
+            "description": "Optional vision input — each entry is {\"url\": ...} or"
+          }
+        },
+        "required": [
+          "model",
+          "prompt"
+        ]
+      },
+      "DiarizeRequest": {
+        "type": "object",
+        "description": "Speaker-diarization request.",
+        "properties": {
+          "audio_url": {
+            "type": "string",
+            "description": "Fetchable audio URL (presigned S3/MinIO GET)"
+          },
+          "num_speakers": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Exact speaker count hint (>= 1); omit to let the"
+          },
+          "provider": {
+            "type": "string",
+            "nullable": true,
+            "description": "Diarization provider name; defaults to"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Hard cap on the diarization request"
+          },
+          "provider_options": {
+            "type": "object",
+            "additionalProperties": {},
+            "nullable": true,
+            "description": "Free-form per-provider passthrough, applied"
+          }
+        },
+        "required": [
+          "audio_url"
+        ]
+      },
+      "EmbedRequest": {
+        "type": "object",
+        "description": "Text-embeddings request.",
+        "properties": {
+          "texts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Batch of texts to embed (non-empty; output vectors"
+          },
+          "model": {
+            "type": "string",
+            "nullable": true,
+            "description": "Concrete embedding model name overriding the"
+          },
+          "provider": {
+            "type": "string",
+            "nullable": true,
+            "description": "Embedding provider name; defaults to"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Hard cap on the embeddings request"
+          },
+          "provider_options": {
+            "type": "object",
+            "additionalProperties": {},
+            "nullable": true,
+            "description": "Free-form per-provider passthrough, applied"
+          }
+        },
+        "required": [
+          "texts"
+        ]
+      },
+      "GenerateImageRequest": {
+        "type": "object",
+        "description": "Image-generation request.",
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "Text description of the desired image(s)"
+          },
+          "size": {
+            "type": "string",
+            "description": "\"WxH\" size string",
+            "example": "1024x1024"
+          },
+          "n": {
+            "type": "integer",
+            "description": "Number of images (1-10)"
+          },
+          "provider": {
+            "type": "string",
+            "nullable": true,
+            "description": "Image provider name from STAPEL_AGENT[\"IMAGE_PROVIDERS\"];"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Hard cap on the generation request"
+          }
+        },
+        "required": [
+          "prompt"
+        ]
+      },
+      "RerankRequest": {
+        "type": "object",
+        "description": "Rerank request.",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The query the documents are scored against"
+          },
+          "documents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Candidate documents (non-empty). Result indexes point"
+          },
+          "top_n": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Keep only the N best-scored results (>= 1, applied after"
+          },
+          "provider": {
+            "type": "string",
+            "nullable": true,
+            "description": "Rerank provider name; defaults to"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Hard cap on the rerank request"
+          },
+          "provider_options": {
+            "type": "object",
+            "additionalProperties": {},
+            "nullable": true,
+            "description": "Free-form per-provider passthrough, applied"
+          }
+        },
+        "required": [
+          "documents",
+          "query"
+        ]
+      },
+      "StapelError": {
+        "type": "object",
+        "description": "Structured error returned by all Stapel API endpoints.",
+        "properties": {
+          "localizable_error": {
+            "type": "string",
+            "description": "Translation key for client-side localization",
+            "example": "error.404.not_found"
+          },
+          "error": {
+            "type": "string",
+            "description": "Human-readable fallback/debug message — not reliably English,"
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Context values for template placeholders",
+            "example": {
+              "retry_after": 30
+            }
+          },
+          "error_language": {
+            "type": "string",
+            "description": "The language `error` is written in (e.g. 'en', 'ru'),"
+          }
+        },
+        "required": [
+          "error",
+          "localizable_error"
+        ]
+      },
+      "SummarizeRequest": {
+        "type": "object",
+        "description": "Summarization request — exactly one of text/transcript.",
+        "properties": {
+          "text": {
+            "type": "string",
+            "nullable": true,
+            "description": "Plain text to summarize"
+          },
+          "transcript": {
+            "type": "object",
+            "additionalProperties": {},
+            "nullable": true,
+            "description": "A NormalizedTranscript dict (llm.transcribe output)"
+          },
+          "language": {
+            "type": "string",
+            "nullable": true,
+            "description": "Language to respond in; defaults to the input's"
+          },
+          "model": {
+            "type": "string",
+            "description": "Model size (small/medium/large/xlarge)",
+            "example": "medium"
+          },
+          "provider": {
+            "type": "string",
+            "nullable": true,
+            "description": "LLM provider name"
+          }
+        }
+      },
+      "SummarizeResponse": {
+        "type": "object",
+        "description": "Summarization response.",
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "\"ok\" or \"failure\"",
+            "example": "ok"
+          },
+          "summary": {
+            "type": "string",
+            "nullable": true,
+            "description": "Markdown summary (on success)",
+            "example": "## Summary"
+          },
+          "usage": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "nullable": true,
+            "description": "Aggregated token usage across all LLM calls",
+            "example": {
+              "input_tokens": 7,
+              "output_tokens": 3
+            }
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true,
+            "description": "Failure reason (on failure)"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "TranscribeRequest": {
+        "type": "object",
+        "description": "Speech-to-text request.",
+        "properties": {
+          "audio_url": {
+            "type": "string",
+            "description": "Fetchable audio URL (presigned S3/MinIO GET)"
+          },
+          "language": {
+            "type": "string",
+            "nullable": true,
+            "description": "BCP-47 hint; omit for auto-detect"
+          },
+          "diarization": {
+            "type": "boolean",
+            "description": "Ask the provider for speaker labels"
+          },
+          "provider": {
+            "type": "string",
+            "nullable": true,
+            "description": "Pin one STT provider (no fallback)"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Hard cap on one provider's submit+poll cycle"
+          },
+          "keyterms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true,
+            "description": "Normalized vocabulary-bias terms (plain strings)"
+          },
+          "provider_options": {
+            "type": "object",
+            "additionalProperties": {},
+            "nullable": true,
+            "description": "Free-form per-provider passthrough, applied"
+          }
+        },
+        "required": [
+          "audio_url"
+        ]
+      },
+      "TranslateRequest": {
+        "type": "object",
+        "description": "Key-value translation request.\n\nThe wire key for the source language is ``from`` (a Python keyword) —\nthe serializer maps it onto ``from_lang`` explicitly.",
+        "properties": {
+          "from_lang": {
+            "type": "string",
+            "description": "Source language code, or \"auto\" to auto-detect"
+          },
+          "to": {
+            "type": "string",
+            "description": "Target language code",
+            "example": "de"
+          },
+          "entries": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Mapping of keys to source-language strings"
+          }
+        },
+        "required": [
+          "from_lang",
+          "to"
+        ]
+      },
+      "TranslateResponse": {
+        "type": "object",
+        "description": "Key-value translation response.",
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "\"ok\" or \"failure\"",
+            "example": "ok"
+          },
+          "result": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "nullable": true,
+            "description": "Mapping of keys to translated strings (on success)",
+            "example": {
+              "greeting": "Hallo"
+            }
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true,
+            "description": "Failure reason (on failure)"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      }
+    },
+    "securitySchemes": {
+      "JWTBearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT access token in the `Authorization: Bearer <token>` header — the credential a native client sends. When the JWT cookie is also present, the cookie wins."
+      },
+      "JWTCookieAuth": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "stapel_jwt",
+        "description": "JWT token stored in cookie. Login via /auth/admin/ to get the cookie."
+      }
+    }
+  }
+}

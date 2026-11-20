@@ -122,7 +122,7 @@ jobs:
         # would skip, and a silently skipped gate is how the document rots.
         # stapel-alerts: the same set ci.yml installs. Without it the release
         # suite differed from CI's, and 0.33.1 (green in CI) failed here.
-        run: pip install pytest pytest-django pytest-cov "stapel-tools>=0.22.0,<1" "stapel-alerts>=0.2.4"
+        run: pip install pytest pytest-django pytest-cov "stapel-tools>=0.84.0,<1" "stapel-alerts>=0.2.4"
 
       - name: Tests with coverage
         run: |
